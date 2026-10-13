@@ -8,7 +8,7 @@ forever — blocking the user's partial unique active-session index.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -30,7 +30,7 @@ async def _touch_foreign_running_rows(db: AsyncSession):
     await db.execute(
         CompetenceGenerationSession.__table__.update()
         .where(CompetenceGenerationSession.status == "running")
-        .values(updated_at=datetime.now(timezone.utc))
+        .values(updated_at=datetime.now(UTC))
     )
     await db.commit()
 
@@ -72,7 +72,7 @@ class TestReapStuckSessions:
         user,
         session_factory,
     ):
-        stale = datetime.now(timezone.utc) - timedelta(minutes=30)
+        stale = datetime.now(UTC) - timedelta(minutes=30)
         sess = await _make_session(db, tenant, user, status="running", updated_at=stale)
 
         result = await tasks._reap_stuck_sessions_body(session_factory)
@@ -96,7 +96,7 @@ class TestReapStuckSessions:
         session_factory,
     ):
         # Within the 15-minute window — the worker is probably alive.
-        fresh_ts = datetime.now(timezone.utc) - timedelta(minutes=5)
+        fresh_ts = datetime.now(UTC) - timedelta(minutes=5)
         sess = await _make_session(
             db, tenant, user, status="running", updated_at=fresh_ts
         )
@@ -117,7 +117,7 @@ class TestReapStuckSessions:
         user,
         session_factory,
     ):
-        stale = datetime.now(timezone.utc) - timedelta(minutes=30)
+        stale = datetime.now(UTC) - timedelta(minutes=30)
         ready = await _make_session(db, tenant, user, status="ready", updated_at=stale)
 
         result = await tasks._reap_stuck_sessions_body(session_factory)
@@ -138,7 +138,7 @@ class TestReapStuckSessions:
         """The whole point of reaping: after the flip, the user can start
         a new session without tripping ``ux_compgen_one_active_per_user``.
         """
-        stale = datetime.now(timezone.utc) - timedelta(minutes=30)
+        stale = datetime.now(UTC) - timedelta(minutes=30)
         old = await _make_session(db, tenant, user, status="running", updated_at=stale)
 
         await tasks._reap_stuck_sessions_body(session_factory)
@@ -171,7 +171,7 @@ class TestForceTerminateKeepsAProcessorRefusal:
         from app.core.errors import AppError
 
         sess = await _make_session(
-            db, tenant, user, status="running", updated_at=datetime.now(timezone.utc)
+            db, tenant, user, status="running", updated_at=datetime.now(UTC)
         )
         await tasks._force_terminate_running(
             session_factory, sess.id, AppError(code, 409, model="m")

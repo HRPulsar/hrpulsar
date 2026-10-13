@@ -460,13 +460,16 @@ async def generate_step_skill(
         )
         # The row says what the response says: on a refused hold that is
         # "credit limit reached", not a generic failure the user cannot act
-        # on once the toast is gone.
+        # on once the toast is gone. The code travels too, so every later
+        # reader gets the text in their own locale (HRP-854); the en
+        # message stays as the fallback for rows without a known code.
         await service.fail_step_skill(
             db,
             row_id,
             exc.detail
             if isinstance(exc, AppError) and isinstance(exc.detail, str)
             else "Could not start the generation",
+            code=exc.code if isinstance(exc, AppError) else "service_error",
         )
         raise
     return row
@@ -571,15 +574,21 @@ async def create_session(
             module="work",
             action=action,
         )
-    except Exception:
+    except Exception as exc:
         # The hold was refused (a parallel start took the last of the
         # balance between the precheck and here) or the queue is down. The
         # reaper only collects `running` rows: a pending row nobody will
         # ever run would hold the container's slot until someone deletes
-        # it, and a hold would sit on the balance until the sweep.
+        # it, and a hold would sit on the balance until the sweep. The code
+        # names the cause, so the reader's locale can render it (HRP-854).
         await db.rollback()
         await service.release_session_hold(db, actor.tenant_id, session_id)
-        await service.fail_session(db, session_id, "Could not start the decomposition")
+        await service.fail_session(
+            db,
+            session_id,
+            "Could not start the decomposition",
+            code=exc.code if isinstance(exc, AppError) else "service_error",
+        )
         raise
     sess.celery_task_id = result.id
     await db.commit()

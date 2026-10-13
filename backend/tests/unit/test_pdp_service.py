@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC
 
 import pytest
 from app.core.errors import AppError
@@ -135,10 +136,10 @@ class TestPDPCrud:
     async def test_create_pdp_with_deadline(
         self, db: AsyncSession, tenant, user, employee
     ):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         # Future date so the not_past_deadline validator stays happy (HRP-23).
-        dl = datetime.now(timezone.utc) + timedelta(days=30)
+        dl = datetime.now(UTC) + timedelta(days=30)
         data = PDPCreate(title="Plan", employee_id=employee.id, deadline=dl)
         pdp = await service.create_pdp(db, tenant.id, user.id, data)
         assert pdp["deadline"] is not None
@@ -366,14 +367,14 @@ class TestPDPUpdate:
         assert result["deadline"] is None
 
     async def test_update_deadline(self, db: AsyncSession, tenant, user, employee):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         pdp = await service.create_pdp(
             db, tenant.id, user.id, PDPCreate(title="Plan", employee_id=employee.id)
         )
         # Relative, not a literal: the validator refuses a deadline in the
         # past, so a hardcoded date turns this green test red on its own.
-        new_deadline = datetime.now(timezone.utc) + timedelta(days=30)
+        new_deadline = datetime.now(UTC) + timedelta(days=30)
         result = await service.update_pdp(
             db, tenant.id, pdp["id"], PDPUpdate(deadline=new_deadline)
         )
@@ -383,7 +384,7 @@ class TestPDPUpdate:
     async def test_update_clear_deadline(
         self, db: AsyncSession, tenant, user, employee
     ):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         pdp = await service.create_pdp(
             db,
@@ -392,7 +393,7 @@ class TestPDPUpdate:
             PDPCreate(
                 title="Plan",
                 employee_id=employee.id,
-                deadline=datetime(2026, 12, 31, tzinfo=timezone.utc),
+                deadline=datetime(2026, 12, 31, tzinfo=UTC),
             ),
         )
         result = await service.update_pdp(
@@ -1093,7 +1094,7 @@ class TestPDPReviewItemToggle:
     ):
         # The assigned PDP reviewer (non-admin) can also tick items in
         # ``review``. Create a real user row so ``pdps.reviewer_id`` FK holds.
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.core.security import hash_password
         from app.modules.assessment.models import PDP
@@ -1105,7 +1106,7 @@ class TestPDPReviewItemToggle:
             first_name="Rev",
             last_name="Iewer",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(reviewer)
         await db.commit()
@@ -1136,7 +1137,7 @@ class TestPDPReviewItemToggle:
         # PDP has no explicit ``reviewer_id`` set. The UI surfaces them as
         # the Reviewer via the same fallback, so permissions have to
         # agree.
-        from datetime import date, datetime, timezone
+        from datetime import date, datetime
 
         from app.core.security import hash_password
         from app.modules.auth.models import User
@@ -1152,7 +1153,7 @@ class TestPDPReviewItemToggle:
             first_name="Mgr",
             last_name="One",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(manager_user)
         await db.commit()
@@ -1835,11 +1836,11 @@ class TestPDPDeadlineGates:
     async def test_send_blocked_when_deadline_in_past(
         self, db: AsyncSession, tenant, user, employee
     ):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         pdp = await self._seeded_plan(db, tenant, user, employee)
         await self._set_deadline(
-            db, pdp["id"], datetime.now(timezone.utc) - timedelta(days=2)
+            db, pdp["id"], datetime.now(UTC) - timedelta(days=2)
         )
 
         with pytest.raises(HTTPException) as exc:
@@ -1854,11 +1855,11 @@ class TestPDPDeadlineGates:
     async def test_send_allowed_when_deadline_today(
         self, db: AsyncSession, tenant, user, employee
     ):
-        from datetime import datetime, time, timezone
+        from datetime import datetime, time
 
         pdp = await self._seeded_plan(db, tenant, user, employee)
         today_end = datetime.combine(
-            datetime.now(timezone.utc).date(), time(23, 59), tzinfo=timezone.utc
+            datetime.now(UTC).date(), time(23, 59), tzinfo=UTC
         )
         await self._set_deadline(db, pdp["id"], today_end)
         result = await service.change_pdp_status(db, tenant.id, pdp["id"], "sent")
@@ -1874,7 +1875,7 @@ class TestPDPDeadlineGates:
     async def test_review_to_returned_blocked_when_deadline_in_past(
         self, db: AsyncSession, tenant, user, employee
     ):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         pdp = await self._seeded_plan(db, tenant, user, employee)
         # Move through the FSM with no deadline so the gate doesn't fire on
@@ -1886,7 +1887,7 @@ class TestPDPDeadlineGates:
         await service.change_pdp_status(db, tenant.id, pdp["id"], "review")
 
         await self._set_deadline(
-            db, pdp["id"], datetime.now(timezone.utc) - timedelta(days=2)
+            db, pdp["id"], datetime.now(UTC) - timedelta(days=2)
         )
 
         with pytest.raises(HTTPException) as exc:

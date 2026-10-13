@@ -13,7 +13,7 @@ Visibility rules (mirroring `get_visible_employee_ids`):
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from app.core.security import hash_password
 from app.modules.assessment import service
@@ -32,7 +32,7 @@ async def _make_user_and_employee(
         first_name=first,
         last_name=last,
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

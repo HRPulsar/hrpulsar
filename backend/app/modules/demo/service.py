@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, get_args
 
 from fastapi import HTTPException, status
@@ -274,7 +274,7 @@ async def _try_resume_demo_session(
     if tenant is None or not tenant.is_demo:
         return None
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if tenant.expires_at is not None and tenant.expires_at <= now:
         return None
 
@@ -343,7 +343,7 @@ async def create_demo_session(
 
     # HRP-276 / M2: cheap peek first so a full pool returns 503 without
     # burning the IP's hourly INCR allowance.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await _peek_concurrent_capacity(db, now=now)
 
     await _enforce_rate_limit(remote_ip)
@@ -488,7 +488,7 @@ async def switch_demo_view(
     bearer; the router already resolved it via ``get_current_user``.
     """
     tenant = await db.get(Tenant, tenant_id)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if (
         tenant is None
         or not tenant.is_demo
@@ -557,7 +557,7 @@ async def end_demo_session(db: AsyncSession, *, tenant_id: uuid.UUID) -> None:
     if tenant is None or not tenant.is_demo:
         raise AppError("demo_end_requires_demo_session", status.HTTP_403_FORBIDDEN)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     keep = await db.scalar(
         select(SignupRequest.id)
         .where(

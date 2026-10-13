@@ -10,7 +10,7 @@ and the read endpoint surfaced for the frontend.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from app.core.security import hash_password
@@ -295,7 +295,7 @@ class TestGetParticipantAnswers:
             first_name="O",
             last_name="X",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(other)
         await db.flush()

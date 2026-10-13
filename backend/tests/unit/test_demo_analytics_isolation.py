@@ -10,7 +10,7 @@ anyone introduces a cross-tenant query without filtering
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 import pytest_asyncio
@@ -78,7 +78,7 @@ async def _make_tenant_with_assessment(
         first_name="U",
         last_name="V",
         tenant_id=t.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(user)
     await db.flush()

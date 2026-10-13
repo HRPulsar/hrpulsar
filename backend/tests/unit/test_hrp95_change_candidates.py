@@ -11,7 +11,7 @@ in test_hrp95_candidate_pool.py.
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from app.modules.auth.models import User
@@ -36,7 +36,7 @@ async def _make_employee(db: AsyncSession, tenant_id: uuid.UUID) -> Employee:
         first_name="C",
         last_name="X",
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()

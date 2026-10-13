@@ -1,6 +1,7 @@
 """Unit tests for synchronous AI vacancy profile generation (HRP-134)."""
 
 import uuid
+from datetime import UTC
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -107,7 +108,7 @@ class TestGenerateProfileNow:
     ):
         """HRP-235 REDO (QA case 2): only one generation session per
         vacancy at a time — a second POST while one is running is a 409."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import VacancyProfileSession
 
@@ -118,7 +119,7 @@ class TestGenerateProfileNow:
                 vacancy_id=vacancy["id"],
                 started_by_id=user.id,
                 status="running",
-                started_at=datetime.now(timezone.utc),
+                started_at=datetime.now(UTC),
             )
         )
         await db.commit()
@@ -164,7 +165,7 @@ class TestGenerateProfileNow:
         """Pre-deferred-save ready rows carry no profile_data (their result
         already landed in the profile) — they must not lock the vacancy
         out of new generations forever."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import VacancyProfileSession
 
@@ -175,8 +176,8 @@ class TestGenerateProfileNow:
                 vacancy_id=vacancy["id"],
                 started_by_id=user.id,
                 status="ready",
-                started_at=datetime.now(timezone.utc),
-                completed_at=datetime.now(timezone.utc),
+                started_at=datetime.now(UTC),
+                completed_at=datetime.now(UTC),
                 result_payload={"profile_version": 3, "coverage_note": None},
             )
         )
@@ -583,7 +584,7 @@ class TestCancelProfileSession:
 
         # Seed a running session row directly so we can cancel it without
         # awaiting a real (slow) LLM call.
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import VacancyProfileSession
 
@@ -592,7 +593,7 @@ class TestCancelProfileSession:
             vacancy_id=vacancy["id"],
             started_by_id=user.id,
             status="running",
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         db.add(session)
         await db.commit()
@@ -611,7 +612,7 @@ class TestCancelProfileSession:
         """HRP-235 REDO (QA case 4): Discard (and the cleanup after Apply)
         retire a ``ready`` session so the Review-for-save banner stops
         surfacing the pending result."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import VacancyProfileSession
 
@@ -621,8 +622,8 @@ class TestCancelProfileSession:
             vacancy_id=vacancy["id"],
             started_by_id=user.id,
             status="ready",
-            started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
             result_payload={
                 "profile_data": _profile_payload(str(vacancy["id"])),
                 "coverage_note": "Auto-generated profile.",
@@ -647,7 +648,7 @@ class TestCancelProfileSession:
         """A ``ready`` (pending-review) result may only be retired by a
         pinned session_id — the legacy bodyless latest-match cancel from
         an older client must not silently discard it."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import VacancyProfileSession
 
@@ -657,8 +658,8 @@ class TestCancelProfileSession:
             vacancy_id=vacancy["id"],
             started_by_id=user.id,
             status="ready",
-            started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
             result_payload={
                 "profile_data": _profile_payload(str(vacancy["id"])),
                 "coverage_note": None,
@@ -698,7 +699,7 @@ class TestCancelProfileSession:
         resurrect the banner. Otherwise the recruiter sees the error
         message reappear on the regular polling cadence and assumes the
         Dismiss button is broken."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import VacancyProfileSession
 
@@ -709,8 +710,8 @@ class TestCancelProfileSession:
             vacancy_id=vacancy["id"],
             started_by_id=user.id,
             status="failed",
-            started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
             error_message="AI returned non-dict payload",
         )
         db.add(session)
@@ -733,13 +734,13 @@ class TestCancelProfileSession:
         cancel the failed session only. The legacy latest-match cancel
         grabbed the newer running row instead — the healthy run got
         killed and the failed banner resurrected on the next poll."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         from app.modules.recruitment.models import VacancyProfileSession
 
         vacancy = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         failed = VacancyProfileSession(
             tenant_id=tenant.id,
             vacancy_id=vacancy["id"],
@@ -782,7 +783,7 @@ class TestCancelProfileSession:
     ):
         """A pinned session_id that matches no cancellable row keeps the
         idempotent no_active_session response and touches nothing."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import VacancyProfileSession
 
@@ -792,7 +793,7 @@ class TestCancelProfileSession:
             vacancy_id=vacancy["id"],
             started_by_id=user.id,
             status="running",
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         db.add(running)
         await db.commit()
@@ -810,13 +811,13 @@ class TestCancelProfileSession:
     ):
         """Legacy bodyless cancel still targets the latest cancellable
         session (backward compatibility for old clients)."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         from app.modules.recruitment.models import VacancyProfileSession
 
         vacancy = await service.create_vacancy(db, tenant.id, user.id, _vacancy_data())
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         failed = VacancyProfileSession(
             tenant_id=tenant.id,
             vacancy_id=vacancy["id"],
@@ -854,7 +855,7 @@ class TestCancelSessionEndpoint:
     bodyless/empty requests and must never see a 422."""
 
     async def _running_session(self, db: AsyncSession, tenant, user):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import VacancyProfileSession
 
@@ -864,7 +865,7 @@ class TestCancelSessionEndpoint:
             vacancy_id=vacancy["id"],
             started_by_id=user.id,
             status="running",
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         db.add(running)
         await db.commit()
@@ -1066,7 +1067,7 @@ class TestProfilePromptContext:
     async def test_prompt_lists_attachments_when_present(
         self, db: AsyncSession, tenant, user
     ):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import VacancyAttachment
         from app.modules.recruitment.schemas import VacancyCreate
@@ -1085,7 +1086,7 @@ class TestProfilePromptContext:
             mime_type="application/pdf",
             size_bytes=1024,
             uploaded_by=user.id,
-            uploaded_at=datetime.now(timezone.utc),
+            uploaded_at=datetime.now(UTC),
         )
         db.add(attachment)
         await db.commit()

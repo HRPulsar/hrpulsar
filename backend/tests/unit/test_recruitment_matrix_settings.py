@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 from app.modules.recruitment import service, settings_service
@@ -574,14 +575,14 @@ class TestAssessmentMatrixRounds:
         Stored raw on the canonical 0..1 scale (HRP-507) — 0.6 and 1.0 —
         and read back rebased onto the tenant's 0..5 scale.
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         ctx = await _vacancy_with_competences(
             db, tenant, user, _COMPETENCE_SEED, n_candidates=1
         )
         cv_id = uuid.UUID(str(ctx["cv_links"][0]["id"]))
         python_id = service.normalize_competence_id("python-skills")
-        base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+        base = datetime(2026, 5, 1, tzinfo=UTC)
 
         for offset_days, score in ((0, 0.6), (7, 1.0)):
             interview = Interview(
@@ -686,7 +687,7 @@ class TestAssessmentMatrixRounds:
         ``apply_ai_analysis_state``) skips archived rows. The round list
         did not, so "Latest" could resolve to a recording the recruiter
         had already thrown away."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from sqlalchemy import select
 
@@ -707,7 +708,7 @@ class TestAssessmentMatrixRounds:
             .all()
         )
         assert len(rows) == 2
-        rows[-1].archived_at = datetime.now(timezone.utc)
+        rows[-1].archived_at = datetime.now(UTC)
         await db.commit()
 
         result = await service.get_assessment_matrix(
@@ -800,7 +801,7 @@ class TestAssessmentMatrixRoundSlots:
         *,
         interview_id: uuid.UUID | None = None,
     ):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.models import AIAnalysisRun
         from sqlalchemy import select as _select
@@ -823,7 +824,7 @@ class TestAssessmentMatrixRoundSlots:
             .all()
         )
         for row in prior:
-            row.archived_at = datetime.now(timezone.utc)
+            row.archived_at = datetime.now(UTC)
         await db.flush()
 
         run = AIAnalysisRun(

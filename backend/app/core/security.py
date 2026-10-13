@@ -1,5 +1,5 @@
 import warnings
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import bcrypt
@@ -28,7 +28,7 @@ def create_access_token(
     token_version: int = 0,
     language: str | None = None,
 ) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
+    expire = datetime.now(UTC) + timedelta(
         minutes=settings.access_token_expire_minutes
     )
     payload: dict[str, Any] = {
@@ -61,7 +61,7 @@ def create_demo_access_token(
     refresh token (HRP-276 / M7), so a 30-min default would log the
     visitor out long before their tenant is reclaimed.
     """
-    expire = datetime.now(timezone.utc) + timedelta(
+    expire = datetime.now(UTC) + timedelta(
         seconds=settings.demo_session_ttl_seconds
     )
     payload = {
@@ -77,7 +77,7 @@ def create_demo_access_token(
 
 
 def create_refresh_token(user_id: str, tenant_id: str, token_version: int = 0) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
+    expire = datetime.now(UTC) + timedelta(
         days=settings.refresh_token_expire_days
     )
     payload = {
@@ -99,7 +99,7 @@ def create_reset_token(
     ttl: timedelta = timedelta(minutes=15),
     accounts: dict[str, int] | None = None,
 ) -> str:
-    expire = datetime.now(timezone.utc) + ttl
+    expire = datetime.now(UTC) + ttl
     payload = {
         "sub": user_id,
         "type": "reset",
@@ -117,7 +117,7 @@ def create_reset_token(
 
 
 def create_email_verification_token(user_id: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(hours=24)
+    expire = datetime.now(UTC) + timedelta(hours=24)
     payload = {
         "sub": user_id,
         "type": "email_verify",
@@ -134,7 +134,7 @@ def create_signup_verify_token(signup_request_id: str) -> str:
     record does not exist yet at this stage. Distinct ``type`` keeps it
     out of any other validation path that decodes JWTs.
     """
-    expire = datetime.now(timezone.utc) + timedelta(
+    expire = datetime.now(UTC) + timedelta(
         hours=settings.signup_verify_token_ttl_hours
     )
     payload = {
@@ -152,7 +152,7 @@ def create_magic_login_token(user_id: str, tenant_id: str) -> str:
     """
     import uuid as _uuid
 
-    expire = datetime.now(timezone.utc) + timedelta(
+    expire = datetime.now(UTC) + timedelta(
         hours=settings.magic_login_token_ttl_hours
     )
     payload = {

@@ -72,7 +72,9 @@ export function TransactionDetailSheet({
     };
   }, [open, transactionId, loadFailed]);
 
-  const duration = detail?.calls ? splitDuration(detail.calls.total_latency_ms) : null;
+  // HRP-1046: wall time (first call start → last call end), not the latency
+  // sum — parallel calls made the sum read longer than the operation took.
+  const duration = detail?.calls ? splitDuration(detail.calls.wall_time_ms) : null;
   const entityTypeLabel = (type: string) =>
     t.has(`billingEntityType.${type}`) ? t(`billingEntityType.${type}`) : type;
 

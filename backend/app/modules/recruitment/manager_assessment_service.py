@@ -25,7 +25,7 @@ import secrets
 import uuid
 from collections import Counter
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -365,7 +365,7 @@ async def archive_scale(
     scale = await _load_scale(db, tenant_id, scale_id)
     if scale.archived_at is not None:
         return await _scale_to_dict(db, scale)
-    scale.archived_at = datetime.now(timezone.utc)
+    scale.archived_at = datetime.now(UTC)
     if scale.is_default:
         scale.is_default = False
         # Promote the next non-archived scale as default if any exists.
@@ -765,7 +765,7 @@ async def apply_round_action(
         if rd.status == "complete":
             raise AppError("round_already_complete", status.HTTP_409_CONFLICT)
         rd.status = "complete"
-        rd.completed_at = datetime.now(timezone.utc)
+        rd.completed_at = datetime.now(UTC)
         if user_id is not None:
             await _submit_own_sheet(db, tenant_id, rd, user_id)
         await _revoke_round_invites(db, rd, user_id)
@@ -782,7 +782,7 @@ async def apply_round_action(
         if rd.archived_at is not None:
             raise AppError("round_already_archived", status.HTTP_409_CONFLICT)
         rd.status = "archived"
-        rd.archived_at = datetime.now(timezone.utc)
+        rd.archived_at = datetime.now(UTC)
         rd.archived_reason = archived_reason
         # REDO 04.09: archiving closes the round to writes exactly like
         # completing it, so the links handed out for it have to die the
@@ -834,7 +834,7 @@ async def _submit_own_sheet(
     if own is None or own.status == "submitted":
         return
     own.status = "submitted"
-    own.submitted_at = datetime.now(timezone.utc)
+    own.submitted_at = datetime.now(UTC)
     own.version += 1
 
 
@@ -855,7 +855,7 @@ async def _revoke_round_invites(
         )
     )
     revoked = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for inv in result.scalars().all():
         # An invite past its deadline is already dead; leaving it as
         # ``expired`` keeps the recruiter-facing history honest.
@@ -1600,7 +1600,7 @@ async def submit_assessment(
     ):
         raise AppError("assessment_sheet_owner_only", status.HTTP_403_FORBIDDEN)
     a.status = "submitted"
-    a.submitted_at = datetime.now(timezone.utc)
+    a.submitted_at = datetime.now(UTC)
     if final_notes is not None:
         a.final_notes = final_notes
     a.version += 1
@@ -1647,12 +1647,12 @@ async def recompute_manager_score(
         cv.manager_score = None
         cv.manager_score_weight = None
         cv.manager_score_source_round_id = None
-        cv.manager_score_updated_at = datetime.now(timezone.utc)
+        cv.manager_score_updated_at = datetime.now(UTC)
         await db.commit()
         return
     cv.manager_score = float(chosen_avg)
     cv.manager_score_source_round_id = chosen.id
-    cv.manager_score_updated_at = datetime.now(timezone.utc)
+    cv.manager_score_updated_at = datetime.now(UTC)
     # convert avg level → weight via vacancy snapshot
     vacancy = await db.get(Vacancy, cv.vacancy_id)
     snapshot = vacancy.assessment_scale_snapshot if vacancy else None
@@ -1894,7 +1894,7 @@ async def create_invites(
                         AssessmentInvite.status == "submitted",
                         and_(
                             AssessmentInvite.status.in_(INVITE_ACTIVE_STATUSES),
-                            AssessmentInvite.expires_at > datetime.now(timezone.utc),
+                            AssessmentInvite.expires_at > datetime.now(UTC),
                         ),
                     ),
                 )
@@ -1911,7 +1911,7 @@ async def create_invites(
     # written — a refusal mid-loop would leave part of the batch invited
     # and part not, with no way for the caller to tell which.
     await _claim_invite_mail_budget([i.email for i in payload.invitees])
-    expires_at = datetime.now(timezone.utc) + timedelta(days=payload.expires_in_days)
+    expires_at = datetime.now(UTC) + timedelta(days=payload.expires_in_days)
 
     candidate = await db.get(Candidate, cv.candidate_id)
     vacancy = await db.get(Vacancy, cv.vacancy_id)
@@ -2024,7 +2024,7 @@ async def revoke_invite(
     inv = await _load_invite(db, tenant_id, invite_id)
     if inv.revoked_at is not None:
         return _invite_to_dict(inv)
-    inv.revoked_at = datetime.now(timezone.utc)
+    inv.revoked_at = datetime.now(UTC)
     inv.revoked_by = user_id
     inv.status = "revoked"
     await db.commit()
@@ -2321,7 +2321,7 @@ async def resend_invite(
     candidate_name = candidate_display_name(
         candidate, fallback=translate("email.fallback.unnamed", locale)
     )
-    remaining_days = max(1, (inv.expires_at - datetime.now(timezone.utc)).days)
+    remaining_days = max(1, (inv.expires_at - datetime.now(UTC)).days)
 
     try:
         from app.core.email import enqueue_email
@@ -2737,7 +2737,7 @@ def effective_invite_status(inv: AssessmentInvite) -> str:
     never clicked the link after the deadline.
     """
     if inv.status in INVITE_ACTIVE_STATUSES and inv.expires_at < datetime.now(
-        timezone.utc
+        UTC
     ):
         return "expired"
     return inv.status

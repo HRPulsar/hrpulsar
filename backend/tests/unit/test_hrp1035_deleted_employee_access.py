@@ -15,7 +15,7 @@ directly is refused instead, since login would stay closed forever.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.core.security import (
@@ -153,7 +153,7 @@ class TestDeletedEmployeeLockedOut:
             token=uuid.uuid4().hex,
             role_code="employee",
             invited_by=user.id,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            expires_at=datetime.now(UTC) + timedelta(days=7),
         )
         db.add(inv)
         await db.commit()

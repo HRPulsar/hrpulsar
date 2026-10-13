@@ -25,7 +25,7 @@ scope so we don't leak a fresh pool on every 5-minute tick.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import create_engine, delete, func, or_, select
@@ -121,7 +121,7 @@ def _expired_demo_tenant_ids(db: Session, now: datetime) -> list:
 def purge_expired_demo_tenants(self: Any) -> dict[str, int]:
     """Drop demo tenants whose TTL or inactivity window has elapsed."""
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     summary = {"scanned": 0, "deleted": 0}
 
     engine = _sync_engine()

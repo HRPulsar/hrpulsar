@@ -6,7 +6,7 @@ on the shared test DB, so every test creates its own uniquely-coded template.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest_asyncio
 from app.modules.notification import service as notification_service
@@ -208,7 +208,7 @@ class TestEmailLogWebhookUpdate:
         )
         await db.commit()
 
-        delivered_at = datetime.now(timezone.utc)
+        delivered_at = datetime.now(UTC)
         ok = await notification_service.update_email_log_status(
             db, message_id, "delivered", timestamp=delivered_at
         )
@@ -236,7 +236,7 @@ class TestEmailLogWebhookUpdate:
         await db.commit()
 
         ok = await notification_service.update_email_log_status(
-            db, message_id, "bounced", timestamp=datetime.now(timezone.utc)
+            db, message_id, "bounced", timestamp=datetime.now(UTC)
         )
         assert ok is True
 

@@ -8,7 +8,7 @@ the service shape.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 from app.modules.assessment import service
@@ -69,7 +69,7 @@ class TestAssessmentOrdering:
 
         # Pin a deterministic finished_at so "done newer than cancelled" is
         # not subject to test-clock races.
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         done_row = await db.get(Assessment, done_id)
         cancel_row = await db.get(Assessment, cancel_id)
         assert done_row is not None and cancel_row is not None
@@ -161,7 +161,7 @@ class TestAssessmentOrdering:
 
         # Pin deterministic timestamps so bucket-internal ordering is
         # stable across test runs.
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         done_row = await db.get(Assessment, done_id)
         cancel_row = await db.get(Assessment, cancel_child_id)
         assert done_row is not None and cancel_row is not None

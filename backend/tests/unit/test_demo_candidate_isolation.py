@@ -21,7 +21,7 @@ This module pins:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -54,7 +54,7 @@ async def _make_tenant(db: AsyncSession, *, is_demo: bool) -> tuple[Tenant, User
         first_name=label.title(),
         last_name="Owner",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(user)
     await db.commit()

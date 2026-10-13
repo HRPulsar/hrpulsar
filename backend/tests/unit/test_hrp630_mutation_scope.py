@@ -22,7 +22,7 @@ the manager-assessment sheets but stores a ``HumanAssessment``.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest_asyncio
 from app.core.security import create_access_token, hash_password
@@ -63,7 +63,7 @@ async def _user(db: AsyncSession, tenant, *codes: str) -> User:
         first_name=codes[0],
         last_name="X",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -199,8 +199,8 @@ async def hiring(db: AsyncSession, tenant):
             token=uuid.uuid4().hex,
             email=f"eval-{uuid.uuid4().hex[:6]}@example.com",
             status="revoked",
-            revoked_at=datetime.now(timezone.utc),
-            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            revoked_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(days=7),
         )
         db.add_all([qset, human, rnd, invite])
         await db.commit()

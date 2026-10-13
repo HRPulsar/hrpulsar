@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures";
 import {
+  API_BASE,
   createDivision,
   createPDP,
   createPosition,
@@ -8,8 +9,6 @@ import {
   seedPDPItemWithMaterial,
   setDivisionManager,
 } from "./helpers";
-
-const API = "http://localhost:8100/api";
 
 /**
  * Tests for the role-aware list scope introduced alongside
@@ -50,7 +49,7 @@ test.describe("Access scope (role-aware list filters)", () => {
     // --- /api/employees ---
     const list = async (token: string, query = "") =>
       page.request
-        .get(`${API}/employees?limit=100${query}`, {
+        .get(`${API_BASE}/employees?limit=100${query}`, {
           headers: { Authorization: `Bearer ${token}` },
         })
         .then(async (r) => {
@@ -114,7 +113,7 @@ test.describe("Access scope (role-aware list filters)", () => {
     const bobPdp = await createPDP(adminOpts, bob.employeeId!);
     for (const pdp of [alicePdp, bobPdp]) {
       await seedPDPItemWithMaterial(adminOpts, pdp.id);
-      await page.request.post(`${API}/pdp/${pdp.id}/status`, {
+      await page.request.post(`${API_BASE}/pdp/${pdp.id}/status`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` },
         data: { status_code: "sent" },
       });
@@ -122,7 +121,7 @@ test.describe("Access scope (role-aware list filters)", () => {
 
     const listPdp = async (token: string) =>
       page.request
-        .get(`${API}/pdp`, {
+        .get(`${API_BASE}/pdp`, {
           headers: { Authorization: `Bearer ${token}` },
         })
         .then(async (r) => {
@@ -158,14 +157,14 @@ test.describe("Access scope (role-aware list filters)", () => {
 
     // Alice asks for Bob's exams → 403
     const forbidden = await page.request.get(
-      `${API}/exams?employee_id=${bob.employeeId}`,
+      `${API_BASE}/exams?employee_id=${bob.employeeId}`,
       { headers: { Authorization: `Bearer ${alice.accessToken}` } },
     );
     expect(forbidden.status()).toBe(403);
 
     // Alice asks for own exams → 200
     const allowed = await page.request.get(
-      `${API}/exams?employee_id=${alice.employeeId}`,
+      `${API_BASE}/exams?employee_id=${alice.employeeId}`,
       { headers: { Authorization: `Bearer ${alice.accessToken}` } },
     );
     expect(allowed.ok()).toBeTruthy();
@@ -187,13 +186,13 @@ test.describe("Access scope (role-aware list filters)", () => {
 
     // Admin creates two cards: one stays draft, one is published.
     const draft = await page.request
-      .post(`${API}/talent-market`, {
+      .post(`${API_BASE}/talent-market`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` },
         data: { title: "Hidden draft", card_type: "vacancy" },
       })
       .then((r) => r.json());
     const pub = await page.request
-      .post(`${API}/talent-market`, {
+      .post(`${API_BASE}/talent-market`, {
         headers: { Authorization: `Bearer ${admin.accessToken}` },
         data: { title: "Public vacancy", card_type: "vacancy" },
       })
@@ -205,25 +204,25 @@ test.describe("Access scope (role-aware list filters)", () => {
       Authorization: `Bearer ${admin.accessToken}`,
     } as const;
     const group = await page.request
-      .post(`${API}/competence-groups`, {
+      .post(`${API_BASE}/competence-groups`, {
         headers: adminHeaders,
         data: { title: `Pub-grp-${Date.now()}` },
       })
       .then((r) => r.json());
     const competence = await page.request
-      .post(`${API}/competences`, {
+      .post(`${API_BASE}/competences`, {
         headers: adminHeaders,
         data: { title: `Pub-comp-${Date.now()}`, group_id: group.id },
       })
       .then((r) => r.json());
     const skillLevel = await page.request
-      .post(`${API}/skill-levels`, {
+      .post(`${API_BASE}/skill-levels`, {
         headers: adminHeaders,
         data: { title: `Pub-lv-${Date.now()}`, sort_index: 0 },
       })
       .then((r) => r.json());
     const reqResp = await page.request.post(
-      `${API}/talent-market/${pub.id}/required-competences`,
+      `${API_BASE}/talent-market/${pub.id}/required-competences`,
       {
         headers: adminHeaders,
         data: {
@@ -240,7 +239,7 @@ test.describe("Access scope (role-aware list filters)", () => {
     // card. Alice has no done assessments so the HRP-129 auto-pool stays
     // empty — attach her manually before publishing.
     const candResp = await page.request.post(
-      `${API}/talent-market/${pub.id}/candidates`,
+      `${API_BASE}/talent-market/${pub.id}/candidates`,
       {
         headers: adminHeaders,
         data: { employee_id: alice.employeeId },
@@ -249,14 +248,14 @@ test.describe("Access scope (role-aware list filters)", () => {
     expect(candResp.ok(), await candResp.text()).toBeTruthy();
 
     const publishResp = await page.request.post(
-      `${API}/talent-market/${pub.id}/publish`,
+      `${API_BASE}/talent-market/${pub.id}/publish`,
       { headers: adminHeaders },
     );
     expect(publishResp.ok(), await publishResp.text()).toBeTruthy();
 
     const search = async (token: string) =>
       page.request
-        .post(`${API}/talent-market/search`, {
+        .post(`${API_BASE}/talent-market/search`, {
           headers: { Authorization: `Bearer ${token}` },
           data: { skip: 0, limit: 100 },
         })

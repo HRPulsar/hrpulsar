@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -123,7 +123,7 @@ class TestConsentResend:
         setup = await _setup(db, tenant, user)
         row = await _row(db, setup["sent"]["id"])
         row.status = "signed"
-        row.signed_at = datetime.now(timezone.utc)
+        row.signed_at = datetime.now(UTC)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:
@@ -177,7 +177,7 @@ class TestConsentResend:
         )
         assert charged == []
         row = await _row(db, setup["sent"]["id"])
-        row.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        row.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()
         await consent_service.resend_consent_request(
             db, tenant.id, user.id, setup["candidate_id"]
@@ -193,7 +193,7 @@ class TestConsentResend:
         row = await _row(db, setup["sent"]["id"])
         old_token = row.token
         # Issued 15 days ago for 14 days, so it ran out yesterday.
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         row.created_at = now - timedelta(days=15)
         row.expires_at = now - timedelta(days=1)
         await db.commit()
@@ -221,7 +221,7 @@ class TestConsentResend:
         setup = await _setup(db, tenant, user)
         row = await _row(db, setup["sent"]["id"])
         old_token = row.token
-        row.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        row.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()
 
         await consent_service.resend_consent_request(

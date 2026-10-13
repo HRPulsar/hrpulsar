@@ -29,7 +29,9 @@ const base: CreditTransactionDetail = {
   balance_after_bonus: 0, created_at: "2026-09-25T14:32:00Z",
   user_id: "u-1", user_name: "Anna Petrova", work_unit_id: "w-1",
   entity: { type: "vacancy", id: "v-1", title: "Frontend Developer", path: "/recruitment/requisitions/v-1" },
-  calls: { count: 3, models: ["claude-sonnet-4-5"], total_latency_ms: 48_400, started_at: null, finished_at: null },
+  // HRP-1046: wall_time_ms < total_latency_ms — parallel calls; the sheet
+  // must show the wall time, not the latency sum.
+  calls: { count: 3, models: ["claude-sonnet-4-5"], total_latency_ms: 48_400, wall_time_ms: 30_200, started_at: null, finished_at: null },
 };
 
 let container: HTMLDivElement;
@@ -71,7 +73,9 @@ describe("TransactionDetailSheet", () => {
     expect(link.getAttribute("href")).toBe("/recruitment/requisitions/v-1");
     expect(link.textContent).toContain("Frontend Developer");
     expect(sheet?.textContent).toContain("claude-sonnet-4-5");
-    expect(sheet?.textContent).toContain("48 s");
+    // Wall time, not the 48 s latency sum (HRP-1046).
+    expect(sheet?.textContent).toContain("30 s");
+    expect(sheet?.textContent).not.toContain("48 s");
     expect(sheet?.textContent).toContain("3");
   });
 

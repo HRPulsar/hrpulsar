@@ -33,6 +33,8 @@ export default defineConfig({
     : [
         {
           command: "cd .. && make run-back",
+          // Fixed on purpose: this block only runs without E2E_* overrides,
+          // and `make run-back` always binds 8100.
           url: "http://localhost:8100/health",
           reuseExistingServer: true,
           timeout: 30000,

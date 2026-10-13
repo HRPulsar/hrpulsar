@@ -237,7 +237,7 @@ DYNAMIC_SCHEMA_VALUEERROR_ALLOWLIST = {
 }
 
 
-def _iter_sources() -> "list[tuple[Path, object]]":
+def _iter_sources() -> list[tuple[Path, object]]:
     """(path, AST) for every backend module, ee included when present."""
     import ast
 

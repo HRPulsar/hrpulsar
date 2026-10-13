@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures";
 import {
+  API_BASE,
   createDictionaryItem,
   createDivision,
   createPosition,
@@ -8,8 +9,6 @@ import {
   setAuthTokens,
   setDivisionManager,
 } from "./helpers";
-
-const API = "http://localhost:8100/api";
 
 /**
  * EMP4: redesigned employees list — column layout + multi-select filters.
@@ -261,7 +260,7 @@ test.describe("Employees list (EMP4)", () => {
     await setDivisionManager(opts, ownDiv.id, manager.employeeId!);
 
     // Verify backend scope endpoint behavior directly.
-    const scopeResp = await page.request.get(`${API}/divisions/scope`, {
+    const scopeResp = await page.request.get(`${API_BASE}/divisions/scope`, {
       headers: { Authorization: `Bearer ${manager.accessToken}` },
     });
     expect(scopeResp.ok()).toBeTruthy();

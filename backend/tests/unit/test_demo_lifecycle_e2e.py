@@ -11,7 +11,7 @@ deletes touched everything.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.config import settings
@@ -130,7 +130,7 @@ async def test_full_lifecycle_start_activity_purge_cascade(
     # 2. ── Authenticated GET stamps ``last_active_at`` ──────────────
     # ``last_active_at`` is set to ``now`` at start; back-date it so we
     # can prove the touch actually wrote a fresh value.
-    backdated = datetime.now(timezone.utc) - timedelta(hours=1)
+    backdated = datetime.now(UTC) - timedelta(hours=1)
     await db.execute(
         update(Tenant)
         .where(Tenant.id == tenant_id)
@@ -189,7 +189,7 @@ async def test_full_lifecycle_start_activity_purge_cascade(
     )
 
     # 3. ── Backdate ``expires_at`` so the next purge will pick it up ─
-    expired = datetime.now(timezone.utc) - timedelta(minutes=5)
+    expired = datetime.now(UTC) - timedelta(minutes=5)
     await db.execute(
         update(Tenant)
         .where(Tenant.id == tenant_id)
@@ -279,7 +279,7 @@ async def test_purge_removes_the_internal_candidate_person(
     await db.execute(
         update(Tenant)
         .where(Tenant.id == tenant_id)
-        .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+        .values(expires_at=datetime.now(UTC) - timedelta(minutes=5))
     )
     await db.commit()
 

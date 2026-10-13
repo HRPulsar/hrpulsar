@@ -1,7 +1,7 @@
 """HRP-435: public token-scoped invitation preview backing the accept form."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 from app.modules.auth import service
@@ -64,7 +64,7 @@ class TestInvitationPreview:
     ):
         """The common real-world case: the link was already used."""
         invitation.status = "accepted"
-        invitation.accepted_at = datetime.now(timezone.utc)
+        invitation.accepted_at = datetime.now(UTC)
         await db.commit()
         resp = await client.get(f"/api/auth/invitations/{invitation.token}")
         assert resp.status_code == 400
@@ -81,7 +81,7 @@ class TestInvitationPreview:
         self, client: AsyncClient, db: AsyncSession, invitation: Invitation
     ):
         """A GET must not write — unlike accept, which flips the row to expired."""
-        invitation.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        invitation.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()
 
         resp = await client.get(f"/api/auth/invitations/{invitation.token}")

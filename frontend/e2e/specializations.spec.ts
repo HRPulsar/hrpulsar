@@ -142,15 +142,14 @@ test.describe("Specializations page", () => {
       "grade",
       `BlockedGrade-${stamp}`,
     );
-    const API = "http://localhost:8100/api";
     const auth = { Authorization: `Bearer ${accessToken}` };
-    const posResp = await page.request.post(`${API}/positions`, {
+    const posResp = await page.request.post(`${API_BASE}/positions`, {
       headers: auth,
       data: { title: `BlockedPos-${stamp}`, specialization_id: spec.id },
     });
     if (!posResp.ok()) throw new Error(`position seed failed: ${await posResp.text()}`);
     const pos = await posResp.json();
-    const chainResp = await page.request.post(`${API}/grade-system/chains`, {
+    const chainResp = await page.request.post(`${API_BASE}/grade-system/chains`, {
       headers: auth,
       data: {
         grade_id: grade.id,

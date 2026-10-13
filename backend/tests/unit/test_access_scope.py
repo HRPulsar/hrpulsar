@@ -1,6 +1,6 @@
 """Tests for app.core.access_scope — scope helper used across modules."""
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest_asyncio
 from app.core import access_scope
@@ -31,7 +31,7 @@ async def _make_user(db: AsyncSession, tenant, role: Role, email_suffix: str) ->
         first_name=email_suffix,
         last_name="X",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

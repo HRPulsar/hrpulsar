@@ -7,7 +7,7 @@ the task_failure status map).
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.core.celery_app import celery
 
@@ -88,13 +88,13 @@ def scan_interview_media_task(self, interview_id: str, tenant_id: str) -> dict:
                 return {"status": "missing"}
             if not interview.file_s3_key:
                 interview.av_status = "skipped"
-                interview.av_scanned_at = datetime.now(timezone.utc)
+                interview.av_scanned_at = datetime.now(UTC)
                 db.commit()
                 return {"status": "no_file"}
 
             verdict = _av_scan_bytes(interview.file_s3_key)
             interview.av_status = verdict
-            interview.av_scanned_at = datetime.now(timezone.utc)
+            interview.av_scanned_at = datetime.now(UTC)
             if verdict == "infected":
                 from app.core.s3 import delete_file
 

@@ -6,12 +6,12 @@
 // controlled number would eat the "." while the user types "0.5".
 
 import { Input } from "@/components/ui/input";
-import { HOURS_PER_RUN_MAX, RUNS_PER_YEAR_MAX } from "@/lib/api/work";
-
-// The backend's own bounds (`work/models.py`): anything it accepts must
-// leave the browser, so these may not be narrower.
-export const HOURS_PER_RUN_MIN = 0.01;
-export const RUNS_PER_YEAR_MIN = 1;
+import {
+  HOURS_PER_RUN_MAX,
+  HOURS_PER_RUN_MIN,
+  RUNS_PER_YEAR_MAX,
+  RUNS_PER_YEAR_MIN,
+} from "@/lib/api/work";
 
 export interface HoursDraft {
   hours: string;

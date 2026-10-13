@@ -10,7 +10,7 @@ the delegating namespace.
 import logging
 import uuid
 from collections.abc import Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
 from fastapi import Request, status
@@ -872,7 +872,7 @@ async def create_assessment_invite(
     await refuse_fenced_assignees(db, tenant_id, cv.vacancy_id, emails={data.email})
 
     token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)
+    expires_at = datetime.now(UTC) + timedelta(days=data.expires_in_days)
 
     invite = AssessmentInvite(
         tenant_id=tenant_id,
@@ -946,7 +946,7 @@ async def _resolve_invite(db: AsyncSession, token: str) -> AssessmentInvite:
     invite = result.scalar_one_or_none()
     if not invite:
         raise AppError("invite_not_found", status.HTTP_404_NOT_FOUND)
-    if invite.expires_at < datetime.now(timezone.utc):
+    if invite.expires_at < datetime.now(UTC):
         invite.status = "expired"
         await db.commit()
         raise AppError("invite_expired", status.HTTP_410_GONE)
@@ -1210,7 +1210,7 @@ async def get_invite_by_token(db: AsyncSession, token: str) -> dict | None:
         return None
 
     # Check expiry
-    if invite.expires_at < datetime.now(timezone.utc):
+    if invite.expires_at < datetime.now(UTC):
         invite.status = "expired"
         await db.commit()
 
@@ -1400,7 +1400,7 @@ async def get_canvas(
 # ``created_at`` cannot crash sort/dedup with "can't compare offset-naive and
 # offset-aware datetimes". Older Interview rows imported pre-migration may
 # legitimately lack a timestamp.
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def _normalize_ai_status(raw_status: str | None) -> str:

@@ -10,7 +10,7 @@ their cascade-linked children with them.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.config import settings
@@ -58,7 +58,7 @@ async def test_purge_deletes_demo_tenant_past_hard_ttl(
 ):
     import app.modules.demo.tasks as tasks
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expired = await _make_tenant(
         db,
         is_demo=True,
@@ -81,7 +81,7 @@ async def test_purge_deletes_demo_tenant_past_inactivity_window(
 ):
     import app.modules.demo.tasks as tasks
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale = await _make_tenant(
         db,
         is_demo=True,
@@ -104,7 +104,7 @@ async def test_purge_keeps_fresh_demo_tenant(
 ):
     import app.modules.demo.tasks as tasks
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fresh = await _make_tenant(
         db,
         is_demo=True,
@@ -126,7 +126,7 @@ async def test_purge_never_touches_non_demo_tenants(
 ):
     import app.modules.demo.tasks as tasks
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # A non-demo tenant with a long-past would-be-TTL — proves the
     # ``is_demo`` predicate is doing its job.
     real = await _make_tenant(
@@ -186,7 +186,7 @@ async def test_purge_cascades_to_tenant_scoped_children(
 ):
     import app.modules.demo.tasks as tasks
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tenant = await _make_tenant(
         db,
         is_demo=True,
@@ -235,7 +235,7 @@ async def test_purge_cascades_through_talent_candidate(
     from app.modules.employee.models import Employee
     from app.modules.talent_market.models import TalentCandidate, TalentCard
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tenant = await _make_tenant(
         db,
         is_demo=True,
@@ -324,7 +324,7 @@ async def test_purge_cascades_through_pdp_comment(
     from app.modules.employee.models import Employee
     from app.modules.position.models import Position
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tenant = await _make_tenant(
         db,
         is_demo=True,
@@ -418,7 +418,7 @@ async def test_purge_cascades_pdp_comment_via_user_fk_only(
     from app.modules.employee.models import Employee
     from app.modules.position.models import Position
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Tenant A — about to expire and get purged.
     tenant_a = await _make_tenant(
         db,
@@ -657,7 +657,7 @@ async def test_touch_updates_last_active_for_demo_tenant(
     monkeypatch.setattr(activity, "_redis_client", lambda: None)
     _patch_activity_factory_to_test_engine(monkeypatch)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tenant = await _make_tenant(
         db,
         is_demo=True,
@@ -686,11 +686,11 @@ async def test_touch_skips_a_hidden_tab_poll(db: AsyncSession, monkeypatch):
     monkeypatch.setattr(activity, "_redis_client", lambda: None)
     _patch_activity_factory_to_test_engine(monkeypatch)
 
-    baseline = datetime.now(timezone.utc) - timedelta(minutes=30)
+    baseline = datetime.now(UTC) - timedelta(minutes=30)
     tenant = await _make_tenant(
         db,
         is_demo=True,
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        expires_at=datetime.now(UTC) + timedelta(hours=2),
         last_active_at=baseline,
     )
 
@@ -709,7 +709,7 @@ async def test_touch_no_op_on_non_demo_tenant(
     monkeypatch.setattr(activity, "_redis_client", lambda: None)
     _patch_activity_factory_to_test_engine(monkeypatch)
 
-    baseline = datetime.now(timezone.utc) - timedelta(days=7)
+    baseline = datetime.now(UTC) - timedelta(days=7)
     tenant = await _make_tenant(
         db,
         is_demo=False,
@@ -742,7 +742,7 @@ async def test_touch_survives_request_session_rollback(
     monkeypatch.setattr(activity, "_redis_client", lambda: None)
     _patch_activity_factory_to_test_engine(monkeypatch)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tenant = await _make_tenant(
         db,
         is_demo=True,

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.company import service
@@ -61,7 +61,7 @@ class TestOnboardingStatus:
             invited_by=user.id,
             tenant_id=tenant.id,
             status="pending",
-            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            expires_at=datetime.now(UTC) + timedelta(days=7),
         )
         db.add(inv)
         await db.commit()
@@ -128,7 +128,7 @@ class TestOnboardingEndpoints:
             first_name="Emp",
             last_name="User",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(u)
         await db.commit()

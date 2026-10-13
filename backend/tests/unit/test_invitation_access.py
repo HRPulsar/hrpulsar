@@ -10,7 +10,7 @@ changing the role of a sent invitation stays the admin level's.
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 import pytest_asyncio
@@ -64,7 +64,7 @@ async def _user_with_role(db: AsyncSession, tenant, role: Role, *, label: str) -
         first_name=label.title(),
         last_name="User",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

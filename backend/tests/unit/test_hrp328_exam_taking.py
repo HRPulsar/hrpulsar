@@ -6,6 +6,7 @@ automatic mass-exam completion when the last participant finishes.
 """
 
 import uuid
+from datetime import UTC
 
 import pytest
 from app.modules.exam import service
@@ -53,7 +54,7 @@ async def _sent_exam(db, tenant, user, employee, *, questions=1):
 
 
 async def _make_second_employee(db: AsyncSession, tenant):
-    from datetime import date, datetime, timezone
+    from datetime import date, datetime
 
     from app.core.security import hash_password
     from app.modules.auth.models import User
@@ -65,7 +66,7 @@ async def _make_second_employee(db: AsyncSession, tenant):
         first_name="Second",
         last_name="Emp",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()

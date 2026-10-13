@@ -66,7 +66,7 @@ class GradeSpecialization(BaseModel, TenantMixin):
         Integer, nullable=True, default=75, server_default="75"
     )
 
-    competence_links: Mapped[list["GradeCompetenceLink"]] = relationship(
+    competence_links: Mapped[list[GradeCompetenceLink]] = relationship(
         back_populates="grade_specialization",
         cascade="all, delete-orphan",
     )
@@ -95,7 +95,7 @@ class GradeCompetenceLink(BaseModel):
         nullable=False,
     )
 
-    grade_specialization: Mapped["GradeSpecialization"] = relationship(
+    grade_specialization: Mapped[GradeSpecialization] = relationship(
         back_populates="competence_links"
     )
     competence = relationship("Competence", lazy="selectin")

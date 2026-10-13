@@ -11,7 +11,7 @@ contract — Complete writes ``completed_at`` and Cancel writes
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest_asyncio
 from app.modules.auth.models import User
@@ -47,7 +47,7 @@ async def published_card_with_appointed(
         first_name="C",
         last_name="X",
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()
@@ -63,7 +63,7 @@ async def published_card_with_appointed(
         card_id=card["id"],
         employee_id=emp.id,
         status="appointed",
-        appointed_at=datetime.now(timezone.utc),
+        appointed_at=datetime.now(UTC),
     )
     db.add(cand)
     await db.commit()
@@ -77,7 +77,7 @@ async def published_card_with_appointed(
     assert db_card is not None
     db_card.status = "published"
     db_card.is_published = True
-    db_card.published_at = datetime.now(timezone.utc)
+    db_card.published_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(db_card)
     return {"id": db_card.id}

@@ -11,7 +11,7 @@ scores but drops out of the candidate's aggregate.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.recruitment import manager_assessment_public as public_service
@@ -131,7 +131,7 @@ class TestCompleteRound:
     ):
         cv, rd_id = await _round(db, tenant, user)
         inv = await _invite(db, tenant, user, cv, rd_id)
-        inv.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        inv.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()
 
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
@@ -345,7 +345,7 @@ class TestArchivedRoundOnThePublicSurface:
     async def _submitted_invite(self, db, tenant, user):
         cv, rd_id = await _round(db, tenant, user)
         inv = await _invite(db, tenant, user, cv, rd_id)
-        inv.consent_accepted_at = datetime.now(timezone.utc)
+        inv.consent_accepted_at = datetime.now(UTC)
         inv.allow_reediting = True
         await db.commit()
         await public_service.public_submit(db, inv.token)
@@ -515,7 +515,7 @@ class TestRedoPublicContextRoundStatus:
     async def _submitted_invite(self, db, tenant, user):
         cv, rd_id = await _round(db, tenant, user)
         inv = await _invite(db, tenant, user, cv, rd_id)
-        inv.consent_accepted_at = datetime.now(timezone.utc)
+        inv.consent_accepted_at = datetime.now(UTC)
         inv.allow_reediting = True
         await db.commit()
         await public_service.public_submit(db, inv.token)
@@ -577,7 +577,7 @@ class TestRedoReopenKeepsReediting:
             ),
         )
         inv = await db.get(AssessmentInvite, rows[0]["id"])
-        inv.consent_accepted_at = datetime.now(timezone.utc)
+        inv.consent_accepted_at = datetime.now(UTC)
         await db.commit()
         await public_service.public_set_competence_score(
             db, inv.token, uuid.uuid4(), 3, None
@@ -644,7 +644,7 @@ class TestRedoReopenKeepsReediting:
         )
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "reopen")
-        inv.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        inv.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:

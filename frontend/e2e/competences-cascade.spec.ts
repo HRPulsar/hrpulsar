@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   createCompetenceGroup,
   pickFirstSkillLevel,
   publishCompetence,
@@ -10,8 +11,6 @@ import {
 // HRP-139 — cascade activation, hidden-state inheritance, and Delete/menu
 // rules around used groups. Backend cascade was shipped in HRP-118 (units
 // already cover the service layer); this suite locks the UI surface.
-
-const API_BASE = "http://localhost:8100/api";
 
 async function createGroupViaApi(
   page: import("@playwright/test").Page,

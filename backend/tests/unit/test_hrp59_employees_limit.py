@@ -18,7 +18,7 @@ table at once.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from app.core.security import hash_password
 from app.modules.auth.models import Role, User, user_roles
@@ -87,7 +87,7 @@ class TestEmployeeRolesDoNotAddQueriesPerRow:
                 first_name="N",
                 last_name="One",
                 tenant_id=tenant.id,
-                email_verified_at=datetime.now(timezone.utc),
+                email_verified_at=datetime.now(UTC),
             )
             db.add(u)
             await db.flush()

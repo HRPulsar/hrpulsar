@@ -1,7 +1,7 @@
 """Tests for GF4: Anonymous / Open Access Assessments (External Reviewers)."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.assessment import service
@@ -164,7 +164,7 @@ class TestSubmitExternalAnswers:
             db, tenant.id, a.id, name="Expired", email=None
         )
         er = await db.get(ExternalReviewer, created["id"])
-        er.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        er.expires_at = datetime.now(UTC) - timedelta(hours=1)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:
@@ -191,7 +191,7 @@ class TestSubmitExternalAnswers:
             db, tenant.id, a.id, name="Exp", email=None
         )
         er = await db.get(ExternalReviewer, created["id"])
-        er.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        er.expires_at = datetime.now(UTC) - timedelta(hours=1)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:

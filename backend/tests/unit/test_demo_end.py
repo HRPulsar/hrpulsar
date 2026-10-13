@@ -8,7 +8,7 @@ keeps the sandbox alive, and a non-demo bearer is rejected.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from app.config import settings
@@ -62,7 +62,7 @@ async def test_end_expires_sandbox_and_revokes_tokens(
 
     tenant = await db.get(Tenant, tenant_id)
     await db.refresh(tenant)
-    assert tenant.expires_at <= datetime.now(timezone.utc)
+    assert tenant.expires_at <= datetime.now(UTC)
     assert published == [("demo.session_ended", {"tenant_id": tenant_id})]
 
     # The sandbox lives until the next purge tick; its tokens must not.
@@ -100,7 +100,7 @@ async def test_end_spares_sandbox_with_pending_keep_data_signup(
 
     tenant = await db.get(Tenant, tenant_id)
     await db.refresh(tenant)
-    assert tenant.expires_at > datetime.now(timezone.utc)
+    assert tenant.expires_at > datetime.now(UTC)
     assert published[-1][0] == "demo.session_ended"
 
     # Revoked means revoked: the resume hint outlives the logout on the

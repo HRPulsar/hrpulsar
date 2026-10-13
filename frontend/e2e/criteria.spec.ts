@@ -1,6 +1,7 @@
 import { test, expect } from "./fixtures";
 
 import {
+  API_BASE,
   createAssessment,
   setAuthTokens,
   setupCriteriaFixture,
@@ -91,12 +92,12 @@ test.describe("Evaluation criteria — round-trip persistence", () => {
     const browserPage = await page.context().newPage();
     await setAuthTokens(browserPage, accessToken, refreshToken);
     const setupResp = await browserPage.request.get(
-      "http://localhost:8100/api/employees?limit=1",
+      `${API_BASE}/employees?limit=1`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     const empId = (await setupResp.json()).items[0].id;
     const aResp = await browserPage.request.post(
-      "http://localhost:8100/api/assessments",
+      `${API_BASE}/assessments`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: { employee_id: empId, type_code: "self", title: "Target round-trip" },
@@ -145,12 +146,12 @@ test.describe("Evaluation criteria — round-trip persistence", () => {
     const browserPage = await page.context().newPage();
     await setAuthTokens(browserPage, accessToken, refreshToken);
     const setupResp = await browserPage.request.get(
-      "http://localhost:8100/api/employees?limit=1",
+      `${API_BASE}/employees?limit=1`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     const empId = (await setupResp.json()).items[0].id;
     const aResp = await browserPage.request.post(
-      "http://localhost:8100/api/assessments",
+      `${API_BASE}/assessments`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: {

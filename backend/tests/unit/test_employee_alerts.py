@@ -1,7 +1,7 @@
 """POS6: Employee alert priority scale + bulk computation."""
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -38,7 +38,7 @@ async def _make_user(db: AsyncSession, tenant, *, is_active: bool = True) -> Use
         last_name="Person",
         tenant_id=tenant.id,
         is_active=is_active,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -185,7 +185,7 @@ class TestSingleEmployeeAlert:
             type_id=assessment_type_self.id,
             status_id=assessment_status_map["in_progress"].id,
             initiator_id=user.id,
-            ended_at=datetime.now(timezone.utc) - timedelta(days=1),
+            ended_at=datetime.now(UTC) - timedelta(days=1),
         )
         db.add(a)
         await db.commit()
@@ -284,7 +284,7 @@ class TestBulkAlerts:
                 type_id=assessment_type_self.id,
                 status_id=assessment_status_map["sent"].id,
                 initiator_id=user.id,
-                ended_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                ended_at=datetime.now(UTC) - timedelta(hours=1),
             )
         )
         await db.commit()
@@ -321,7 +321,7 @@ class TestBulkAlerts:
                         type_id=assessment_type_self.id,
                         status_id=assessment_status_map["in_progress"].id,
                         initiator_id=user.id,
-                        ended_at=datetime.now(timezone.utc) - timedelta(days=2),
+                        ended_at=datetime.now(UTC) - timedelta(days=2),
                     )
                 )
         await db.commit()
@@ -388,7 +388,7 @@ class TestBulkAlerts:
                 type_id=assessment_type_self.id,
                 status_id=assessment_status_map["in_progress"].id,
                 initiator_id=user.id,
-                ended_at=datetime.now(timezone.utc) - timedelta(days=1),
+                ended_at=datetime.now(UTC) - timedelta(days=1),
             )
         )
         await db.commit()
@@ -419,7 +419,7 @@ class TestAllAlertsPerEmployee:
                 type_id=assessment_type_self.id,
                 status_id=assessment_status_map["in_progress"].id,
                 initiator_id=user.id,
-                ended_at=datetime.now(timezone.utc) - timedelta(days=1),
+                ended_at=datetime.now(UTC) - timedelta(days=1),
             )
         )
         await db.commit()

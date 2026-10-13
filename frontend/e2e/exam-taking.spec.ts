@@ -1,12 +1,11 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   registerUser,
   setAuthTokens,
   createDivision,
   provisionTenantMember,
 } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
 
 // HRP-328: end-to-end employee exam taking — the take sheet with autosave,
 // resume after close, gated submit, score display and the results review

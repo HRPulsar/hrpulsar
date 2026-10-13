@@ -8,7 +8,7 @@ This is a router-level test: the branch lives in
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest_asyncio
 from app.core.security import create_access_token, hash_password
@@ -55,7 +55,7 @@ async def _make_user_with_role(
         first_name=prefix.capitalize(),
         last_name="User",
         tenant_id=tenant_id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

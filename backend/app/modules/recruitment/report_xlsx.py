@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import UTC
 from typing import Any
 
 from openpyxl import Workbook
@@ -339,9 +340,9 @@ def _render_summary(
 
 
 def _today() -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).date().isoformat()
+    return datetime.now(UTC).date().isoformat()
 
 
 def _completeness_disclaimer(rows: list[dict]) -> str:

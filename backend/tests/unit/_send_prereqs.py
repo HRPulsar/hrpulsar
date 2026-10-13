@@ -14,6 +14,7 @@ Two helpers live here:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 from app.modules.assessment import service
 from app.modules.assessment.models import (
@@ -136,7 +137,6 @@ async def advance_to_in_progress(
     so existing assertions on ``started_at`` / ``status_code`` keep working.
     """
     from datetime import datetime as _dt
-    from datetime import timezone as _tz
 
     from app.modules.assessment.models import AssessmentStatus as _Status
     from sqlalchemy.orm import selectinload
@@ -151,7 +151,7 @@ async def advance_to_in_progress(
     a.status_id = new_status.id
     a.status = new_status
     if a.started_at is None:
-        a.started_at = _dt.now(_tz.utc)
+        a.started_at = _dt.now(UTC)
     await db.commit()
 
     # Re-fetch with the same eager-loaded relationships that change_status

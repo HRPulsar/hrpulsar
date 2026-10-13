@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from unittest.mock import patch
 
 import pytest
@@ -48,7 +48,7 @@ async def _colleague(db: AsyncSession, tenant) -> Employee:
         first_name="Manual",
         last_name="Pick",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.5.1] - 2026-10-13
+
+### Fixed
+- Employees: opening a colleague's card that is deleted or hidden from the viewer shows the not-found state instead of a load-failure error (HRP-623)
+- Public check: the Dictate button asks for the microphone instead of reporting it blocked once access is granted in the browser's site settings (HRP-947)
+- Coverage: a failed step breakdown or skill generation names its cause in the reader's language, a refused credit hold among them; rows from before keep their stored text (HRP-854)
+- Self-hosted: a fresh install can pull the file storage again — the bundled MinIO now runs a pinned community fork (HRP-1026)
+
 ## [2.5.0] - 2026-10-12
 
 ### Added

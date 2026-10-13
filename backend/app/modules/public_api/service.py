@@ -1,6 +1,6 @@
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import status
 from sqlalchemy import select
@@ -91,7 +91,7 @@ async def authenticate_api_key(db: AsyncSession, raw_key: str) -> APIKey | None:
     )
     for key in result.scalars().all():
         if verify_password(raw_key, key.key_hash):
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             last = key.last_used_at
             if last is None or now - last >= LAST_USED_RESOLUTION:
                 key.last_used_at = now

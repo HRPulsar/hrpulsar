@@ -14,9 +14,7 @@ import { test, expect } from "./fixtures";
  * intercept via the dev exposure on the SignupRequest row.
  */
 
-const API_BASE = "http://localhost:8100/api";
-
-import { SAAS_E2E } from "./helpers";
+import { API_BASE, SAAS_E2E } from "./helpers";
 
 // HRP-390: /register renders the moderated funnel only in saas mode;
 // onprem serves the self-serve form (see register-onprem.spec.ts).

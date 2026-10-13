@@ -38,15 +38,15 @@ class MassExam(BaseModel, TenantMixin):
         DateTime(timezone=True), nullable=True
     )
 
-    questions: Mapped[list["ExamQuestion"]] = relationship(
+    questions: Mapped[list[ExamQuestion]] = relationship(
         back_populates="mass_exam",
         cascade="all, delete-orphan",
         order_by="ExamQuestion.sort_index",
     )
-    pass_marks: Mapped[list["ExamPassMark"]] = relationship(
+    pass_marks: Mapped[list[ExamPassMark]] = relationship(
         back_populates="mass_exam", cascade="all, delete-orphan"
     )
-    exams: Mapped[list["Exam"]] = relationship(
+    exams: Mapped[list[Exam]] = relationship(
         back_populates="mass_exam", cascade="all, delete-orphan"
     )
 
@@ -76,8 +76,8 @@ class ExamQuestion(BaseModel):
         Boolean, default=True, server_default="true"
     )
 
-    mass_exam: Mapped["MassExam"] = relationship(back_populates="questions")
-    options: Mapped[list["QuestionOption"]] = relationship(
+    mass_exam: Mapped[MassExam] = relationship(back_populates="questions")
+    options: Mapped[list[QuestionOption]] = relationship(
         back_populates="question",
         cascade="all, delete-orphan",
         order_by="QuestionOption.sort_index",
@@ -99,7 +99,7 @@ class QuestionOption(BaseModel):
         Boolean, default=False, server_default="false"
     )
 
-    question: Mapped["ExamQuestion"] = relationship(back_populates="options")
+    question: Mapped[ExamQuestion] = relationship(back_populates="options")
 
 
 class ExamPassMark(BaseModel):
@@ -120,7 +120,7 @@ class ExamPassMark(BaseModel):
     min_score_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
     min_score_points: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    mass_exam: Mapped["MassExam"] = relationship(back_populates="pass_marks")
+    mass_exam: Mapped[MassExam] = relationship(back_populates="pass_marks")
 
 
 class Exam(BaseModel, TenantMixin):
@@ -151,8 +151,8 @@ class Exam(BaseModel, TenantMixin):
     )
 
     employee = relationship("Employee", lazy="selectin")
-    mass_exam: Mapped["MassExam"] = relationship(back_populates="exams")
-    answers: Mapped[list["ExamAnswer"]] = relationship(
+    mass_exam: Mapped[MassExam] = relationship(back_populates="exams")
+    answers: Mapped[list[ExamAnswer]] = relationship(
         back_populates="exam", cascade="all, delete-orphan"
     )
 
@@ -181,4 +181,4 @@ class ExamAnswer(BaseModel):
     is_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     score: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
-    exam: Mapped["Exam"] = relationship(back_populates="answers")
+    exam: Mapped[Exam] = relationship(back_populates="answers")

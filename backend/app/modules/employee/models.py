@@ -54,25 +54,25 @@ class Employee(BaseModel, TenantMixin):
     user = relationship("User", lazy="selectin")
     division = relationship("Division", foreign_keys=[division_id], lazy="selectin")
     position = relationship("Position", lazy="selectin")
-    events: Mapped[list["EmployeeEvent"]] = relationship(
+    events: Mapped[list[EmployeeEvent]] = relationship(
         back_populates="employee",
         order_by="EmployeeEvent.event_date.desc()",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    work_experiences: Mapped[list["WorkExperience"]] = relationship(
+    work_experiences: Mapped[list[WorkExperience]] = relationship(
         back_populates="employee", cascade="all, delete-orphan"
     )
-    previous_employments: Mapped[list["PreviousEmployment"]] = relationship(
+    previous_employments: Mapped[list[PreviousEmployment]] = relationship(
         back_populates="employee", cascade="all, delete-orphan"
     )
-    education_records: Mapped[list["Education"]] = relationship(
+    education_records: Mapped[list[Education]] = relationship(
         back_populates="employee", cascade="all, delete-orphan"
     )
-    courses: Mapped[list["Course"]] = relationship(
+    courses: Mapped[list[Course]] = relationship(
         back_populates="employee", cascade="all, delete-orphan"
     )
-    compensations: Mapped[list["Compensation"]] = relationship(
+    compensations: Mapped[list[Compensation]] = relationship(
         back_populates="employee", cascade="all, delete-orphan"
     )
 
@@ -94,7 +94,7 @@ class EmployeeEvent(BaseModel):
     old_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     new_value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    employee: Mapped["Employee"] = relationship(back_populates="events")
+    employee: Mapped[Employee] = relationship(back_populates="events")
 
 
 # --- GF1: Work Experience ---
@@ -134,14 +134,14 @@ class WorkExperience(BaseModel, TenantMixin):
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
-    employee: Mapped["Employee"] = relationship(back_populates="work_experiences")
+    employee: Mapped[Employee] = relationship(back_populates="work_experiences")
     # HRP-163: default lazy load (no eager fetch). Callers that read
     # ``.division`` / ``.position`` opt in per-query through
     # ``selectinload(...)`` so future list endpoints don't accidentally
     # fan out to one extra SELECT per row.
     division = relationship("Division")
     position = relationship("Position")
-    competence_links: Mapped[list["WorkExperienceCompetence"]] = relationship(
+    competence_links: Mapped[list[WorkExperienceCompetence]] = relationship(
         back_populates="work_experience", cascade="all, delete-orphan"
     )
 
@@ -163,7 +163,7 @@ class PreviousEmployment(BaseModel, TenantMixin):
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
-    employee: Mapped["Employee"] = relationship(back_populates="previous_employments")
+    employee: Mapped[Employee] = relationship(back_populates="previous_employments")
 
 
 # --- GF2: Education & Courses ---
@@ -186,7 +186,7 @@ class Education(BaseModel, TenantMixin):
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
-    employee: Mapped["Employee"] = relationship(back_populates="education_records")
+    employee: Mapped[Employee] = relationship(back_populates="education_records")
 
 
 class Course(BaseModel, TenantMixin):
@@ -206,8 +206,8 @@ class Course(BaseModel, TenantMixin):
     completed_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
-    employee: Mapped["Employee"] = relationship(back_populates="courses")
-    competence_links: Mapped[list["CourseCompetence"]] = relationship(
+    employee: Mapped[Employee] = relationship(back_populates="courses")
+    competence_links: Mapped[list[CourseCompetence]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )
 
@@ -237,7 +237,7 @@ class WorkExperienceCompetence(BaseModel):
         nullable=False,
     )
 
-    work_experience: Mapped["WorkExperience"] = relationship(
+    work_experience: Mapped[WorkExperience] = relationship(
         back_populates="competence_links"
     )
     competence = relationship("Competence", lazy="selectin")
@@ -263,7 +263,7 @@ class CourseCompetence(BaseModel):
         nullable=False,
     )
 
-    course: Mapped["Course"] = relationship(back_populates="competence_links")
+    course: Mapped[Course] = relationship(back_populates="competence_links")
     competence = relationship("Competence", lazy="selectin")
 
 
@@ -297,4 +297,4 @@ class Compensation(BaseModel, TenantMixin):
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    employee: Mapped["Employee"] = relationship(back_populates="compensations")
+    employee: Mapped[Employee] = relationship(back_populates="compensations")

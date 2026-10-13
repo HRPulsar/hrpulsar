@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import status
@@ -216,7 +216,7 @@ async def get_state(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, Any]:
 async def dismiss(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, Any]:
     tenant = await _get_tenant(db, tenant_id)
     state = _coerce_state(tenant.recruitment_onboarding) or _initial_state()
-    state["dismissed_at"] = datetime.now(timezone.utc).isoformat()
+    state["dismissed_at"] = datetime.now(UTC).isoformat()
     return await _save_state(db, tenant, state)
 
 
@@ -246,7 +246,7 @@ async def seed_demo(
     if await _has_demo_data(db, tenant_id):
         raise AppError("demo_data_already_seeded", status.HTTP_409_CONFLICT)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     suffix = secrets.token_hex(3)
 
     vacancy = Vacancy(

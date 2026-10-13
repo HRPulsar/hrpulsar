@@ -704,6 +704,7 @@ async def _fail_skill(
     skill_id: uuid.UUID,
     claimed_at: datetime,
     message: str,
+    code: str = "service_error",
 ) -> dict[str, Any]:
     """A failure writes the status and the error but never clears
     ``content``: the last working file stays in place, and nothing is
@@ -714,6 +715,9 @@ async def _fail_skill(
     the newer run failed, nor overwrite the file that run is about to
     deliver.
 
+    ``code`` is what the reader's locale renders (HRP-854); ``message``
+    stays the en fallback shown for rows without a known code.
+
     The credit hold goes either way: nothing will be charged against it."""
     flipped = await db.execute(
         update(WorkStepSkill)
@@ -722,7 +726,7 @@ async def _fail_skill(
             WorkStepSkill.status == "generating",
             WorkStepSkill.updated_at == claimed_at,
         )
-        .values(status="failed", error_message=message[:2000])
+        .values(status="failed", error_code=code, error_message=message[:2000])
         .returning(WorkStepSkill.id)
     )
     if flipped.scalar_one_or_none() is None:
@@ -785,6 +789,7 @@ async def _execute_skill_body(
                 skill_id,
                 claimed_at,
                 "The step is no longer one an agent may perform",
+                code="work_skill_not_applicable",
             )
         packs = await agents_service.list_packs(db, row.tenant_id)
         pack = next((p for p in packs if p["id"] == row.pack_id), None)
@@ -795,6 +800,7 @@ async def _execute_skill_body(
                 skill_id,
                 claimed_at,
                 "The agent pack is no longer available",
+                code="work_skill_pack_unavailable",
             )
 
         tenant_settings = await ai_settings_service.get_or_default(db, row.tenant_id)
@@ -869,6 +875,7 @@ async def _execute_skill_body(
                 status="ready",
                 skill_name=skill_name,
                 content=content,
+                error_code=None,
                 error_message=None,
                 llm_model=model,
                 generated_at=datetime.now(UTC),
@@ -908,6 +915,7 @@ async def execute_skill(
                         skill_id,
                         claimed_at,
                         str(exc.detail) if _is_refusal(exc) else type(exc).__name__,
+                        code=exc.code if _is_refusal(exc) else "service_error",
                     )
         except Exception:  # noqa: BLE001
             logger.exception("work skill %s: could not mark failed", skill_id)

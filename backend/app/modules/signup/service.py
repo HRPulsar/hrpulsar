@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -307,7 +307,7 @@ async def verify_signup_request(
         raise AppError("signup_request_not_found", status.HTTP_404_NOT_FOUND)
 
     if row.status == "pending_email_verify":
-        row.email_verified_at = datetime.now(timezone.utc)
+        row.email_verified_at = datetime.now(UTC)
         row.status = "pending_moderation"
         await db.commit()
         await db.refresh(row)
@@ -396,8 +396,8 @@ async def _maybe_publish_moderation_reminder(row: SignupRequest) -> None:
     if verified_at is None:
         return
     if verified_at.tzinfo is None:
-        verified_at = verified_at.replace(tzinfo=timezone.utc)
-    if datetime.now(timezone.utc) - verified_at < _REMINDER_MIN_AGE:
+        verified_at = verified_at.replace(tzinfo=UTC)
+    if datetime.now(UTC) - verified_at < _REMINDER_MIN_AGE:
         return
 
     try:
@@ -630,7 +630,7 @@ async def approve_signup(
         first_name=row.first_name or "",
         last_name=row.last_name or "",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
         # HRP-575: the applicant chose this locale on the landing form —
         # carrying it onto the account keeps the UI and every later
         # email in that language, not just the moderation decision.
@@ -651,7 +651,7 @@ async def approve_signup(
     await ensure_baseline_employee_role(db, user.id)
 
     # ── Mark signup approved -------------------------------------------
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     row.status = "approved"
     row.moderated_at = now
     row.moderated_by_slack_user_id = moderator_slack_user_id
@@ -697,7 +697,7 @@ async def reject_signup(
     reason_clean = (reason or "").strip() or None
 
     row.status = "rejected"
-    row.moderated_at = datetime.now(timezone.utc)
+    row.moderated_at = datetime.now(UTC)
     row.moderated_by_slack_user_id = moderator_slack_user_id
     row.moderated_by_user_id = moderator_user_id
     row.reject_reason = reason_clean

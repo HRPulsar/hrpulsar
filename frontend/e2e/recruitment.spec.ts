@@ -1,7 +1,5 @@
 import { test, expect } from "./fixtures";
-import { registerUser, loginViaUI, completeOnboarding } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, loginViaUI, completeOnboarding } from "./helpers";
 
 test.describe("Recruitment Module", () => {
   test.describe("Navigation", () => {

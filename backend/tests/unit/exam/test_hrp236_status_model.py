@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 from app.modules.exam import service
@@ -145,7 +146,7 @@ class TestHappyFlow:
 
 async def _add_participant(db, tenant, position, mass_exam_id):
     """A second employee assigned to the same mass exam."""
-    from datetime import date, datetime, timezone
+    from datetime import date, datetime
 
     from app.core.security import hash_password
     from app.modules.auth.models import User
@@ -157,7 +158,7 @@ async def _add_participant(db, tenant, position, mass_exam_id):
         first_name="Second",
         last_name="Participant",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

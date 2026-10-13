@@ -79,9 +79,25 @@ starts 8 services:
 - **MinIO** — S3-compatible file storage (plus a one-shot `minio-init`
   container that creates the storage bucket on first boot)
 
-**If the MinIO image does not pull.** MinIO no longer publishes its official
-images on Docker Hub, so `minio` and `minio-init` can fail to pull. Use an
-external S3-compatible storage instead: create the bucket there, then add a
+**MinIO image.** MinIO no longer publishes its official images, so the
+bundled storage runs `pgsty/minio` and `pgsty/mc`, the community fork
+maintained by the Pigsty project. It is a drop-in replacement: same data
+format, same `mc` commands. Both images are pinned to a release tag and a
+digest, so a pull always gets the exact image this release was tested with.
+
+**Existing installations** switch to the fork on the next upgrade (see
+[Upgrading](#upgrading)), or right away with:
+
+```bash
+docker compose -f docker-compose.self-hosted.yml pull minio minio-init
+docker compose -f docker-compose.self-hosted.yml up -d
+```
+
+`up -d` recreates the `minio` container on the same data volume. Data and
+`mc` commands stay compatible — nothing to migrate.
+
+**External S3 storage.** To keep files in an external S3-compatible storage
+instead of the bundled MinIO, create the bucket there, then add a
 `docker-compose.local.yml` (see [Upgrading](#upgrading)) that parks the
 bundled storage and points the app at yours — the variables are described
 under [Environment Variables](#environment-variables):
@@ -346,7 +362,7 @@ docker compose -f docker-compose.self-hosted.yml build
 docker compose -f docker-compose.self-hosted.yml up -d
 ```
 
-Third-party images (Caddy, PostgreSQL, Redis) are pinned to fixed
+Third-party images (Caddy, PostgreSQL, Redis, MinIO) are pinned to fixed
 versions in the compose file; when a release moves a pin, `up -d` pulls the
 new image. Migrations run automatically on backend startup. Building happens while
 the old version keeps serving; expect well under a minute of downtime

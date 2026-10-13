@@ -8,6 +8,8 @@ candidates can't react. The card-list response surfaces
 
 from __future__ import annotations
 
+from datetime import UTC
+
 import pytest
 from app.core.errors import AppError
 from app.modules.auth.models import Role, User, user_roles
@@ -161,7 +163,7 @@ async def test_candidates_ranking_experience_before_reaction(
     Qualifying experience > longer experience > reaction; the reaction
     only breaks ties between rows equal on both percent and experience.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.modules.talent_market.common import _card_to_detail
     from app.modules.talent_market.models import TalentCard
@@ -193,7 +195,7 @@ async def test_candidates_ranking_experience_before_reaction(
             )
         )
     ).scalar_one()
-    reacted_row.response_at = datetime.now(timezone.utc)
+    reacted_row.response_at = datetime.now(UTC)
     await db.commit()
 
     card = (

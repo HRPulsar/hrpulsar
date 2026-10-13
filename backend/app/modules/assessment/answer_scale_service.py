@@ -12,7 +12,7 @@ builders.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import status
 from sqlalchemy import or_, select
@@ -291,7 +291,7 @@ async def delete_answer_scale(
             a.scale_id = default_scale.id if default_scale else None
             reassigned += 1
 
-    scale.deleted_at = datetime.now(timezone.utc)
+    scale.deleted_at = datetime.now(UTC)
     await db.commit()
     return {"deleted": True, "reassigned_drafts": reassigned}
 

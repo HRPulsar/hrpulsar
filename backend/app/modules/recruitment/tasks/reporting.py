@@ -7,7 +7,7 @@ the task_failure status map).
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.core.celery_app import celery
 
@@ -662,7 +662,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
             # EPOCH guards the tuple compare against NULL updated_at rows
             # (legacy / manual fix paths) — without it the whole report
             # crashes on the first None side.
-            tz_epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+            tz_epoch = datetime(1970, 1, 1, tzinfo=UTC)
             ai_latest: dict[tuple[uuid.UUID, str], dict] = {}
             for ai in ai_rows:
                 target_cv_id = interview_cv_map.get(ai.interview_id)
@@ -1092,7 +1092,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 latest_interview = max(
                     cv_interviews,
                     key=lambda iv: (
-                        iv.created_at or datetime.min.replace(tzinfo=timezone.utc)
+                        iv.created_at or datetime.min.replace(tzinfo=UTC)
                     ),
                     default=None,
                 )
@@ -1285,7 +1285,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
             db.flush()
             export.file_id = file_id
             export.status = "completed"
-            export.completed_at = datetime.now(timezone.utc)
+            export.completed_at = datetime.now(UTC)
             export.error = None
             generated_by = export.generated_by
             vacancy_obj = db.get(Vacancy, export.vacancy_id)

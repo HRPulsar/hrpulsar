@@ -7,7 +7,7 @@ in-memory stand-in so tests run without an actual Redis container.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
@@ -95,7 +95,7 @@ async def test_magic_login_rejects_wrong_token_type(
         "tenant_id": str(user.tenant_id),
         "type": "email_verify",  # wrong type
         "jti": "abc",
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        "exp": datetime.now(UTC) + timedelta(hours=1),
     }
     token = jwt.encode(
         bad_payload, settings.jwt_secret, algorithm=settings.jwt_algorithm
@@ -112,7 +112,7 @@ async def test_magic_login_rejects_expired_token(
         "tenant_id": str(user.tenant_id),
         "type": "magic_login",
         "jti": "expired",
-        "exp": datetime.now(timezone.utc) - timedelta(minutes=1),
+        "exp": datetime.now(UTC) - timedelta(minutes=1),
     }
     token = jwt.encode(
         expired_payload, settings.jwt_secret, algorithm=settings.jwt_algorithm

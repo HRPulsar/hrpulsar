@@ -989,6 +989,40 @@ class TestApply:
 
 
 class TestRouter:
+    async def test_a_refused_hold_says_so_on_the_session(
+        self, auth_client, db, tenant, user, monkeypatch
+    ):
+        """402 on the way out (HRP-854): the row carries the refusal's code,
+        so a reader in another locale gets "credit limit reached" in their
+        own words; the en message stays as the fallback for old rows."""
+        c = await _container(db, tenant, user)
+        container_id = c.id
+
+        async def _refuse(*_args, **_kwargs):
+            raise AppError("credits_limit_reached", 402)
+
+        with patch.object(billing_hooks, "reserve_action", side_effect=_refuse):
+            res = await auth_client.post(
+                "/api/work/decomposition/sessions",
+                json={"container_id": str(container_id)},
+            )
+        assert res.status_code == 402
+        sess = (
+            await db.execute(
+                select(WorkDecompositionSession).where(
+                    WorkDecompositionSession.container_id == container_id
+                )
+            )
+        ).scalar_one()
+        assert (sess.status, sess.error_code) == ("error", "credits_limit_reached")
+        assert sess.error_message == "Could not start the decomposition"
+
+        # A code outside the row's check constraint degrades to the generic
+        # one instead of losing the whole write to a CheckViolation.
+        await service.fail_session(db, sess.id, "x", code="definitely_unknown")
+        await db.refresh(sess)
+        assert (sess.error_code, sess.error_message) == ("service_error", "x")
+
     async def test_start_get_apply_cancel(
         self, auth_client, db, tenant, user, primitives, monkeypatch
     ):

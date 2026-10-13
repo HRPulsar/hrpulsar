@@ -8,9 +8,7 @@
  * demo tenant.
  */
 import { test, expect, request as pwRequest } from "./fixtures";
-import { registerUser, loginViaUI } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, loginViaUI } from "./helpers";
 
 test.describe("Recruitment report share", () => {
   test("share dialog opens for completed reports", async ({ page }) => {

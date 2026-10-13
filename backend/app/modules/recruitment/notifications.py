@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Select, select
@@ -336,12 +336,12 @@ async def _async_dispatch(
                 )
                 if notif is not None:
                     notif.status = "sent"
-                    notif.sent_at = datetime.now(timezone.utc)
+                    notif.sent_at = datetime.now(UTC)
             except Exception:
                 log.exception("notification email enqueue failed")
         elif notif is not None:
             notif.status = "sent"
-            notif.sent_at = datetime.now(timezone.utc)
+            notif.sent_at = datetime.now(UTC)
 
     await db.commit()
     return written
@@ -493,8 +493,8 @@ async def _resolve_interview_scheduled(
             moment = None
         if moment is not None:
             if moment.tzinfo is None:
-                moment = moment.replace(tzinfo=timezone.utc)
-            if moment < datetime.now(timezone.utc):
+                moment = moment.replace(tzinfo=UTC)
+            if moment < datetime.now(UTC):
                 return []
 
     raw_ids = data.get("interviewer_ids")
@@ -965,12 +965,12 @@ def notify_sync(
                 )
                 if notif is not None:
                     notif.status = "sent"
-                    notif.sent_at = datetime.now(timezone.utc)
+                    notif.sent_at = datetime.now(UTC)
             except Exception:
                 log.exception("notify_sync email enqueue failed")
         elif notif is not None:
             notif.status = "sent"
-            notif.sent_at = datetime.now(timezone.utc)
+            notif.sent_at = datetime.now(UTC)
 
     db.commit()
     return written

@@ -8,7 +8,7 @@ tail of the user prompt.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from app.modules.ai_settings.models import TenantAISettings
@@ -110,7 +110,7 @@ async def _apply(db: AsyncSession, tenant: Tenant, vacancy: Vacancy) -> dict:
         tenant_id=tenant.id,
         vacancy_id=vacancy.id,
         status="ready",
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
     )
     db.add(session_row)
     await db.commit()

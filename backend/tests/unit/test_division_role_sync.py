@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest_asyncio
 from app.core.security import hash_password
@@ -69,7 +69,7 @@ async def _make_user(db, tenant, role: Role) -> User:
         first_name="X",
         last_name="Y",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -416,7 +416,7 @@ class TestHrp196AutoDowngrade:
         We never touch the Invitation table on downgrade — this guard is
         a regression pin in case future code wants to keep them in sync.
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         from app.modules.auth.models import Invitation
         from sqlalchemy import select as sa_select
@@ -432,7 +432,7 @@ class TestHrp196AutoDowngrade:
             invited_by=u.id,
             token=f"tok-{uuid.uuid4().hex}",
             status="accepted",
-            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            expires_at=datetime.now(UTC) + timedelta(days=7),
         )
         db.add(inv)
         await db.commit()

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import UTC
 
 import pytest
 from app.config import settings
@@ -188,7 +189,7 @@ async def test_failed_seed_leaves_only_short_lived_tenant(
     orphan that the next purge tick (5 min default) can sweep
     automatically.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from sqlalchemy import delete, select
 
@@ -203,7 +204,7 @@ async def test_failed_seed_leaves_only_short_lived_tenant(
         "app.modules.demo.service.clone_seed_into_demo_tenant", _explode
     )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with pytest.raises(RuntimeError, match="simulated seed failure"):
         await demo_service.create_demo_session(db, turnstile_token=None, remote_ip=None)
     # The mini-tx already committed before the seed failure, so the
@@ -358,7 +359,7 @@ async def test_two_concurrent_demo_start_calls_respect_cap(
     prevents both winners from breaching the cap.
     """
     import asyncio
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from fastapi import HTTPException
     from sqlalchemy import delete
@@ -399,7 +400,7 @@ async def test_two_concurrent_demo_start_calls_respect_cap(
         await cleanup.commit()
     # Pre-fill the cap so any successful run still gets blocked. Easier
     # signal than racing two empty-pool runs.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     pre = Tenant(
         id=uuid.uuid4(),
         name=f"pre-{uuid.uuid4().hex[:6]}",
@@ -429,7 +430,7 @@ async def test_concurrent_cap_excludes_inactive_demo_tenants(
     live load. Exercised against the private helper to keep the test
     independent of cross-file fixture pollution in the shared DB.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from fastapi import HTTPException
 
@@ -441,7 +442,7 @@ async def test_concurrent_cap_excludes_inactive_demo_tenants(
     await db.commit()
 
     monkeypatch.setattr(settings, "demo_max_concurrent_sessions", 1)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Inactive demo tenant with a future expires_at — pre-fix this row
     # alone fills the pool at cap=1 even though it's been soft-deleted.

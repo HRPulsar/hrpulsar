@@ -10,7 +10,7 @@ charge the per-IP throttle or trigger a Turnstile failure either.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.config import settings
@@ -96,7 +96,7 @@ async def test_resume_falls_through_when_tenant_expired(
     tenant = (
         await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     ).scalar_one()
-    tenant.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    tenant.expires_at = datetime.now(UTC) - timedelta(minutes=1)
     await db.commit()
 
     resumed = await client.post(

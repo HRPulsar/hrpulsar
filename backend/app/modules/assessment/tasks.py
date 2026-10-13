@@ -6,6 +6,7 @@ owns domain-specific periodic jobs. Beat schedule in
 """
 
 import logging
+from datetime import UTC
 
 from app.core.celery_app import celery
 
@@ -19,7 +20,7 @@ def send_deadline_reminders() -> None:
     Runs every hour via Celery Beat. Checks assessments and PDPs
     with deadlines approaching in the next 24 hours.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from sqlalchemy.orm import Session
 
@@ -29,7 +30,7 @@ def send_deadline_reminders() -> None:
     engine = make_sync_engine(settings.database_url)
     try:
         with Session(engine) as _db:  # noqa: F841
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             tomorrow = now + timedelta(hours=24)
             logger.info("Checking deadlines between %s and %s", now, tomorrow)
             # Future: query assessments/PDPs with deadline in range and send

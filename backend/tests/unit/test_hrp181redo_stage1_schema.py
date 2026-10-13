@@ -21,6 +21,7 @@ Covers the database-level invariants introduced by
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 from app.modules.auth.schemas import RegisterRequest
@@ -85,13 +86,13 @@ class TestCandidateSchema:
     async def test_partial_email_index_allows_archived_twin(
         self, db: AsyncSession, tenant
     ) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         archived = Candidate(
             tenant_id=tenant.id,
             full_name="Old Anna",
             email="anna@example.com",
-            archived_at=datetime.now(timezone.utc),
+            archived_at=datetime.now(UTC),
         )
         db.add(archived)
         await db.commit()

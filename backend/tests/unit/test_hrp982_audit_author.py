@@ -17,7 +17,7 @@ import re
 import subprocess
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,7 +59,7 @@ async def _second_user(db: AsyncSession, tenant) -> User:
         first_name="Mona",
         last_name="Mover",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(other)
     await db.commit()

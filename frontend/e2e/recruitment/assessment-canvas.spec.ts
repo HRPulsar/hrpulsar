@@ -14,7 +14,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { API_BASE, registerUser, setAuthTokens } from "../helpers";
+import { API_BASE, apiSend, registerUser, setAuthTokens } from "../helpers";
 
 // The profile save normalizes competence ids, so a slug would come back
 // rewritten as a uuid5 and no longer match the cell testids built below.
@@ -34,21 +34,11 @@ interface CanvasFixture {
 
 async function seedCanvas(page: Page): Promise<CanvasFixture> {
   const reg = await registerUser(page);
+  const opts = { page, accessToken: reg.accessToken };
   const auth = { headers: { Authorization: `Bearer ${reg.accessToken}` } };
   const stamp = Date.now().toString(36);
 
-  async function post<T>(path: string, data: unknown): Promise<T> {
-    const resp = await page.request.post(`${API_BASE}${path}`, {
-      ...auth,
-      data: data as Record<string, unknown>,
-    });
-    if (!resp.ok()) {
-      throw new Error(`POST ${path} failed (${resp.status()}): ${await resp.text()}`);
-    }
-    return resp.json() as Promise<T>;
-  }
-
-  const vacancy = await post<{ id: string }>("/recruitment/vacancies", {
+  const vacancy = await apiSend<{ id: string }>(opts, "post", "/recruitment/vacancies", {
     title: `Canvas E2E ${stamp}`,
   });
 
@@ -82,12 +72,12 @@ async function seedCanvas(page: Page): Promise<CanvasFixture> {
   expect(profileResp.ok()).toBeTruthy();
 
   async function attachCandidate(label: string): Promise<string> {
-    const candidate = await post<{ id: string }>("/recruitment/candidates", {
+    const candidate = await apiSend<{ id: string }>(opts, "post", "/recruitment/candidates", {
       first_name: label,
       last_name: "Candidate",
       email: `canvas-${label.toLowerCase()}-${stamp}@test.com`,
     });
-    const cv = await post<{ id: string }>("/recruitment/candidate-vacancies", {
+    const cv = await apiSend<{ id: string }>(opts, "post", "/recruitment/candidate-vacancies", {
       candidate_id: candidate.id,
       vacancy_id: vacancy.id,
     });
@@ -100,11 +90,13 @@ async function seedCanvas(page: Page): Promise<CanvasFixture> {
   // Manager half: a round, the caller as its evaluator, then two scores.
   // A draft sheet owned by a real user already counts towards the matrix,
   // so neither the sheet nor the round has to be submitted/completed.
-  const round = await post<{ id: string }>(
+  const round = await apiSend<{ id: string }>(
+    opts,
+    "post",
     `/v1/candidate-vacancies/${scoredCvId}/assessment-rounds`,
     { type: "interview" },
   );
-  await post(`/v1/assessment-rounds/${round.id}/evaluators`, {
+  await apiSend(opts, "post", `/v1/assessment-rounds/${round.id}/evaluators`, {
     user_id: reg.userId,
   });
 

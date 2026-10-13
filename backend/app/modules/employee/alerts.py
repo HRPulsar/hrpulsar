@@ -31,7 +31,7 @@ or this becomes N+1 on user-loading.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal, get_args
 
 from sqlalchemy import func, select
@@ -156,7 +156,7 @@ async def scan_employee_alerts(
     if not employees:
         return {}
 
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     # Drop any employees from a different tenant before they participate in
     # the priority scan — same defence-in-depth principle as the SQL filters.
     cohort = [e for e in employees if e.tenant_id == tenant_id]

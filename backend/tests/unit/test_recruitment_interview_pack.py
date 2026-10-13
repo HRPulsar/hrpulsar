@@ -8,7 +8,7 @@ notification promise.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.recruitment import interview_service, service
@@ -70,7 +70,7 @@ async def _make_user(db: AsyncSession, tenant):
         first_name="Grace",
         last_name="Hopper",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -167,7 +167,7 @@ class TestScheduleModalPayload:
             setup["cv"]["id"],
             InterviewCreate(
                 title="Tech screening",
-                interview_date=datetime.now(timezone.utc) + timedelta(days=2),
+                interview_date=datetime.now(UTC) + timedelta(days=2),
                 duration_minutes=60,
                 notes="Ask about the sharding project",
             ),
@@ -354,7 +354,7 @@ class TestArchiveSideEffects:
             await db.execute(select(Interview).where(Interview.id == created["id"]))
         ).scalar_one()
         row.file_s3_key = f"{tenant.id}/interviews/{row.id}/upload"
-        row.archived_at = datetime.now(timezone.utc) - timedelta(
+        row.archived_at = datetime.now(UTC) - timedelta(
             days=interview_service.ARCHIVE_RETENTION_DAYS + 1
         )
         row.status = "archived"
@@ -422,7 +422,7 @@ class TestArchiveSideEffects:
         media_id = media.id
         row.audio_file_id = media_id
         row.file_s3_key = key
-        row.archived_at = datetime.now(timezone.utc) - timedelta(
+        row.archived_at = datetime.now(UTC) - timedelta(
             days=interview_service.ARCHIVE_RETENTION_DAYS + 1
         )
         row.status = "archived"
@@ -470,7 +470,7 @@ class TestScheduledNotification:
             "app.modules.recruitment.interview_service._publish_event", _capture
         )
 
-        when = datetime(2026, 5, 28, 12, 0, tzinfo=timezone.utc)
+        when = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
         await service.create_interview(
             db,
             tenant.id,
@@ -497,7 +497,7 @@ class TestScheduledNotification:
 
     @pytest.mark.asyncio
     async def test_recipients_are_interviewers_only(self, db, tenant, user):
-        future = datetime.now(timezone.utc) + timedelta(days=1)
+        future = datetime.now(UTC) + timedelta(days=1)
         recipients = await _resolve_interview_scheduled(
             db,
             tenant.id,
@@ -511,7 +511,7 @@ class TestScheduledNotification:
 
     @pytest.mark.asyncio
     async def test_no_recipients_without_interviewers(self, db, tenant, user):
-        future = datetime.now(timezone.utc) + timedelta(days=1)
+        future = datetime.now(UTC) + timedelta(days=1)
         recipients = await _resolve_interview_scheduled(
             db,
             tenant.id,
@@ -525,7 +525,7 @@ class TestScheduledNotification:
 
     @pytest.mark.asyncio
     async def test_no_email_for_past_interviews(self, db, tenant, user):
-        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        past = datetime.now(UTC) - timedelta(hours=1)
         recipients = await _resolve_interview_scheduled(
             db,
             tenant.id,
@@ -569,7 +569,7 @@ class TestLifecycleNotifications:
             cv_id,
             InterviewCreate(
                 title="Tech screening",
-                interview_date=datetime.now(timezone.utc) + timedelta(days=3),
+                interview_date=datetime.now(UTC) + timedelta(days=3),
                 timezone="UTC",
                 interviewers=interviewers,
             ),
@@ -613,7 +613,7 @@ class TestLifecycleNotifications:
             created["id"],
             InterviewUpdate(
                 interviewers=[user.id, other.id],
-                interview_date=datetime.now(timezone.utc) + timedelta(days=5),
+                interview_date=datetime.now(UTC) + timedelta(days=5),
             ),
         )
 
@@ -684,7 +684,7 @@ class TestLifecycleNotifications:
     @pytest.mark.asyncio
     async def test_attendee_resolver_keeps_past_interviews(self, db, tenant, user):
         """A cancellation still has to reach people after the slot passed."""
-        past = datetime.now(timezone.utc) - timedelta(hours=2)
+        past = datetime.now(UTC) - timedelta(hours=2)
         recipients = await _resolve_interview_attendees(
             db,
             tenant.id,

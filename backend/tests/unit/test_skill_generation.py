@@ -277,6 +277,9 @@ class TestGeneration:
         # reader of the step sees: it can quote the prompt or a response
         # body from whatever the endpoint really points at.
         assert row.error_message == "RuntimeError"
+        # The reader's locale renders the code; the class name stays the
+        # en fallback (HRP-854).
+        assert row.error_code == "service_error"
         assert row.content == content
         result = await coverage.compute(db, tenant.id, c.id)
         assert result["steps"][0]["skill_status"] == "failed"
@@ -303,6 +306,7 @@ class TestGeneration:
             )
         assert row.status == "failed"
         assert row.error_message == refusal.detail
+        assert row.error_code == "ai_model_unavailable"
         assert fake.calls == []
 
     async def test_generation_in_progress_is_409_until_stale(
@@ -612,3 +616,6 @@ class TestWorkerBilling:
         row = await _skill(db, step["id"])
         assert row.status == "failed"
         assert row.error_message == AppError("credits_limit_reached", 402).detail
+        # The code travels with the message, so a reader in another locale
+        # gets "credit limit reached" in their own words (HRP-854).
+        assert row.error_code == "credits_limit_reached"

@@ -1,7 +1,7 @@
 import logging
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import status
@@ -409,7 +409,7 @@ async def create_employee(
     # null fallback to ``created_at``.
     emp = Employee(
         tenant_id=tenant_id,
-        status_changed_at=datetime.now(timezone.utc),
+        status_changed_at=datetime.now(UTC),
         **fields,
     )
     db.add(emp)
@@ -914,7 +914,7 @@ async def update_employee(
         # HRP-246: stamp so the profile STATUS KPI tile can render
         # "since {date of last status change}" without re-deriving it
         # from the events log on every page render.
-        emp.status_changed_at = datetime.now(timezone.utc)
+        emp.status_changed_at = datetime.now(UTC)
         if new_status == "terminated":
             await _create_event(
                 db, emp.id, "termination", "Employment terminated", today, **diff

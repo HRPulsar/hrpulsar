@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 import pytest_asyncio
@@ -205,7 +206,7 @@ async def _add_participant_direct(db, *, assessment_id, user_id, role: str):
 
 @pytest_asyncio.fixture
 async def extra_user(db, tenant):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.core.security import hash_password
     from app.modules.auth.models import User as AuthUser
@@ -216,7 +217,7 @@ async def extra_user(db, tenant):
         first_name="Rev",
         last_name="Iewer",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

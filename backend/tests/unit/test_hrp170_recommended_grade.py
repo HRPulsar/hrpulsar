@@ -14,7 +14,7 @@ Covers the three deliverables on the ticket:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from app.core.security import hash_password
@@ -296,7 +296,7 @@ async def test_chart_for_current_positions_criteria(
         first_name="Cur",
         last_name="Pos",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

@@ -7,6 +7,7 @@ from ``data_import/service.py``.
 """
 
 import logging
+from datetime import UTC
 
 from app.core.celery_app import celery
 
@@ -43,7 +44,7 @@ def run_import_task(
     import base64
     import secrets
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from pydantic import EmailStr, TypeAdapter
     from sqlalchemy import select, text
@@ -84,7 +85,7 @@ def run_import_task(
                 return
 
             job.status = "processing"
-            job.started_at = datetime.now(timezone.utc)
+            job.started_at = datetime.now(UTC)
             db.commit()
 
             rows = read_rows(job.file_name, base64.b64decode(b64_file_data))
@@ -194,7 +195,7 @@ def run_import_task(
                                     position_id=pos.id,
                                     position_title=position_title,
                                     hire_date=hire_date,
-                                    status_changed_at=datetime.now(timezone.utc),
+                                    status_changed_at=datetime.now(UTC),
                                 )
                                 db.add(emp)
                                 db.flush()
@@ -319,7 +320,7 @@ def run_import_task(
             job.error_rows = error_count
             job.errors = errors if error_count > 0 else None
             job.status = "completed"
-            job.finished_at = datetime.now(timezone.utc)
+            job.finished_at = datetime.now(UTC)
             db.commit()
             logger.info(
                 "Import job %s completed: %d processed, %d errors",
@@ -336,7 +337,7 @@ def run_import_task(
                 if job:
                     job.status = "failed"
                     job.errors = {"rows": [], "fatal": str(exc)}
-                    job.finished_at = datetime.now(timezone.utc)
+                    job.finished_at = datetime.now(UTC)
                     db.commit()
         except Exception:
             logger.exception("Failed to update import job status to failed")

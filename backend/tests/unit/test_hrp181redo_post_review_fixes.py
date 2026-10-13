@@ -24,7 +24,7 @@ Covers the regressions caught by the post-release code review:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from app.core.errors import AppError
@@ -337,7 +337,7 @@ class TestParsingStatusScopedByUser:
             first_name="Other",
             last_name="User",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(other)
         await db.flush()

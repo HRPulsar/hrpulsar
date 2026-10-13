@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 from app.models import Person
@@ -110,7 +111,7 @@ async def _make_candidate_vacancy(
 
 async def _make_extra_user(db: AsyncSession, tenant):
     """Create a second authenticated user for parallel-evaluator tests."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.core.security import hash_password
     from app.modules.auth.models import User
@@ -121,7 +122,7 @@ async def _make_extra_user(db: AsyncSession, tenant):
         first_name="Extra",
         last_name="Eval",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -130,9 +131,9 @@ async def _make_extra_user(db: AsyncSession, tenant):
 
 
 def _in_a_week():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    return datetime.now(timezone.utc) + timedelta(days=7)
+    return datetime.now(UTC) + timedelta(days=7)
 
 
 async def _external_sheet(db: AsyncSession, tenant, cv, round_id, *, name: str):
@@ -417,7 +418,7 @@ class TestPreInterviewSingleEvaluator:
     ):
         # An external (invited) evaluator sheet also occupies the single
         # pre_interview slot.
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         rd_id, cv = await self._make_pre_interview_round(db, tenant, user)
         invite = AssessmentInvite(
@@ -427,7 +428,7 @@ class TestPreInterviewSingleEvaluator:
             token_hash=f"hash-{uuid.uuid4().hex}",
             email="ext@test.com",
             status="pending",
-            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+            expires_at=datetime.now(UTC) + timedelta(days=7),
             round_id=rd_id,
         )
         db.add(invite)
@@ -455,7 +456,7 @@ class TestPreInterviewSingleEvaluator:
         await service.add_evaluator(db, tenant.id, other.id, rd_id, other.id)
 
     def _invite_row(self, tenant, cv, rd_id, **overrides):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         fields = {
             "tenant_id": tenant.id,
@@ -464,7 +465,7 @@ class TestPreInterviewSingleEvaluator:
             "token_hash": f"hash-{uuid.uuid4().hex}",
             "email": "ext@test.com",
             "status": "pending",
-            "expires_at": datetime.now(timezone.utc) + timedelta(days=7),
+            "expires_at": datetime.now(UTC) + timedelta(days=7),
             "round_id": rd_id,
         }
         fields.update(overrides)
@@ -1171,10 +1172,10 @@ class TestInviteStatusModel:
     async def test_expired_invite_derived_in_list(self, db: AsyncSession, tenant, user):
         """HRP-358 case 2 step 8: the recruiter list shows expired even
         when the evaluator never visited the link after the deadline."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         cv, _rd_id, row = await _invite_with_token(db, tenant, user)
-        row.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        row.expires_at = datetime.now(UTC) - timedelta(hours=1)
         await db.commit()
         invites = await service.list_manager_invites(db, tenant.id, cv.id)
         assert invites[0]["status"] == "expired"
@@ -1185,11 +1186,11 @@ class TestInviteStatusModel:
     async def test_submitted_invite_never_shows_expired(
         self, db: AsyncSession, tenant, user
     ):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         cv, _rd_id, row = await _invite_with_token(db, tenant, user)
         await public_service.public_submit(db, row.token, ip="1.2.3.4")
-        row.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        row.expires_at = datetime.now(UTC) - timedelta(hours=1)
         await db.commit()
         invites = await service.list_manager_invites(db, tenant.id, cv.id)
         assert invites[0]["status"] == "submitted"
@@ -1200,13 +1201,13 @@ class TestInviteStatusModel:
         """A late link visit must not clobber a terminal status to expired —
         it would show a completed evaluation as expired and let extend_invite
         bypass its submitted-guard."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         cv, _rd_id, row = await _invite_with_token(
             db, tenant, user, allow_reediting=False
         )
         await public_service.public_submit(db, row.token, ip="1.2.3.4")
-        row.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        row.expires_at = datetime.now(UTC) - timedelta(hours=1)
         await db.commit()
         with pytest.raises(HTTPException) as ei:
             await public_service.public_get_context(db, row.token, ip="1.2.3.4")
@@ -1268,10 +1269,10 @@ class TestInviteStatusModel:
     async def test_expired_token_visit_returns_410(
         self, db: AsyncSession, tenant, user
     ):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         _cv, _rd_id, row = await _invite_with_token(db, tenant, user)
-        row.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        row.expires_at = datetime.now(UTC) - timedelta(hours=1)
         await db.commit()
         with pytest.raises(HTTPException) as ei:
             await public_service.public_get_context(db, row.token, ip="5.5.5.5")

@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC
 
 import pytest
 from httpx import AsyncClient
@@ -196,7 +197,7 @@ class TestAssessmentParticipantsAndWorkflow:
     ):
         # HRP-18 auto-adds the assessee as a "self" participant on create, so
         # we need a *second* user/employee to validate manual add-participant.
-        from datetime import date, datetime, timezone
+        from datetime import date, datetime
 
         from app.core.security import hash_password
         from app.modules.auth.models import User, user_roles
@@ -208,7 +209,7 @@ class TestAssessmentParticipantsAndWorkflow:
             first_name="Peer",
             last_name="Reviewer",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(peer_user)
         await db.commit()

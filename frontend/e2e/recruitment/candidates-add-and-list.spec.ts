@@ -15,9 +15,8 @@
  * deterministic stub data. Same shortcut applies to ``seed-verdict``.
  */
 import { type APIRequestContext, type Page, expect, test } from "@playwright/test";
-import { registerUser, setAuthTokens, uniqueEmail } from "../helpers";
+import { API_BASE, registerUser, setAuthTokens, uniqueEmail } from "../helpers";
 
-const API_BASE = "http://localhost:8100/api";
 // Minimal valid-enough PDF: the bulk-upload sniff only checks the
 // leading ``%PDF-`` magic. The Celery parser never runs because the
 // seed endpoint flips parse_status before the test polls.

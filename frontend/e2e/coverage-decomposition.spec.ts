@@ -1,7 +1,6 @@
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens } from "./helpers";
+import { API_BASE, registerUser, setAuthTokens } from "./helpers";
 
-const API_BASE = process.env.E2E_API_BASE ?? "http://localhost:8100/api";
 /** A breakdown is two live LLM calls; opt in locally with E2E_LLM=1
  * against a backend that has a key and a worker. */
 const LIVE_LLM = process.env.E2E_LLM === "1";

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import io
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -98,10 +98,10 @@ async def _invited_evaluator(
         email="ext@example.com",
         evaluator_name="Ext Eval",
         status="opened",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        expires_at=datetime.now(UTC) + timedelta(days=7),
         allow_reediting=True,
         delivery_status="sent",
-        consent_accepted_at=datetime.now(timezone.utc) if consent else None,
+        consent_accepted_at=datetime.now(UTC) if consent else None,
     )
     db.add(invite)
     await db.commit()
@@ -251,7 +251,7 @@ class TestResumePreviewEndpoint:
             )
         ).scalar_one()
         invite.status = "revoked"
-        invite.revoked_at = datetime.now(timezone.utc)
+        invite.revoked_at = datetime.now(UTC)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:

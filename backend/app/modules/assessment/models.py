@@ -76,12 +76,12 @@ class AnswerScale(BaseModel):
         Boolean, default=False, server_default="false"
     )
 
-    options: Mapped[list["AnswerOption"]] = relationship(
+    options: Mapped[list[AnswerOption]] = relationship(
         back_populates="scale",
         cascade="all, delete-orphan",
         order_by="AnswerOption.sort_index",
     )
-    levels: Mapped[list["AnswerScaleLevel"]] = relationship(
+    levels: Mapped[list[AnswerScaleLevel]] = relationship(
         back_populates="scale",
         cascade="all, delete-orphan",
         order_by="AnswerScaleLevel.sort_index",
@@ -106,7 +106,7 @@ class AnswerOption(BaseModel):
         Boolean, default=False, server_default="false"
     )
 
-    scale: Mapped["AnswerScale"] = relationship(back_populates="options")
+    scale: Mapped[AnswerScale] = relationship(back_populates="options")
 
 
 class AnswerScaleLevel(BaseModel):
@@ -139,7 +139,7 @@ class AnswerScaleLevel(BaseModel):
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     sort_index: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
-    scale: Mapped["AnswerScale"] = relationship(back_populates="levels")
+    scale: Mapped[AnswerScale] = relationship(back_populates="levels")
 
 
 # --- Core assessment ---
@@ -233,16 +233,16 @@ class Assessment(BaseModel, TenantMixin):
     )
 
     employee = relationship("Employee", lazy="selectin")
-    assessment_type: Mapped["AssessmentType"] = relationship(lazy="selectin")
-    status: Mapped["AssessmentStatus"] = relationship(lazy="selectin")
-    group: Mapped["AssessmentGroup | None"] = relationship(back_populates="assessments")
-    participants: Mapped[list["AssessmentParticipant"]] = relationship(
+    assessment_type: Mapped[AssessmentType] = relationship(lazy="selectin")
+    status: Mapped[AssessmentStatus] = relationship(lazy="selectin")
+    group: Mapped[AssessmentGroup | None] = relationship(back_populates="assessments")
+    participants: Mapped[list[AssessmentParticipant]] = relationship(
         back_populates="assessment", cascade="all, delete-orphan"
     )
-    competences: Mapped[list["AssessmentCompetence"]] = relationship(
+    competences: Mapped[list[AssessmentCompetence]] = relationship(
         back_populates="assessment", cascade="all, delete-orphan"
     )
-    results: Mapped[list["AssessmentResult"]] = relationship(
+    results: Mapped[list[AssessmentResult]] = relationship(
         back_populates="assessment", cascade="all, delete-orphan"
     )
 
@@ -267,7 +267,7 @@ class AssessmentCompetence(BaseModel):
         nullable=True,
     )
 
-    assessment: Mapped["Assessment"] = relationship(back_populates="competences")
+    assessment: Mapped[Assessment] = relationship(back_populates="competences")
     competence = relationship("Competence", lazy="selectin")
     skill_level = relationship("SkillLevel", lazy="selectin")
 
@@ -296,9 +296,9 @@ class AssessmentParticipant(BaseModel):
         Boolean, default=False, server_default="false"
     )
 
-    assessment: Mapped["Assessment"] = relationship(back_populates="participants")
+    assessment: Mapped[Assessment] = relationship(back_populates="participants")
     user = relationship("User", lazy="selectin")
-    external_reviewer: Mapped["ExternalReviewer | None"] = relationship(lazy="selectin")
+    external_reviewer: Mapped[ExternalReviewer | None] = relationship(lazy="selectin")
 
 
 class ExternalReviewer(BaseModel, TenantMixin):
@@ -429,8 +429,8 @@ class AssessmentResult(BaseModel):
         nullable=True,
     )
 
-    assessment: Mapped["Assessment"] = relationship(back_populates="results")
-    level: Mapped["AnswerScaleLevel | None"] = relationship(lazy="selectin")
+    assessment: Mapped[Assessment] = relationship(back_populates="results")
+    level: Mapped[AnswerScaleLevel | None] = relationship(lazy="selectin")
 
 
 # --- Assessment Groups (mass assessment) ---
@@ -469,7 +469,7 @@ class AssessmentGroup(BaseModel, TenantMixin):
     )
     passing_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    assessments: Mapped[list["Assessment"]] = relationship(
+    assessments: Mapped[list[Assessment]] = relationship(
         foreign_keys=[Assessment.group_id], back_populates="group"
     )
 
@@ -509,13 +509,13 @@ class CPA(BaseModel, TenantMixin):
         DateTime(timezone=True), nullable=True
     )
 
-    assessments: Mapped[list["Assessment"]] = relationship(
+    assessments: Mapped[list[Assessment]] = relationship(
         foreign_keys=[Assessment.cpa_id]
     )
-    criteria: Mapped[list["CPACriteria"]] = relationship(
+    criteria: Mapped[list[CPACriteria]] = relationship(
         back_populates="cpa", cascade="all, delete-orphan"
     )
-    participants: Mapped[list["CPAParticipant"]] = relationship(
+    participants: Mapped[list[CPAParticipant]] = relationship(
         back_populates="cpa", cascade="all, delete-orphan"
     )
 
@@ -535,7 +535,7 @@ class CPACriteria(BaseModel):
     config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     weight: Mapped[float] = mapped_column(Float, default=1.0, server_default="1.0")
 
-    cpa: Mapped["CPA"] = relationship(back_populates="criteria")
+    cpa: Mapped[CPA] = relationship(back_populates="criteria")
 
 
 class CPAParticipant(BaseModel):
@@ -556,7 +556,7 @@ class CPAParticipant(BaseModel):
         String(50), nullable=False
     )  # reviewer, calibrator, observer
 
-    cpa: Mapped["CPA"] = relationship(back_populates="participants")
+    cpa: Mapped[CPA] = relationship(back_populates="participants")
 
 
 # --- PDP ---
@@ -624,12 +624,12 @@ class PDP(BaseModel, TenantMixin):
         JSONB, nullable=True
     )
 
-    items: Mapped[list["PDPItem"]] = relationship(
+    items: Mapped[list[PDPItem]] = relationship(
         back_populates="pdp",
         cascade="all, delete-orphan",
         order_by="PDPItem.sort_index",
     )
-    comments: Mapped[list["PDPComment"]] = relationship(
+    comments: Mapped[list[PDPComment]] = relationship(
         back_populates="pdp", cascade="all, delete-orphan"
     )
     employee = relationship("Employee", foreign_keys=[employee_id], lazy="selectin")
@@ -663,8 +663,8 @@ class PDPItem(BaseModel):
         String(20), nullable=False, default="custom", server_default="custom"
     )
 
-    pdp: Mapped["PDP"] = relationship(back_populates="items")
-    materials: Mapped[list["PDPItemMaterial"]] = relationship(
+    pdp: Mapped[PDP] = relationship(back_populates="items")
+    materials: Mapped[list[PDPItemMaterial]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
         order_by="PDPItemMaterial.sort_index",
@@ -699,7 +699,7 @@ class PDPItemMaterial(BaseModel):
         nullable=True,
     )
 
-    item: Mapped["PDPItem"] = relationship(back_populates="materials")
+    item: Mapped[PDPItem] = relationship(back_populates="materials")
 
 
 class PDPComment(BaseModel):
@@ -734,7 +734,7 @@ class PDPComment(BaseModel):
     )
 
     user = relationship("User", lazy="selectin")
-    pdp: Mapped["PDP"] = relationship(back_populates="comments")
+    pdp: Mapped[PDP] = relationship(back_populates="comments")
 
 
 # --- GF12: PDP Versioning ---
@@ -753,4 +753,4 @@ class PDPVersion(BaseModel):
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
 
-    pdp: Mapped["PDP"] = relationship()
+    pdp: Mapped[PDP] = relationship()

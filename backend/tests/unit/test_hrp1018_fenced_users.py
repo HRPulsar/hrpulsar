@@ -9,7 +9,7 @@ and must still answer exactly what ``fenced_off_vacancy`` answers.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from app.models import Person
 from app.modules.auth.models import User
@@ -88,7 +88,7 @@ async def test_fenced_users_answers_what_fenced_off_vacancy_answers(auth_client,
             TalentCandidate(
                 card_id=card.id,
                 employee_id=(await _employee(db, tenant, reacted)).id,
-                response_at=datetime.now(timezone.utc),
+                response_at=datetime.now(UTC),
             ),
             TalentCandidate(card_id=card.id, employee_id=(await _employee(db, tenant, matched)).id),
         ]

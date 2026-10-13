@@ -21,7 +21,7 @@ import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import status
@@ -225,7 +225,7 @@ async def _gather_candidate_payload(
     return {
         "schema_version": "gdpr-export.v1",
         "tenant_id": str(tenant_id),
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "person": _person_dict(person) if person else None,
         "candidate": _candidate_dict(candidate),
         "resumes": [_resume_dict(r) for r in resumes],
@@ -552,7 +552,7 @@ async def _perform_gdpr_export(
 
         request_row.status = "completed"
         request_row.file_id = file_row.id if file_row is not None else None
-        request_row.expires_at = datetime.now(timezone.utc) + timedelta(
+        request_row.expires_at = datetime.now(UTC) + timedelta(
             seconds=EXPORT_PRESIGN_TTL_SECONDS
         )
         await db.commit()
@@ -1586,7 +1586,7 @@ async def apply_retention(
     Tenants without a retention row are left alone: the row appears the
     first time the settings are opened.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     totals: dict[str, int] = {}
     configs = [
         _RetentionWindows(

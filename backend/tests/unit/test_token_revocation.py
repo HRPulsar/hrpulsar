@@ -7,6 +7,7 @@ Access/refresh JWTs carry a ``ver`` claim matched against
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 from app.core.security import (
@@ -111,7 +112,7 @@ class TestChangePasswordRevokesTokens:
         # A token predating this change carries no ``ver`` claim; get_current_user
         # treats the absent claim as 0, matching the default token_version, so
         # deploying the feature does not force-log-out existing sessions.
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         import jwt
         from app.config import settings
@@ -120,7 +121,7 @@ class TestChangePasswordRevokesTokens:
             "sub": str(user.id),
             "tenant_id": str(user.tenant_id),
             "type": "access",
-            "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+            "exp": datetime.now(UTC) + timedelta(minutes=30),
         }
         legacy = jwt.encode(
             payload, settings.jwt_secret, algorithm=settings.jwt_algorithm

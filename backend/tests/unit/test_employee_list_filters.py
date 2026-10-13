@@ -9,7 +9,7 @@ Covers:
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest_asyncio
 from app.core.security import hash_password
@@ -59,7 +59,7 @@ async def _mk_user(db: AsyncSession, tenant_id: uuid.UUID, role: Role | None) ->
         first_name="U",
         last_name=str(uuid.uuid4().hex[:4]),
         tenant_id=tenant_id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

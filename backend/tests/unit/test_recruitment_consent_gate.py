@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -256,7 +256,7 @@ class TestRevocation:
             template_id=template.id,
             token=uuid.uuid4().hex,
             email="c@example.com",
-            expires_at=datetime.now(timezone.utc) + timedelta(days=3),
+            expires_at=datetime.now(UTC) + timedelta(days=3),
         )
         db.add(pending)
         await db.commit()

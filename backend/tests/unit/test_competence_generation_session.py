@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 from typing import Any
 
 import pytest
@@ -438,7 +439,7 @@ class TestOneActiveSession:
         the worker's catch-all. The next AI Generate from any page must
         succeed without surfacing "active session already exists".
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         first = await service.create_session(
             db, tenant.id, user.id, SessionCreate(scope="whole_base")
@@ -446,7 +447,7 @@ class TestOneActiveSession:
         first.status = "error"
         first.error_code = "service_error"
         first.error_message = "Generation crashed unexpectedly"
-        first.finished_at = datetime.now(timezone.utc)
+        first.finished_at = datetime.now(UTC)
         await db.commit()
 
         second = await service.create_session(
@@ -1419,7 +1420,7 @@ class TestLifecycle:
 
 class TestListOtherActiveSessions:
     async def _make_user(self, db: AsyncSession, tenant, admin_role, suffix: str):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.core.security import hash_password
         from app.modules.auth.models import User, user_roles
@@ -1430,7 +1431,7 @@ class TestListOtherActiveSessions:
             first_name=f"John{suffix}",
             last_name="Smith",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(u)
         await db.commit()

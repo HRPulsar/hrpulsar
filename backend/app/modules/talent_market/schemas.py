@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -12,7 +12,7 @@ _DATE_WINDOW_YEARS = 5
 
 
 def _today() -> date:
-    return datetime.now(timezone.utc).date()
+    return datetime.now(UTC).date()
 
 
 def _validate_date_window(

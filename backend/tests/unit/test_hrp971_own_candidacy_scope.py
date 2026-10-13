@@ -11,7 +11,7 @@ good, whatever else reaches it.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -253,7 +253,7 @@ async def _seat_card(db, tenant, seat, *, deputy_reacted: bool):
     col_emp = Employee(user_id=colleague.id, tenant_id=tenant.id, hire_date=date(2024, 1, 1))
     db.add(col_emp)
     await db.commit()
-    reacted = datetime.now(timezone.utc) if deputy_reacted else None
+    reacted = datetime.now(UTC) if deputy_reacted else None
     db.add_all(
         [
             TalentCandidate(card_id=card.id, employee_id=seat["dep_emp"].id, response_at=reacted),
@@ -474,7 +474,7 @@ async def test_nobody_fenced_off_the_vacancy_interviews_or_evaluates_on_it(auth_
         token=uuid.uuid4().hex,
         email=seat["deputy"].email,
         status="pending",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        expires_at=datetime.now(UTC) + timedelta(days=7),
     )
     db.add(sent)
     await db.commit()
@@ -501,6 +501,6 @@ async def test_the_evaluation_notice_skips_an_owner_fenced_off_the_vacancy(db, t
         token=uuid.uuid4().hex,
         email=f"ext-{uuid.uuid4().hex[:6]}@example.com",
         status="submitted",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        expires_at=datetime.now(UTC) + timedelta(days=7),
     )
     assert await _notified_owner_id(db, vacancy, invite) == seat["head"].id

@@ -9,7 +9,7 @@ situations the evaluator can do nothing about.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.recruitment import manager_assessment_public as public_service
@@ -41,11 +41,11 @@ async def _invited(db: AsyncSession, tenant, user, *, consent: bool = True):
         email="ext@example.com",
         evaluator_name="Ext Eval",
         status="opened",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        expires_at=datetime.now(UTC) + timedelta(days=7),
         allow_reediting=True,
         delivery_status="sent",
         invited_by=user.id,
-        consent_accepted_at=datetime.now(timezone.utc) if consent else None,
+        consent_accepted_at=datetime.now(UTC) if consent else None,
     )
     db.add(invite)
     await db.commit()
@@ -101,7 +101,7 @@ class TestCandidateGone:
     async def test_candidate_archived(self, db: AsyncSession, tenant, user):
         token, cv, _ = await _invited(db, tenant, user)
         candidate = await db.get(Candidate, cv.candidate_id)
-        candidate.archived_at = datetime.now(timezone.utc)
+        candidate.archived_at = datetime.now(UTC)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:
@@ -112,7 +112,7 @@ class TestCandidateGone:
     async def test_the_resume_goes_with_it(self, db: AsyncSession, tenant, user):
         token, cv, _ = await _invited(db, tenant, user)
         candidate = await db.get(Candidate, cv.candidate_id)
-        candidate.archived_at = datetime.now(timezone.utc)
+        candidate.archived_at = datetime.now(UTC)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:
@@ -132,7 +132,7 @@ class TestVacancyGone:
         self, db: AsyncSession, tenant, user
     ):
         token, _, vacancy = await _invited(db, tenant, user)
-        vacancy.archived_at = datetime.now(timezone.utc)
+        vacancy.archived_at = datetime.now(UTC)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:
@@ -142,7 +142,7 @@ class TestVacancyGone:
 
     async def test_resume_preview_too(self, db: AsyncSession, tenant, user):
         token, _, vacancy = await _invited(db, tenant, user)
-        vacancy.archived_at = datetime.now(timezone.utc)
+        vacancy.archived_at = datetime.now(UTC)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:

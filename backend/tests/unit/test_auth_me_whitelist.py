@@ -7,7 +7,7 @@ settable through this endpoint. Sending them yields a 422.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from app.core.security import create_access_token, hash_password
@@ -91,7 +91,7 @@ async def _user_with_role(db: AsyncSession, tenant, code: str) -> User:
         first_name=code,
         last_name="X",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

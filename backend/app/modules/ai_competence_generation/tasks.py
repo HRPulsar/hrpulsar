@@ -15,7 +15,7 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ValidationError
@@ -697,7 +697,7 @@ async def _heartbeat_pulse(
         logger.exception("compgen heartbeat: redis driver unavailable")
         return
 
-    last_touch = datetime.now(timezone.utc)
+    last_touch = datetime.now(UTC)
 
     async def _touch_session_row() -> None:
         from sqlalchemy import update
@@ -713,7 +713,7 @@ async def _heartbeat_pulse(
                 await touch_db.execute(
                     update(CompetenceGenerationSession)
                     .where(CompetenceGenerationSession.id == session_id)
-                    .values(updated_at=datetime.now(timezone.utc))
+                    .values(updated_at=datetime.now(UTC))
                 )
                 await touch_db.commit()
         except Exception:
@@ -726,12 +726,12 @@ async def _heartbeat_pulse(
             try:
                 await r.set(
                     HEARTBEAT_KEY,
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(UTC).isoformat(),
                     ex=HEARTBEAT_TTL_S,
                 )
             except Exception:
                 logger.exception("compgen heartbeat refresh failed")
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if (now - last_touch).total_seconds() >= SESSION_TOUCH_INTERVAL_S:
                 await _touch_session_row()
                 last_touch = now
@@ -1487,7 +1487,7 @@ async def _flip_ready_and_bill(
     sess.payload = payload_dict
     sess.selection_state = selection
     sess.status = "ready"
-    sess.finished_at = datetime.now(timezone.utc)
+    sess.finished_at = datetime.now(UTC)
     billing_action = (sess.params or {}).get(
         "billing_action"
     ) or start_action_for_scope(sess.scope)
@@ -1872,7 +1872,7 @@ async def _reap_stuck_sessions_body(
         CompetenceGenerationSession,
     )
 
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=REAPER_STUCK_AGE_MINUTES)
+    cutoff = datetime.now(UTC) - timedelta(minutes=REAPER_STUCK_AGE_MINUTES)
     reaped: list[CompetenceGenerationSession] = []
     async with session_factory() as db:
         rows = await db.execute(
@@ -1889,7 +1889,7 @@ async def _reap_stuck_sessions_body(
                 f"{REAPER_STUCK_AGE_MINUTES} minutes; resetting to error so "
                 f"the next attempt can proceed."
             )
-            sess.finished_at = datetime.now(timezone.utc)
+            sess.finished_at = datetime.now(UTC)
             reaped.append(sess)
         await db.commit()
         for sess in reaped:
@@ -1956,7 +1956,7 @@ async def _force_terminate_running(
                 f"Generation crashed unexpectedly: "
                 f"{type(exc).__name__}: {str(exc)[:200]}"
             )
-        sess.finished_at = datetime.now(timezone.utc)
+        sess.finished_at = datetime.now(UTC)
         await db.commit()
         await _broadcast_session_update(
             sess.tenant_id,
@@ -1979,7 +1979,7 @@ async def _terminate(
     sess.status = "error"
     sess.error_code = error_code
     sess.error_message = message
-    sess.finished_at = datetime.now(timezone.utc)
+    sess.finished_at = datetime.now(UTC)
     await db.commit()
     await _broadcast_session_update(
         sess.tenant_id,

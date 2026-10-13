@@ -120,8 +120,8 @@ class Tenant(BaseModel):
         Boolean, nullable=False, default=False, server_default="false"
     )
 
-    divisions: Mapped[list["Division"]] = relationship(back_populates="tenant")
-    activity_fields: Mapped[list["CompanyActivityField"]] = relationship(
+    divisions: Mapped[list[Division]] = relationship(back_populates="tenant")
+    activity_fields: Mapped[list[CompanyActivityField]] = relationship(
         back_populates="tenant", cascade="all, delete-orphan"
     )
 
@@ -161,11 +161,11 @@ class Division(BaseModel, TenantMixin):
         index=True,
     )
 
-    parent: Mapped["Division | None"] = relationship(
+    parent: Mapped[Division | None] = relationship(
         remote_side="Division.id", back_populates="children"
     )
-    children: Mapped[list["Division"]] = relationship(back_populates="parent")
-    tenant: Mapped["Tenant"] = relationship(back_populates="divisions")
+    children: Mapped[list[Division]] = relationship(back_populates="parent")
+    tenant: Mapped[Tenant] = relationship(back_populates="divisions")
     manager = relationship("Employee", foreign_keys=[manager_id], lazy="selectin")
     deputy_manager = relationship(
         "Employee", foreign_keys=[deputy_manager_id], lazy="selectin"
@@ -222,7 +222,7 @@ class CompanyActivityField(BaseModel, TenantMixin):
         nullable=False,
     )
 
-    tenant: Mapped["Tenant"] = relationship(back_populates="activity_fields")
+    tenant: Mapped[Tenant] = relationship(back_populates="activity_fields")
     activity_field = relationship("DictionaryItem", lazy="selectin")
 
 

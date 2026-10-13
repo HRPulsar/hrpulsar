@@ -229,7 +229,7 @@ async def _chain(
     return tenant_id, providers
 
 
-async def _bounded(request: Request) -> AsyncGenerator[bytes, None]:
+async def _bounded(request: Request) -> AsyncGenerator[bytes]:
     """The request body, refused with 413 the moment it passes the ceiling -
     a missing or lying Content-Length included."""
     received = 0

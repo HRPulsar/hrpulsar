@@ -11,7 +11,7 @@ modal. Match score has two layers:
 """
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from app.modules.assessment.models import (
@@ -57,7 +57,7 @@ async def _make_employee(
         first_name=first,
         last_name=last,
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(user)
     await db.flush()
@@ -165,7 +165,7 @@ async def _record_assessment_result(
         first_name="Init",
         last_name="Iator",
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(initiator)
     await db.flush()
@@ -176,7 +176,7 @@ async def _record_assessment_result(
         type_id=type_id,
         status_id=status_id,
         initiator_id=initiator.id,
-        finished_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(UTC),
     )
     db.add(assessment)
     await db.flush()

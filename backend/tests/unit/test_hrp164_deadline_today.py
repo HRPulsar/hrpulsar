@@ -14,7 +14,7 @@ Before the fix ``_deadline_in_past`` compared the deadline instant against
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from app.modules.assessment import service
 from app.modules.assessment.models import Assessment
@@ -61,7 +61,7 @@ async def _make_extra_employee(db: AsyncSession, tenant, suffix: str):
         first_name=f"F{suffix}",
         last_name=f"L{suffix}",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -94,9 +94,9 @@ class TestSingleAssessmentDeadlineToday:
         created = await _make_assessment(db, tenant, user, employee)
         await seed_send_prereqs(db, tenant.id, created["id"])
         today_midnight = datetime.combine(
-            datetime.now(timezone.utc).date(),
+            datetime.now(UTC).date(),
             datetime.min.time(),
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         )
         await _set_deadline(db, created["id"], today_midnight)
 
@@ -115,7 +115,7 @@ class TestSingleAssessmentDeadlineToday:
         """Regression: a deadline that landed on yesterday's UTC date stays a hard error."""
         created = await _make_assessment(db, tenant, user, employee)
         await seed_send_prereqs(db, tenant.id, created["id"])
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        yesterday = datetime.now(UTC) - timedelta(days=1)
         await _set_deadline(db, created["id"], yesterday)
 
         import pytest
@@ -153,9 +153,9 @@ class TestMassAssessmentDeadlineToday:
         )
 
         today_midnight = datetime.combine(
-            datetime.now(timezone.utc).date(),
+            datetime.now(UTC).date(),
             datetime.min.time(),
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         )
         for child in group["assessments"]:
             await seed_send_prereqs(db, tenant.id, child["id"])

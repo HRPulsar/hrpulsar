@@ -46,7 +46,7 @@ class CompetenceGroup(BaseModel):
 
     # lazy="raise_on_sql": identity-map hits still resolve; an SQL-emitting
     # lazy load (impossible under the async session anyway) raises clearly.
-    parent: Mapped["CompetenceGroup | None"] = relationship(
+    parent: Mapped[CompetenceGroup | None] = relationship(
         remote_side="CompetenceGroup.id",
         back_populates="children",
         lazy="raise_on_sql",
@@ -54,14 +54,14 @@ class CompetenceGroup(BaseModel):
     # lazy="selectin" (not "raise"): the DB FK is ON DELETE SET NULL, so
     # subtree removal on delete_group relies on the ORM delete-orphan
     # cascade, which must be able to load the children at flush time.
-    children: Mapped[list["CompetenceGroup"]] = relationship(
+    children: Mapped[list[CompetenceGroup]] = relationship(
         back_populates="parent",
         cascade="all, delete-orphan",
         lazy="selectin",
     )
     # lazy="raise": loaded explicitly where needed; rows are removed by the
     # DB-level ON DELETE CASCADE on competences.group_id (passive_deletes).
-    competences: Mapped[list["Competence"]] = relationship(
+    competences: Mapped[list[Competence]] = relationship(
         back_populates="group",
         cascade="all, delete-orphan",
         lazy="raise",
@@ -123,19 +123,19 @@ class Competence(BaseModel):
         String(10), default="human", server_default="human", nullable=False
     )
 
-    group: Mapped["CompetenceGroup"] = relationship(
+    group: Mapped[CompetenceGroup] = relationship(
         back_populates="competences", lazy="raise_on_sql"
     )
     # lazy="raise": loaded explicitly where needed; rows are removed by the
     # DB-level ON DELETE CASCADE on the child FKs (passive_deletes).
-    indicators: Mapped[list["Indicator"]] = relationship(
+    indicators: Mapped[list[Indicator]] = relationship(
         back_populates="competence",
         cascade="all, delete-orphan",
         order_by="Indicator.sort_index",
         lazy="raise",
         passive_deletes=True,
     )
-    materials: Mapped[list["Material"]] = relationship(
+    materials: Mapped[list[Material]] = relationship(
         back_populates="competence",
         cascade="all, delete-orphan",
         order_by="Material.sort_index",
@@ -196,10 +196,10 @@ class Indicator(BaseModel):
         nullable=True,
     )
 
-    competence: Mapped["Competence"] = relationship(
+    competence: Mapped[Competence] = relationship(
         back_populates="indicators", lazy="raise_on_sql"
     )
-    skill_level: Mapped["SkillLevel"] = relationship(lazy="selectin")
+    skill_level: Mapped[SkillLevel] = relationship(lazy="selectin")
 
     @classmethod
     def visible_to(cls, tenant_id: uuid.UUID):
@@ -242,10 +242,10 @@ class Material(BaseModel):
         nullable=True,
     )
 
-    competence: Mapped["Competence"] = relationship(
+    competence: Mapped[Competence] = relationship(
         back_populates="materials", lazy="raise_on_sql"
     )
-    skill_level: Mapped["SkillLevel"] = relationship(lazy="selectin")
+    skill_level: Mapped[SkillLevel] = relationship(lazy="selectin")
 
 
 class MaterialSpecializationOverride(BaseModel):

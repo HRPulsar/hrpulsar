@@ -1,7 +1,6 @@
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens } from "./helpers";
+import { API_BASE, registerUser, setAuthTokens } from "./helpers";
 
-const API_BASE = process.env.E2E_API_BASE ?? "http://localhost:8100/api";
 /** The generation is one live LLM call (30 credits); opt in locally with
  * E2E_LLM=1 against a backend that has a key. CI runs the negative case and
  * the button states only. */

@@ -1,11 +1,10 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   registerUser,
   setAuthTokens,
   createDictionaryItem,
 } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
 
 /**
  * CR13 — UI smoke for AI competence generation.

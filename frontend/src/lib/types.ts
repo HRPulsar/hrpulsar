@@ -1381,6 +1381,8 @@ export interface CallsSummary {
   count: number;
   models: string[];
   total_latency_ms: number;
+  // HRP-1046: first call start -> last call end; what the Duration row shows.
+  wall_time_ms: number;
   started_at: string | null;
   finished_at: string | null;
 }

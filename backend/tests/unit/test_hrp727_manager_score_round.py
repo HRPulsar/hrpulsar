@@ -12,7 +12,7 @@ the number was computed from.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.modules.recruitment import candidate_service
 from app.modules.recruitment import manager_assessment_service as service
@@ -196,7 +196,7 @@ class TestSourceRoundOnReadPaths:
         row_cv = await db.get(CandidateVacancy, cv.id)
         assert row_cv is not None
         row_cv.manager_score = 3.0
-        row_cv.manager_score_updated_at = datetime.now(timezone.utc)
+        row_cv.manager_score_updated_at = datetime.now(UTC)
         await db.commit()
 
         items, _total = await candidate_service.list_vacancy_candidates_enriched(

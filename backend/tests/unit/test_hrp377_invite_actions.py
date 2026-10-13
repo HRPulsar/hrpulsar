@@ -8,7 +8,7 @@ submitted sheet stays readable so `View submission` has something to show.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -230,7 +230,7 @@ class TestResendInvite:
         self, db: AsyncSession, tenant, user
     ):
         _, _, inv = await _round_with_invite(db, tenant, user)
-        inv.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        inv.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()
         with pytest.raises(HTTPException) as exc:
             await service.resend_invite(db, tenant.id, user.id, inv.id)
@@ -249,7 +249,7 @@ class TestResendInvite:
         for terminal in ("expired", "declined"):
             _, _, inv = await _round_with_invite(db, tenant, user)
             if terminal == "expired":
-                inv.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+                inv.expires_at = datetime.now(UTC) - timedelta(days=1)
             else:
                 inv.status = "declined"
             inv.delivery_status = "delivery_failed"
@@ -447,7 +447,7 @@ class TestViewSubmission:
     ):
         _, rd_id, inv = await _round_with_invite(db, tenant, user)
         # Accept consent, then submit through the public flow.
-        inv.consent_accepted_at = datetime.now(timezone.utc)
+        inv.consent_accepted_at = datetime.now(UTC)
         await db.commit()
         await public_service.public_submit(
             db, inv.token, final_notes="Solid systems thinker"

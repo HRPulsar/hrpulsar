@@ -13,7 +13,7 @@ status codes / headers / response shape.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.core.errors import AppError
@@ -484,7 +484,7 @@ class TestDeleteCandidateVacancy:
                 candidate_vacancy_id=cv,
                 token=uuid.uuid4().hex,
                 email=f"eval-{uuid.uuid4().hex[:6]}@example.com",
-                expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+                expires_at=datetime.now(UTC) + timedelta(days=7),
             ),
             lambda t, cv: QuestionSet(tenant_id=t, candidate_vacancy_id=cv, name="Set"),
             lambda t, cv: AssessmentRound(

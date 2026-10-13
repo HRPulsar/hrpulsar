@@ -19,6 +19,7 @@ import { LoadErrorState } from "@/components/load-error-state";
 import { AccessDialog } from "@/components/coverage/access-dialog";
 import { CoverageTab } from "@/components/coverage/coverage-tab";
 import { GapsTab } from "@/components/coverage/gaps-tab";
+import { generationErrorText } from "@/components/coverage/generation-errors";
 import { GenerationProgress } from "@/components/coverage/generation-progress";
 import { StepsEditor } from "@/components/coverage/steps-editor";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -401,8 +402,12 @@ function ContainerView({ id }: { id: string }) {
               )}
               {session.status === "error" && (
                 <span className="text-destructive" data-testid="coverage-banner-error">
-                  {t("generationFailed")}
-                  {session.error_message ? ` ${session.error_message}` : ""}
+                  {generationErrorText(
+                    t,
+                    session.error_code,
+                    session.error_message,
+                    "generationFailed",
+                  )}
                 </span>
               )}
             </div>

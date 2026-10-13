@@ -13,8 +13,9 @@ what this file pins.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
+import pytest
 import pytest_asyncio
 from app.core.security import create_access_token, hash_password
 from app.modules.auth.models import Role, User, user_roles
@@ -60,7 +61,7 @@ async def _user(db: AsyncSession, tenant, code: str) -> User:
         first_name=code,
         last_name="X",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -226,3 +227,55 @@ class TestEmployeeReadScope:
             f"/api/employees/{uuid.uuid4()}", headers=_headers(cast["worker_user"])
         )
         assert resp.status_code == 404
+
+
+class TestAdminCardAsColleague:
+    """HRP-623 REDO (QA 12.10): an Administrator's card opened from outside.
+
+    The QA case: a manager opens the card of an admin-role colleague. An
+    admin account typically has no division, position or specialization —
+    none of that may break the trimmed-card branch. The card answers 200
+    with the directory row while the admin is active / on leave, and the
+    designed 404 (same as a nonexistent id) once they are not: that pair is
+    the whole contract, and the UI renders the 404 as "not found", never as
+    a loading failure.
+    """
+
+    @pytest_asyncio.fixture
+    async def admin_emp(self, db: AsyncSession, tenant):
+        admin_user = await _user(db, tenant, "admin")
+        return await _employee(db, tenant, admin_user)
+
+    @pytest.mark.parametrize("caller", ["manager_user", "worker_user"])
+    async def test_rootless_admin_card_is_the_trimmed_row(
+        self, client: AsyncClient, cast, admin_emp, caller
+    ):
+        resp = await client.get(
+            f"/api/employees/{admin_emp.id}", headers=_headers(cast[caller])
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "hire_date" not in body
+        assert "roles" not in body
+        assert body["division_id"] is None
+        assert body["position_title"] is None
+        assert body["specialization_title"] is None
+
+    @pytest.mark.parametrize("caller", ["manager_user", "worker_user"])
+    @pytest.mark.parametrize("status_", ["terminated", "inactive"])
+    async def test_admin_who_left_answers_the_designed_404(
+        self,
+        db: AsyncSession,
+        client: AsyncClient,
+        cast,
+        admin_emp,
+        caller,
+        status_,
+    ):
+        admin_emp.status = status_
+        await db.commit()
+        resp = await client.get(
+            f"/api/employees/{admin_emp.id}", headers=_headers(cast[caller])
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["code"] == "employee_not_found"

@@ -8,7 +8,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import (
     APIRouter,
@@ -304,7 +304,7 @@ async def resend_webhook(
         try:
             timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
-            timestamp = datetime.now(timezone.utc)
+            timestamp = datetime.now(UTC)
 
     await service.update_email_log_status(db, email_id, new_status, timestamp)
     return {"ok": True}

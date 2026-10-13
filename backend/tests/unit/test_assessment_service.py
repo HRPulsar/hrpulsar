@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import UTC, date
 
 import pytest
 from app.modules.assessment import service
@@ -215,7 +215,7 @@ class TestParticipants:
     ):
         # HRP-18 auto-adds the assessee as a "self" participant on create —
         # validate manual add-participant against a *different* employee/user.
-        from datetime import date, datetime, timezone
+        from datetime import date, datetime
 
         from app.core.security import hash_password
         from app.modules.auth.models import User, user_roles
@@ -227,7 +227,7 @@ class TestParticipants:
             first_name="Peer",
             last_name="Reviewer",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(peer_user)
         await db.commit()
@@ -318,7 +318,7 @@ class TestParticipants:
         instead of restricting the delete with a FK violation.
         """
         from datetime import date as _date
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.core.security import hash_password
         from app.modules.assessment.models import AssessmentParticipant
@@ -336,7 +336,7 @@ class TestParticipants:
             first_name="Peer",
             last_name="User",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(peer)
         await db.commit()
@@ -1352,7 +1352,7 @@ class TestCPA:
 
 async def _make_employee(db: AsyncSession, tenant, suffix: str) -> Employee:
     """Create a User + Employee pair for mass assessment tests."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.core.security import hash_password
     from app.modules.auth.models import User as AuthUser
@@ -1363,7 +1363,7 @@ async def _make_employee(db: AsyncSession, tenant, suffix: str) -> Employee:
         first_name=f"First{suffix}",
         last_name=f"Last{suffix}",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

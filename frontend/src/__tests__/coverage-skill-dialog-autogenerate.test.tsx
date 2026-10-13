@@ -35,6 +35,7 @@ const SKILL: StepSkill = {
   status: "ready",
   skill_name: null,
   content: null,
+  error_code: null,
   error_message: null,
   generated_at: "2026-01-01T00:00:00Z",
 };

@@ -961,9 +961,10 @@ async def change_pdp_status(
             pdp_id,
             data.status_code,
             bypass_transition_check=True,
+            user_id=current_user.id,
         )
     return await pdp_service.change_pdp_status(
-        db, current_user.tenant_id, pdp_id, data.status_code
+        db, current_user.tenant_id, pdp_id, data.status_code, user_id=current_user.id
     )
 
 

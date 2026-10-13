@@ -13,7 +13,7 @@ them and rely on the bulk test for case 1.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.assessment import service
@@ -54,7 +54,7 @@ async def _make_extra_employee(db: AsyncSession, tenant, suffix: str):
         first_name=f"F{suffix}",
         last_name=f"L{suffix}",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -82,7 +82,7 @@ async def _force_past_deadline(
     moved past it before launch)."""
     a = await db.get(Assessment, assessment_id)
     assert a is not None
-    a.ended_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    a.ended_at = datetime.now(UTC) - timedelta(days=days_ago)
     await db.commit()
 
 
@@ -127,7 +127,7 @@ class TestChangeStatusDraftToSentDeadline:
         await seed_send_prereqs(db, tenant.id, created["id"])
 
         a = await db.get(Assessment, created["id"])
-        a.ended_at = datetime.now(timezone.utc) + timedelta(days=7)
+        a.ended_at = datetime.now(UTC) + timedelta(days=7)
         await db.commit()
 
         result = await service.change_status(db, tenant.id, created["id"], "sent")

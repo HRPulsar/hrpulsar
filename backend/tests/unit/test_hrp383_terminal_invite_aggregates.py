@@ -13,7 +13,7 @@ exactly the invite states that drop out of the aggregate.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.recruitment import manager_assessment_public as public_service
@@ -207,7 +207,7 @@ class TestRevokedExternalScores:
             db, tenant, user, round_type="interview"
         )
         inv.status = "expired"
-        inv.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        inv.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()
 
         agg = await service.round_aggregate(db, tenant.id, rd_id)

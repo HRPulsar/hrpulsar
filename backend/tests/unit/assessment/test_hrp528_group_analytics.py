@@ -15,7 +15,7 @@ from the ``AssessmentResult`` rows that HRP-62 already covers.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from app.core.errors import AppError
@@ -73,7 +73,7 @@ async def _make_employee(db: AsyncSession, tenant, suffix: str) -> Employee:
         first_name=f"First{suffix}",
         last_name=f"Last{suffix}",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(user)
     await db.flush()
@@ -563,7 +563,7 @@ async def _token_for(db: AsyncSession, tenant, *, admin: bool) -> str:
         first_name="Acl",
         last_name="Caller",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

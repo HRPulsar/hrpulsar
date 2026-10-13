@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from fastapi import status
@@ -527,7 +527,7 @@ async def upsert_discovered(
             return family.credit_multiplier
         return _config_multiplier(family.provider, family.model_id)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stats = {"seen": 0, "new_versions": 0, "new_models": 0, "rejected": 0}
     for item in models:
         model_id = item.get("model_id")

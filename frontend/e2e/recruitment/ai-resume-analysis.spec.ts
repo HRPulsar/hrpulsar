@@ -18,9 +18,7 @@
  * CI green without faking results the recruiter would not see in prod.
  */
 import { expect, test } from "@playwright/test";
-import { registerUser, setAuthTokens, uniqueEmail } from "../helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, setAuthTokens, uniqueEmail } from "../helpers";
 
 interface AuthedSetup {
   accessToken: string;

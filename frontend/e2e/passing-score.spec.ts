@@ -1,14 +1,13 @@
 import { test, expect } from "./fixtures";
 
 import {
+  API_BASE,
   createAssessment,
   setAuthTokens,
   setupCriteriaFixture,
   setupFullTenant,
 } from "./helpers";
 import type { CriteriaFixture } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
 
 // Each test below gets a freshly registered tenant so we don't fight existing
 // criteria fixtures from sibling specs (e.g. criteria.spec.ts).

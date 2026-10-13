@@ -14,9 +14,7 @@
  * Requires E2E_MODE=true on the backend.
  */
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, setAuthTokens } from "./helpers";
 
 test.describe("Individual interview questions (HRP-205)", () => {
   test("section renders with empty state; generate gated on parsed resume", async ({

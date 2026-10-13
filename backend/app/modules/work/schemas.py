@@ -634,6 +634,7 @@ class SkillRead(BaseModel):
     status: Literal["generating", "ready", "failed"]
     skill_name: str | None
     content: str | None
+    error_code: str | None
     error_message: str | None
     prompt_version: str | None
     llm_model: str | None

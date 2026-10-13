@@ -1,7 +1,7 @@
 """POS6 backend tests: occupancy + lifecycle status transitions."""
 
 import uuid
-from datetime import date
+from datetime import UTC, date
 
 import pytest
 from app.modules.auth.models import User
@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 async def _make_user(db: AsyncSession, tenant) -> User:
     """Cheap user factory; bypasses the auth fixtures."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.core.security import hash_password
 
@@ -26,7 +26,7 @@ async def _make_user(db: AsyncSession, tenant) -> User:
         last_name="Six",
         tenant_id=tenant.id,
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

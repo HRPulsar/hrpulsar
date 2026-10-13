@@ -79,7 +79,7 @@ class User(BaseModel, TenantMixin):
         index=True,
     )
 
-    roles: Mapped[list["Role"]] = relationship(
+    roles: Mapped[list[Role]] = relationship(
         secondary=user_roles, back_populates="users", lazy="selectin"
     )
 
@@ -102,7 +102,7 @@ class Role(BaseModel):
 
     # lazy="raise": never traversed at runtime; association rows are removed
     # by the DB-level ON DELETE CASCADE on user_roles (passive_deletes).
-    users: Mapped[list["User"]] = relationship(
+    users: Mapped[list[User]] = relationship(
         secondary=user_roles,
         back_populates="roles",
         lazy="raise",

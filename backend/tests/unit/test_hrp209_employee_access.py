@@ -18,7 +18,7 @@ HRP-209 narrows that down:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 import pytest_asyncio
@@ -59,7 +59,7 @@ async def _emp_user(
         first_name=first_name,
         last_name="X",
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     u.roles.append(role)
     db.add(u)
@@ -86,7 +86,7 @@ def _set_card_published(card_id: uuid.UUID, db: AsyncSession):
         assert card is not None
         card.status = "published"
         card.is_published = True
-        card.published_at = datetime.now(timezone.utc)
+        card.published_at = datetime.now(UTC)
         await db.commit()
 
     return _run()

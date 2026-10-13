@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { EVENT_TYPE_OPTIONS, eventTypeLabel } from "@/lib/enum-labels";
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
 import { cn, flattenTree } from "@/lib/utils";
@@ -347,7 +347,18 @@ export default function EmployeeDetailPage() {
         if (crs.status === "fulfilled") setCourses(crs.value);
         if (comp.status === "fulfilled") setCompensations(comp.value);
         if (overview.status === "fulfilled") setCompetenceOverview(overview.value);
-        if (emp.status === "rejected") toast.error(t("toastLoadFailed"));
+        // HRP-623 REDO (QA 12.10): a 404 is a designed answer, not a loading
+        // failure — the id is stale (deleted card) or the colleague is hidden
+        // from this viewer (outside active / on-leave, outside the read
+        // scope). The not-found state below says exactly that; toasting
+        // "failed to load" on top misreports design as breakage. The toast is
+        // kept for everything else (network, 5xx), where loading truly failed.
+        if (
+          emp.status === "rejected" &&
+          !(emp.reason instanceof ApiError && emp.reason.status === 404)
+        ) {
+          toast.error(t("toastLoadFailed"));
+        }
       } finally {
         setLoading(false);
       }

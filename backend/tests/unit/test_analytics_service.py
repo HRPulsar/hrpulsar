@@ -7,7 +7,7 @@ shared test DB.
 
 import io
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest_asyncio
 from app.core.security import hash_password
@@ -67,7 +67,7 @@ async def _make_employee(db: AsyncSession, tenant, *, name: str) -> Employee:
         first_name=name,
         last_name="Analyticstest",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()

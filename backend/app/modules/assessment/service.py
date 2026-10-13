@@ -3,7 +3,7 @@ import math
 import secrets
 import uuid
 from collections.abc import Iterable, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -105,9 +105,9 @@ def _deadline_in_past(deadline: datetime | None) -> bool:
     aware = (
         deadline
         if deadline.tzinfo is not None
-        else deadline.replace(tzinfo=timezone.utc)
+        else deadline.replace(tzinfo=UTC)
     )
-    return aware.date() < datetime.now(timezone.utc).date()
+    return aware.date() < datetime.now(UTC).date()
 
 
 def compute_overall_percent(percents: Iterable[int | None]) -> int | None:
@@ -214,7 +214,7 @@ async def _resolve_dict_titles(
 async def _participant_email_payloads(
     db: AsyncSession,
     assessment_id: uuid.UUID,
-) -> list[tuple["AssessmentParticipant", str | None, str | None, str | None]]:
+) -> list[tuple[AssessmentParticipant, str | None, str | None, str | None]]:
     """Return ``(participant, email, full_name, user_language)`` rows for
     every participant in ``assessment_id`` who has a deliverable email
     address.
@@ -422,7 +422,7 @@ async def _send_role_email(
                 "event": event,
                 "role": role,
             },
-            sent_at=datetime.now(timezone.utc),
+            sent_at=datetime.now(UTC),
         )
         db.add(notif)
         await db.flush()
@@ -1223,7 +1223,7 @@ async def change_status(
         notify_event = "cancelled"
 
     if new_code == "in_progress" and not a.started_at:
-        a.started_at = datetime.now(timezone.utc)
+        a.started_at = datetime.now(UTC)
     elif new_code == "on_review":
         # Preliminary results so reviewers can calibrate before "done".
         await _recompute_assessment_results(db, a)
@@ -1234,7 +1234,7 @@ async def change_status(
 
         await compute_grade_recommendation(db, tenant_id, a)
     elif new_code == "done":
-        a.finished_at = datetime.now(timezone.utc)
+        a.finished_at = datetime.now(UTC)
         await _recompute_assessment_results(db, a)
         from app.modules.assessment.recommendation import compute_grade_recommendation
 
@@ -1245,7 +1245,7 @@ async def change_status(
             # (now moot) deadline. Mirrors the HRP-132 PDP treatment — both
             # terminal codes pin ``finished_at`` so the field also doubles as
             # "when did this assessment end".
-            a.finished_at = datetime.now(timezone.utc)
+            a.finished_at = datetime.now(UTC)
         # HRP-170: refresh the chart for a cancellation that crossed the
         # On Review checkpoint so the cached payload reflects the final
         # state. Pre-review cancellations are filtered out inside the
@@ -1886,7 +1886,7 @@ async def record_answer(
         a.status_id = in_progress.id
         a.status = in_progress
         if not a.started_at:
-            a.started_at = datetime.now(timezone.utc)
+            a.started_at = datetime.now(UTC)
 
     # Mark participant complete once they have answered every indicator
     # tied to the assessment.
@@ -3994,7 +3994,7 @@ async def bulk_change_status(
         if new_code == "sent" and prev_code == "draft" and a.scale_id is not None:
             await snapshot_scale_for_assessment(db, a)
         if new_code == "in_progress" and not a.started_at:
-            a.started_at = datetime.now(timezone.utc)
+            a.started_at = datetime.now(UTC)
         elif new_code == "on_review":
             await _recompute_assessment_results(db, a)
             # HRP-170: mirror change_status — compute the recommendation
@@ -4005,7 +4005,7 @@ async def bulk_change_status(
 
             await compute_grade_recommendation(db, tenant_id, a)
         elif new_code == "done":
-            a.finished_at = datetime.now(timezone.utc)
+            a.finished_at = datetime.now(UTC)
             await _recompute_assessment_results(db, a)
             from app.modules.assessment.recommendation import (
                 compute_grade_recommendation,
@@ -4016,7 +4016,7 @@ async def bulk_change_status(
             if not a.finished_at:
                 # HRP-161: mirror change_status — pin ``finished_at`` on the
                 # cancellation transition so the UI can show the closing date.
-                a.finished_at = datetime.now(timezone.utc)
+                a.finished_at = datetime.now(UTC)
             if prev_code == "on_review":
                 # HRP-170: refresh the chart cache for an on_review→cancel
                 # transition (mirror change_status).
@@ -4379,7 +4379,7 @@ async def create_external_reviewer(
         token=token,
         name=name,
         email=email,
-        expires_at=datetime.now(timezone.utc)
+        expires_at=datetime.now(UTC)
         + timedelta(days=EXTERNAL_LINK_EXPIRE_DAYS),
     )
     db.add(er)
@@ -4484,7 +4484,7 @@ async def get_external_assessment(db: AsyncSession, token: str) -> dict:
     er = result.scalar_one_or_none()
     if not er:
         raise AppError("external_review_link_invalid", status.HTTP_404_NOT_FOUND)
-    if er.expires_at < datetime.now(timezone.utc):
+    if er.expires_at < datetime.now(UTC):
         raise AppError("external_review_link_expired", status.HTTP_400_BAD_REQUEST)
     if er.completed_at:
         raise AppError("external_review_already_completed", status.HTTP_400_BAD_REQUEST)
@@ -4589,7 +4589,7 @@ async def submit_external_answers(db: AsyncSession, token: str, answers: list) -
     er = result.scalar_one_or_none()
     if not er:
         raise AppError("external_review_link_invalid", status.HTTP_404_NOT_FOUND)
-    if er.expires_at < datetime.now(timezone.utc):
+    if er.expires_at < datetime.now(UTC):
         raise AppError("external_review_link_expired", status.HTTP_400_BAD_REQUEST)
     if er.completed_at:
         raise AppError("external_review_already_completed", status.HTTP_400_BAD_REQUEST)
@@ -4627,7 +4627,7 @@ async def submit_external_answers(db: AsyncSession, token: str, answers: list) -
 
     # Mark as completed
     participant.is_completed = True
-    er.completed_at = datetime.now(timezone.utc)
+    er.completed_at = datetime.now(UTC)
     await db.flush()
 
     # HRP-145: keep preliminary results in sync with the new survey.

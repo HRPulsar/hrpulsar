@@ -49,7 +49,6 @@ import {
 import { HireFromStepDialog } from "@/components/coverage/hire-from-step-dialog";
 import { MatchGroundsDrawer } from "@/components/coverage/match-grounds-drawer";
 import {
-  HOURS_PER_RUN_MIN,
   HoursFields,
   type HoursDraft,
   NumberField,
@@ -82,6 +81,7 @@ import {
   type Verdict,
   type WorkStep,
   HOURS_PER_RUN_MAX,
+  HOURS_PER_RUN_MIN,
   RUNS_PER_YEAR_MAX,
   workApi,
 } from "@/lib/api/work";

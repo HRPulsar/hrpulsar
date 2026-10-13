@@ -18,7 +18,7 @@ matches the Employee Competences-tab formula.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.modules.assessment.models import (
     AnswerOption,
@@ -118,7 +118,7 @@ async def _seed_assessment_with_breakdown(
         status_id=done.id,
         initiator_id=employee.user_id,
         scale_id=scale.id,
-        finished_at=finished_at or datetime.now(timezone.utc),
+        finished_at=finished_at or datetime.now(UTC),
     )
     db.add(a)
     await db.flush()
@@ -354,7 +354,7 @@ class TestHrp129LevelProjection:
             status_id=done.id,
             initiator_id=employee.user_id,
             scale_id=scale.id,
-            finished_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(UTC),
         )
         db.add(a)
         await db.flush()
@@ -465,7 +465,7 @@ class TestHrp129LevelProjection:
             type_id=self_type.id,
             status_id=done.id,
             initiator_id=employee.user_id,
-            finished_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(UTC),
         )
         db.add(a)
         await db.flush()
@@ -519,7 +519,7 @@ class TestHrp129LevelProjection:
             target_level=adv,
             competence=comp,
             answered_levels=[basic, inter],
-            finished_at=datetime.now(timezone.utc) - timedelta(days=30),
+            finished_at=datetime.now(UTC) - timedelta(days=30),
         )
         await _seed_assessment_with_breakdown(
             db,
@@ -530,7 +530,7 @@ class TestHrp129LevelProjection:
             target_level=adv,
             competence=comp,
             answered_levels=[basic],
-            finished_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(UTC),
         )
 
         score, basis = await service._compute_match_score(db, card, employee.id)

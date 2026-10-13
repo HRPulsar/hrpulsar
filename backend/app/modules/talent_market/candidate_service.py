@@ -8,7 +8,7 @@ canonical functions.
 
 import logging
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from fastapi import status
 from sqlalchemy import and_, select
@@ -744,7 +744,7 @@ async def add_candidates_bulk(
     # HRP-242: any manual edit through the picker counts as a recompute
     # for the "last match" label — stamp even when the diff turned out
     # empty so a no-op Save still refreshes the header.
-    card.last_matched_at = datetime.now(timezone.utc)
+    card.last_matched_at = datetime.now(UTC)
     await db.commit()
     # HRP-211: bulk-added candidates on a Published card all get the
     # email; on a Draft card we stay silent (publish fans out later).
@@ -795,7 +795,7 @@ async def delete_candidate(
     # HRP-242: removing a candidate via the Change picker is also a
     # manual recompute — refresh the stamp so the header label stays
     # in sync with the current Candidates view.
-    card.last_matched_at = datetime.now(timezone.utc)
+    card.last_matched_at = datetime.now(UTC)
     await db.commit()
 
     if notify_employee_id is not None:
@@ -830,7 +830,7 @@ async def appoint_candidate(
         raise AppError("candidate_not_found", status.HTTP_404_NOT_FOUND)
 
     candidate.status = "appointed"
-    candidate.appointed_at = datetime.now(timezone.utc)
+    candidate.appointed_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(candidate)
 
@@ -1073,7 +1073,7 @@ async def react_to_card(
         )
     if row.response_at is not None:
         raise AppError("tm_already_reacted", status.HTTP_409_CONFLICT)
-    row.response_at = datetime.now(timezone.utc)
+    row.response_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(row)
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -74,11 +74,11 @@ async def _invited_evaluator(db: AsyncSession, tenant, user, *, owner=None):
         email="ext@example.com",
         evaluator_name="Ext Eval",
         status="opened",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        expires_at=datetime.now(UTC) + timedelta(days=7),
         allow_reediting=True,
         delivery_status="sent",
         invited_by=user.id,
-        consent_accepted_at=datetime.now(timezone.utc),
+        consent_accepted_at=datetime.now(UTC),
     )
     db.add(invite)
     await db.commit()

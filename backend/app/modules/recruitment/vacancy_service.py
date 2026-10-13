@@ -10,7 +10,7 @@ resolves - including any billing/audit wrapper installed on this module.
 import logging
 import uuid
 from collections.abc import Sequence
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from fastapi import UploadFile, status
 from sqlalchemy import ColumnElement, exists, func, select
@@ -959,7 +959,7 @@ async def upload_vacancy_attachment(
         mime_type=file.content_type or "application/octet-stream",
         size_bytes=size,
         uploaded_by=user_id,
-        uploaded_at=datetime.now(timezone.utc),
+        uploaded_at=datetime.now(UTC),
     )
     db.add(row)
     await db.commit()
@@ -1367,7 +1367,7 @@ async def archive_vacancy(
     if vacancy.archived_at is not None:
         raise AppError("vacancy_already_archived", status.HTTP_409_CONFLICT)
 
-    vacancy.archived_at = datetime.now(timezone.utc)
+    vacancy.archived_at = datetime.now(UTC)
     vacancy.archived_by = user_id
     vacancy.version = vacancy.version + 1
 
@@ -1600,7 +1600,7 @@ async def close_vacancy(
 
     _note_status_change(vacancy.status, "closed")
     vacancy.status = "closed"
-    vacancy.closed_at = datetime.now(timezone.utc)
+    vacancy.closed_at = datetime.now(UTC)
     vacancy.close_resolution = data.resolution
     vacancy.close_reason = data.close_reason
     vacancy.version = vacancy.version + 1
@@ -1616,7 +1616,7 @@ async def close_vacancy(
                 {
                     "from_stage_id": str(cv.stage_id) if cv.stage_id else None,
                     "to_stage_id": str(hired_stage.id),
-                    "changed_at": datetime.now(timezone.utc).isoformat(),
+                    "changed_at": datetime.now(UTC).isoformat(),
                     "comment": "vacancy closed as hired",
                     # HRP-982: who closed the vacancy moved the candidate.
                     "changed_by": str(user_id) if user_id else None,

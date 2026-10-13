@@ -13,9 +13,7 @@
  * is available; `registerUser` already depends on the same flag.
  */
 import { test, expect, type Page } from "./fixtures";
-import { registerUser } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser } from "./helpers";
 
 interface InviteSetup {
   cvId: string;

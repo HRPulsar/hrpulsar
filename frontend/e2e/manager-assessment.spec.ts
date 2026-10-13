@@ -1,7 +1,5 @@
 import { test, expect } from "./fixtures";
-import { registerUser, loginViaUI } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, loginViaUI } from "./helpers";
 
 test.describe("Manager assessments (HRP-186)", () => {
   test("candidate card mounts Assessments section and creates a round", async ({

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
 from sqlalchemy import update
@@ -119,7 +119,7 @@ async def touch_demo_tenant_activity(
             await own_session.execute(
                 update(Tenant)
                 .where(Tenant.id == tenant_id, Tenant.is_demo.is_(True))
-                .values(last_active_at=datetime.now(timezone.utc))
+                .values(last_active_at=datetime.now(UTC))
             )
     except Exception:  # noqa: BLE001
         logger.debug("demo activity: db touch failed", exc_info=True)

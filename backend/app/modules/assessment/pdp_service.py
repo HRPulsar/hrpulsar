@@ -1,12 +1,13 @@
 import logging
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from fastapi import status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import billing_hooks
 from app.core.errors import AppError
 from app.core.s3 import get_presigned_url
 from app.modules.assessment.models import (
@@ -75,10 +76,10 @@ def _is_past_deadline(deadline: datetime | date | None) -> bool:
     if deadline is None:
         return False
     if isinstance(deadline, datetime):
-        deadline_date = deadline.astimezone(timezone.utc).date()
+        deadline_date = deadline.astimezone(UTC).date()
     else:
         deadline_date = deadline
-    return deadline_date < datetime.now(timezone.utc).date()
+    return deadline_date < datetime.now(UTC).date()
 
 
 def _employee_full_name(p: PDP) -> str | None:
@@ -897,6 +898,7 @@ async def change_pdp_status(
     new_status: str,
     *,
     bypass_transition_check: bool = False,
+    user_id: uuid.UUID | None = None,
 ) -> dict:
     p = await _get_pdp(db, tenant_id, pdp_id)
 
@@ -996,13 +998,13 @@ async def change_pdp_status(
     p.status = new_status
 
     if new_status == "in_progress" and not p.started_at:
-        p.started_at = datetime.now(timezone.utc)
+        p.started_at = datetime.now(UTC)
     elif new_status in PDP_FINALIZED_STATUSES:
         # HRP-132: terminal-status timestamp drives the "Done at" /
         # "Cancelled at" label on PDP cards and the details page. We reuse
         # ``finished_at`` for both ``done`` and ``cancelled`` — the status
         # tells the renderer which copy to show.
-        p.finished_at = datetime.now(timezone.utc)
+        p.finished_at = datetime.now(UTC)
 
     # HRP-24: freeze items when entering review; clear the snapshot once the
     # plan moves on so the employee starts seeing live data again.
@@ -1014,6 +1016,23 @@ async def change_pdp_status(
     # GF12: Auto-save version on key transitions
     if new_status in PDP_VERSION_STATUSES:
         await _create_version_snapshot(db, pdp_id, new_status)
+
+    # HRP-313: the review cycle is billed on its two buttons — Submit for
+    # review and Return — while item checkbox toggles are free; every other
+    # transition keeps the flat update price. Charged through the
+    # billing_hooks seam (community no-ops, SaaS rebinds) because one
+    # function carries three price-list positions and the startup billing
+    # wrapper pins a single action code. Mirrors the wrapper's contract:
+    # resolve once, pass the pinned amount to precheck and consume, and
+    # bill right before the commit so a 402 rolls the transition back.
+    action = {"review": "pdp.submit_for_review", "returned": "pdp.return"}.get(
+        new_status, "pdp.update"
+    )
+    cost = await billing_hooks.resolve_cost(db, tenant_id, action)
+    await billing_hooks.precheck_action(db, tenant_id, action, amount_override=cost)
+    await billing_hooks.consume_action(
+        db, tenant_id, user_id, action, amount_override=cost
+    )
 
     await db.commit()
 
@@ -1600,7 +1619,7 @@ async def mark_item_passed(
     if p.status == "sent" and is_passed and is_owner:
         p.status = "in_progress"
         if not p.started_at:
-            p.started_at = datetime.now(timezone.utc)
+            p.started_at = datetime.now(UTC)
 
     await db.commit()
 

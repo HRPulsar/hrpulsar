@@ -1523,7 +1523,7 @@ class TestGenerateReportTask:
         )
         cv_id = uuid.UUID(str(cv["id"]))
 
-        now = _dt.datetime.now(_dt.timezone.utc)
+        now = _dt.datetime.now(_dt.UTC)
         interview_id = None
         if mode == "full":
             analysed = Interview(

@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from datetime import UTC
 from unittest.mock import patch
 
 import pytest
@@ -208,7 +209,7 @@ class TestConfiguredProviders:
         provider's row list, so a stale ciphertext on one row was still
         reported after the loop broke out on an unrelated local row — which
         needs no key at all."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         broken = LLMProviderConfig(
             tenant_id=tenant.id,
@@ -216,7 +217,7 @@ class TestConfiguredProviders:
             model="qwen2.5-72b",
             api_key_encrypted="not-a-valid-ciphertext",
             is_active=True,
-            updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
         local = LLMProviderConfig(
             tenant_id=tenant.id,
@@ -224,7 +225,7 @@ class TestConfiguredProviders:
             model="qwen2.5-72b",
             is_active=True,
             settings={"base_url": "http://ollama.internal:11434/v1"},
-            updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
         db.add_all([broken, local])
         await db.commit()

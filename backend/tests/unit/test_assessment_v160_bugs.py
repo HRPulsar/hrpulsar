@@ -19,7 +19,7 @@ Coverage:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.assessment import service
@@ -67,7 +67,7 @@ async def _make_extra_employee(db: AsyncSession, tenant, suffix: str):
         first_name=f"F{suffix}",
         last_name=f"L{suffix}",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -420,7 +420,7 @@ class TestBug11AssessmentEditableTitleAndDeadline:
         created = await _make_assessment(
             db, tenant, user, employee, title="Original title"
         )
-        new_deadline = datetime.now(timezone.utc) + timedelta(days=7)
+        new_deadline = datetime.now(UTC) + timedelta(days=7)
 
         # Service-level API expected by the upcoming PATCH endpoint.
         # AttributeError here is itself a documented failure of the bug.
@@ -481,7 +481,7 @@ class TestBug11AssessmentEditableTitleAndDeadline:
         created = await _make_assessment(db, tenant, user, employee)
 
         # First set a deadline.
-        seed_deadline = datetime.now(timezone.utc) + timedelta(days=14)
+        seed_deadline = datetime.now(UTC) + timedelta(days=14)
         r1 = await auth_client.patch(
             f"/api/assessments/{created['id']}",
             json={"ended_at": seed_deadline.isoformat()},

@@ -9,7 +9,7 @@ import base64
 import io
 import uuid
 import zipfile
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from unittest.mock import patch
 
 import pytest
@@ -334,7 +334,7 @@ class TestImportTask:
             ).scalars()
         }
         accounts[resent].token_version += 1  # what a resend from the card does
-        accounts[verified].email_verified_at = datetime.now(timezone.utc)
+        accounts[verified].email_verified_at = datetime.now(UTC)
         await db.commit()
 
         [(user_ids, locale, job_id)] = queued
@@ -644,7 +644,7 @@ class TestResendSetPasswordLink:
         """Long-standing users have ``first_login_at`` NULL (never backfilled);
         a resend would bump their token version and log them out."""
         emp, imported = imported_employee
-        imported.email_verified_at = datetime.now(timezone.utc)
+        imported.email_verified_at = datetime.now(UTC)
         await db.commit()
         assert imported.first_login_at is None
 

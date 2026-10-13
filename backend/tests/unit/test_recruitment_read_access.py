@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import ast
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest_asyncio
@@ -75,7 +75,7 @@ async def _user_with_role(db: AsyncSession, tenant, code: str) -> User:
         first_name=code,
         last_name="Reader",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "./fixtures";
 
 import {
+  API_BASE,
   createAssessment,
   setAuthTokens,
   setupFullTenant,
@@ -145,7 +146,7 @@ test.describe("Rating scale editor — CRUD UI", () => {
     // Create one through the API to keep the test focused.
     const title = `Editable scale ${Date.now()}`;
     const created = await page.request.post(
-      "http://localhost:8100/api/answer-scales",
+      `${API_BASE}/answer-scales`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: {

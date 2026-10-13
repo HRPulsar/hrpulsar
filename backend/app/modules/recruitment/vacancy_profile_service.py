@@ -7,7 +7,7 @@ the delegating namespace.
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import status
 from sqlalchemy import select
@@ -249,7 +249,7 @@ async def generate_profile_now(
                 status.HTTP_409_CONFLICT,
             )
 
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     session = VacancyProfileSession(
         tenant_id=tenant_id,
         vacancy_id=vacancy_id,
@@ -319,7 +319,7 @@ async def generate_profile_now(
             # User dismissed mid-LLM; don't reopen the banner as "failed".
             return
         sess.status = "failed"
-        sess.completed_at = datetime.now(timezone.utc)
+        sess.completed_at = datetime.now(UTC)
         sess.error_message = error[:1000]
         await db.commit()
 
@@ -405,7 +405,7 @@ async def generate_profile_now(
     # Session row is already held under FOR UPDATE; flip to ready and let
     # the commit release the lock + the result write atomically.
     session_row.status = "ready"
-    session_row.completed_at = datetime.now(timezone.utc)
+    session_row.completed_at = datetime.now(UTC)
     session_row.result_payload = {
         "profile_data": profile_data,
         "coverage_note": coverage_note,
@@ -494,7 +494,7 @@ async def cancel_active_profile_session(
         return {"status": "no_active_session"}
     prior_status = row.status
     row.status = "cancelled"
-    row.completed_at = datetime.now(timezone.utc)
+    row.completed_at = datetime.now(UTC)
     await db.commit()
     return {
         "status": "cancelled",

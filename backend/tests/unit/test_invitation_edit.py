@@ -1,7 +1,7 @@
 """Tests for INV2/INV3: PATCH /api/invitations/{id} and PATCH /api/invitations/{id}/email."""
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from unittest.mock import patch
 
 import pytest
@@ -206,7 +206,7 @@ class TestUpdateInvitation:
         db_inv = await db.get(Invitation, inv["id"])
         assert db_inv is not None
         db_inv.status = "accepted"
-        db_inv.accepted_at = datetime.now(timezone.utc)
+        db_inv.accepted_at = datetime.now(UTC)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:
@@ -439,7 +439,7 @@ async def _make_user_with_role(
         first_name=label.title(),
         last_name="User",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

@@ -8,7 +8,7 @@ canonical functions.
 
 import logging
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import sqlalchemy as sa
 from fastapi import status
@@ -481,7 +481,7 @@ async def publish_card(
         )
     card.is_published = True
     card.status = "published"
-    card.published_at = datetime.now(timezone.utc)
+    card.published_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(card)
     # HRP-211: fan out the "you're a (matched) candidate" emails to
@@ -523,7 +523,7 @@ async def complete_card(
             "tm_complete_requires_appointed",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     card.status = "completed"
     card.completed_at = now
     card.closed_at = now
@@ -571,7 +571,7 @@ async def cancel_card(
             )
         ).all()
     ]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     card.status = "cancelled"
     card.cancelled_at = now
     card.closed_at = now

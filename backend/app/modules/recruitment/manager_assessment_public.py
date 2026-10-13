@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import status
@@ -85,14 +85,14 @@ async def is_ip_blocked(db: AsyncSession, ip: str) -> bool:
     block = result.scalar_one_or_none()
     if block is None:
         return False
-    return block.blocked_until > datetime.now(timezone.utc)
+    return block.blocked_until > datetime.now(UTC)
 
 
 async def register_invalid_attempt(db: AsyncSession, ip: str) -> None:
     """Track a failed lookup and trip the deny-list if threshold is hit."""
     if not ip:
         return
-    cutoff = datetime.now(timezone.utc) - timedelta(
+    cutoff = datetime.now(UTC) - timedelta(
         minutes=PUBLIC_RATE_LIMIT_WINDOW_MINUTES
     )
     result = await db.execute(
@@ -108,7 +108,7 @@ async def register_invalid_attempt(db: AsyncSession, ip: str) -> None:
     if block is not None:
         block.failures += 1
         if block.failures >= PUBLIC_RATE_LIMIT_INVALID_THRESHOLD:
-            block.blocked_until = datetime.now(timezone.utc) + timedelta(
+            block.blocked_until = datetime.now(UTC) + timedelta(
                 hours=PUBLIC_RATE_LIMIT_BLOCK_HOURS
             )
             block.reason = "invalid_token_threshold"
@@ -118,7 +118,7 @@ async def register_invalid_attempt(db: AsyncSession, ip: str) -> None:
         ip=ip,
         reason="invalid_token",
         failures=1,
-        blocked_until=datetime.now(timezone.utc),
+        blocked_until=datetime.now(UTC),
     )
     db.add(block)
     await db.commit()
@@ -168,7 +168,7 @@ async def resolve_invite_by_token(
         # HRP-359 REDO: declining is terminal — the token dies with it.
         # Refreshing the stub page must not resurface the consent screen.
         raise AppError("invitation_declined", status.HTTP_410_GONE)
-    if invite.expires_at < datetime.now(timezone.utc):
+    if invite.expires_at < datetime.now(UTC):
         # Only live invites flip to ``expired`` — a terminal status
         # (submitted / declined / revoked) must survive a late link visit,
         # otherwise a completed evaluation would show as expired and
@@ -213,7 +213,7 @@ async def _mark_opened(db: AsyncSession, invite: AssessmentInvite) -> None:
     if invite.status == "pending":
         invite.status = "opened"
     if invite.opened_at is None:
-        invite.opened_at = datetime.now(timezone.utc)
+        invite.opened_at = datetime.now(UTC)
     await db.commit()
     await audit_service.record_event(
         db,
@@ -769,9 +769,9 @@ async def public_accept_consent(
     if invite.status == "pending":
         invite.status = "opened"
     if invite.opened_at is None:
-        invite.opened_at = datetime.now(timezone.utc)
+        invite.opened_at = datetime.now(UTC)
     if invite.consent_accepted_at is None:
-        invite.consent_accepted_at = datetime.now(timezone.utc)
+        invite.consent_accepted_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(invite)
     await audit_service.record_event(
@@ -798,7 +798,7 @@ async def public_decline(
         # scores already feed the round aggregate (review [2]).
         raise AppError("evaluation_already_submitted", status.HTTP_409_CONFLICT)
     invite.status = "declined"
-    invite.declined_at = datetime.now(timezone.utc)
+    invite.declined_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(invite)
     await audit_service.record_event(
@@ -927,11 +927,11 @@ async def public_submit(
     # told once, on the sheet actually arriving, not on every correction.
     first_submission = invite.status != "submitted"
     a.status = "submitted"
-    a.submitted_at = datetime.now(timezone.utc)
+    a.submitted_at = datetime.now(UTC)
     if final_notes is not None:
         a.final_notes = final_notes
     invite.status = "submitted"
-    invite.submitted_at = datetime.now(timezone.utc)
+    invite.submitted_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(invite)
     cv = await db.get(CandidateVacancy, invite.candidate_vacancy_id)

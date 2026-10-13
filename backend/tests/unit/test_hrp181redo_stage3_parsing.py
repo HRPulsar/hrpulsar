@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 
 import pytest
@@ -532,7 +532,7 @@ class TestDedupPreview:
             tenant_id=tenant.id,
             full_name="Archived Twin",
             email="ghost@example.com",
-            archived_at=datetime.now(timezone.utc) - timedelta(days=1),
+            archived_at=datetime.now(UTC) - timedelta(days=1),
         )
         db.add_all([active, archived])
         await db.flush()

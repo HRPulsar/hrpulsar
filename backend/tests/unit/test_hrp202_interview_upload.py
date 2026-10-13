@@ -8,7 +8,7 @@ URL TTL and antivirus verdict handling.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.recruitment import interview_service, service
@@ -88,7 +88,7 @@ async def _consent_interview(db, tenant, user, cv) -> Interview:
     row = (
         await db.execute(select(Interview).where(Interview.id == interview["id"]))
     ).scalar_one()
-    row.consent_signed_at = datetime.now(timezone.utc)
+    row.consent_signed_at = datetime.now(UTC)
     await db.commit()
     await sign_consent(db, tenant.id, cv["candidate_id"])
     return row
@@ -191,7 +191,7 @@ class TestUploadSessions:
         assert session_row.status == "active"
         assert session_row.s3_upload_id == "u-1"
         assert session_row.uploaded_bytes == 0
-        assert session_row.expires_at > datetime.now(timezone.utc)
+        assert session_row.expires_at > datetime.now(UTC)
 
     async def test_init_rejects_unsupported_mime(self, db, tenant, user, monkeypatch):
         from app.core import s3 as s3_module
@@ -342,7 +342,7 @@ class TestUploadSessions:
             s3_key=f"{tenant.id}/interviews/{interview.id}/upload",
             s3_parts=[],
             status="active",
-            expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            expires_at=datetime.now(UTC) - timedelta(hours=1),
             created_by=user.id,
         )
         db.add(expired)
@@ -415,7 +415,7 @@ class TestArchiveRestoreReplace:
         row = (
             await db.execute(select(Interview).where(Interview.id == first["id"]))
         ).scalar_one()
-        row.archived_at = datetime.now(timezone.utc) - timedelta(days=120)
+        row.archived_at = datetime.now(UTC) - timedelta(days=120)
         row.status = "archived"
         await db.commit()
 
@@ -555,8 +555,8 @@ class TestConsentInheritance:
                 email="c@example.com",
                 token=uuid.uuid4().hex,
                 status="signed",
-                signed_at=datetime.now(timezone.utc),
-                expires_at=datetime.now(timezone.utc) + timedelta(days=14),
+                signed_at=datetime.now(UTC),
+                expires_at=datetime.now(UTC) + timedelta(days=14),
                 requested_by=user.id,
             )
         )

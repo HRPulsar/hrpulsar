@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -50,7 +50,7 @@ async def _completed_report(
         status=status,
         generated_by=user.id,
         file_id=file_row.id if status == "completed" else None,
-        completed_at=datetime.now(timezone.utc) if status == "completed" else None,
+        completed_at=datetime.now(UTC) if status == "completed" else None,
     )
     db.add(report)
     await db.commit()
@@ -74,7 +74,7 @@ class TestReportShare:
                 message="Have a look",
             )
         assert share["token"]
-        assert share["expires_at"] > datetime.now(timezone.utc)
+        assert share["expires_at"] > datetime.now(UTC)
         assert share["recipients"] == ["a@example.com"]
         assert share["share_url"].endswith(share["token"])
 
@@ -150,7 +150,7 @@ class TestReportShare:
                 )
             )
         ).scalar_one()
-        row.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+        row.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:

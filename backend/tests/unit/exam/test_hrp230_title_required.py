@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from app.modules.exam import service
@@ -30,7 +30,7 @@ class TestUpdateMassExam:
         me = await service.create_mass_exam(
             db, tenant.id, user.id, MassExamCreate(title="HRP-230")
         )
-        future = datetime(2099, 12, 1, tzinfo=timezone.utc)
+        future = datetime(2099, 12, 1, tzinfo=UTC)
         updated = await service.update_mass_exam(
             db, tenant.id, me["id"], MassExamUpdate(ended_at=future)
         )
@@ -43,7 +43,7 @@ class TestUpdateMassExam:
             user.id,
             MassExamCreate(
                 title="HRP-230 clear",
-                ended_at=datetime(2099, 12, 1, tzinfo=timezone.utc),
+                ended_at=datetime(2099, 12, 1, tzinfo=UTC),
             ),
         )
         updated = await service.update_mass_exam(

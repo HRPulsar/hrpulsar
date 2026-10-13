@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { setAuthTokens, setupFullTenant } from "./helpers";
+import { API_BASE, setAuthTokens, setupFullTenant } from "./helpers";
 
 /**
  * Regression tests for Assessment bugs reported by QA against v1.5.0
@@ -15,15 +15,13 @@ import { setAuthTokens, setupFullTenant } from "./helpers";
  *       deadline (inline edit, parity with PDP).
  */
 
-const API = "http://localhost:8100/api";
-
 async function createMassAssessment(
   page: import("@playwright/test").Page,
   accessToken: string,
   employeeIds: string[],
   title: string,
 ): Promise<{ id: string; assessments: { id: string; employee_id: string }[] }> {
-  const resp = await page.request.post(`${API}/assessment-groups`, {
+  const resp = await page.request.post(`${API_BASE}/assessment-groups`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     data: {
       title,
@@ -52,7 +50,7 @@ test.describe("Assessment v1.5.0 bugs to fix in v1.6.0", () => {
     refreshToken = setup.refreshToken;
 
     // A standalone assessment for bug #11.
-    const standaloneResp = await page.request.post(`${API}/assessments`, {
+    const standaloneResp = await page.request.post(`${API_BASE}/assessments`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       data: {
         employee_id: setup.employeeId,

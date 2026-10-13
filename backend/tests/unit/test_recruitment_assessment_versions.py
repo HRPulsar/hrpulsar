@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from app.modules.recruitment import service, settings_service
@@ -223,7 +223,7 @@ class TestAssessmentHistory:
             first_name="Other",
             last_name="Eval",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(other)
         await db.commit()
@@ -503,7 +503,7 @@ class TestAssessmentRevert:
             first_name="Bob",
             last_name="Admin",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(bob)
         await db.commit()

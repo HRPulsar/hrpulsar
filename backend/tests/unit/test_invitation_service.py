@@ -1,7 +1,7 @@
 """Tests for GF3: User Invitations."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.auth import service
@@ -314,7 +314,7 @@ class TestAcceptInvitation:
     ):
         inv = await self._create_pending(db, user, tenant, position)
         # Manually expire it
-        inv.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        inv.expires_at = datetime.now(UTC) - timedelta(hours=1)
         await db.commit()
 
         data = AcceptInvitationRequest(
@@ -435,7 +435,7 @@ class TestHrp195AcceptAsDivisionManager:
         # Build the "previous manager": an Employee user already running
         # this division and no other one — exactly the spec §5 trigger
         # for auto-downgrade.
-        from datetime import date, datetime, timezone
+        from datetime import date, datetime
 
         from app.core.security import hash_password
         from app.modules.auth.models import User, user_roles
@@ -447,7 +447,7 @@ class TestHrp195AcceptAsDivisionManager:
             first_name="Prev",
             last_name="Manager",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(prev_user)
         await db.commit()

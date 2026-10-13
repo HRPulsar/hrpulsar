@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -432,7 +432,7 @@ class TestEmailLogService:
         db.add(log)
         await db.commit()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         found = await update_email_log_status(db, "msg-deliver-test", "delivered", now)
         assert found is True
 

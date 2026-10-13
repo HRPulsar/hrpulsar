@@ -7,6 +7,7 @@ merely participated in.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 from app.modules.assessment import service
@@ -225,7 +226,7 @@ class TestHRP243EmployeeResultsVisibility:
         await _set_status(db, assessment_id, "done", assessment_statuses)
 
         # Spawn a separate user, attach as peer participant.
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.core.security import hash_password
         from app.modules.auth.models import User as AuthUser
@@ -236,7 +237,7 @@ class TestHRP243EmployeeResultsVisibility:
             first_name="Peer",
             last_name="Coworker",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(peer_user)
         await db.commit()

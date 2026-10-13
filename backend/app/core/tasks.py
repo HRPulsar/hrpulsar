@@ -10,6 +10,7 @@ model imports stops core from structurally knowing every domain.
 """
 
 import logging
+from datetime import UTC
 
 from app.core.celery_app import celery
 from app.core.email import send_email
@@ -173,7 +174,7 @@ def write_celery_heartbeat() -> None:
     /health flips celery to error within 90s and the public status page picks
     that up on its next probe (~60s later).
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     import redis
 
@@ -183,7 +184,7 @@ def write_celery_heartbeat() -> None:
     try:
         client.set(
             "status:celery:heartbeat",
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
             ex=90,
         )
     finally:

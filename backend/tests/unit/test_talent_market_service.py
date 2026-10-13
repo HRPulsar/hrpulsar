@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC
 
 import pytest
 from app.modules.competence.models import Competence, CompetenceGroup, SkillLevel
@@ -1007,7 +1008,7 @@ async def add_done_assessment(
 ):
     """Spin up a `done` Assessment with one AssessmentCompetence and
     one AssessmentResult — the minimum the matcher needs to see."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.modules.assessment.models import (
         Assessment,
@@ -1041,7 +1042,7 @@ async def add_done_assessment(
         type_id=tp.id,
         status_id=st.id,
         initiator_id=employee.user_id,
-        finished_at=finished_at or datetime.now(timezone.utc),
+        finished_at=finished_at or datetime.now(UTC),
     )
     db.add(a)
     await db.flush()
@@ -1162,7 +1163,7 @@ class TestComputeMatchHRP129:
         """If several `done` assessments cover the same Required Competence
         at the matching skill_level, the matcher picks the most recently
         finished one — even if its percent is lower."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         card, comps, sl = await self._setup(db, tenant, user, 1)
         # Older assessment scored higher than the newer one.
@@ -1173,7 +1174,7 @@ class TestComputeMatchHRP129:
             comps[0],
             sl,
             95,
-            finished_at=datetime.now(timezone.utc) - timedelta(days=30),
+            finished_at=datetime.now(UTC) - timedelta(days=30),
         )
         await self._add_done_assessment(
             db,
@@ -1182,7 +1183,7 @@ class TestComputeMatchHRP129:
             comps[0],
             sl,
             60,
-            finished_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(UTC),
         )
 
         score, _ = await service._compute_match_score(db, card, employee.id)

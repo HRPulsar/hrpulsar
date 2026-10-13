@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -81,7 +82,7 @@ async def _candidate(
 
 async def _tenant_user_with_role(db: AsyncSession, tenant, role_code: str):
     """An ordinary member of the tenant holding exactly one role."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.core.security import hash_password
     from app.modules.auth.models import Role, user_roles
@@ -102,7 +103,7 @@ async def _tenant_user_with_role(db: AsyncSession, tenant, role_code: str):
         first_name="Plain",
         last_name="Member",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(member)
     await db.commit()
@@ -121,7 +122,7 @@ async def _question_set(
     competence_slugs: list[str | None],
     archived: bool = False,
 ) -> QuestionSet:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     qs = QuestionSet(
         tenant_id=tenant.id,
@@ -130,7 +131,7 @@ async def _question_set(
         name=name,
         status="ready",
         generation_mode="initial",
-        archived_at=datetime.now(timezone.utc) if archived else None,
+        archived_at=datetime.now(UTC) if archived else None,
     )
     db.add(qs)
     await db.flush()

@@ -6,7 +6,7 @@ new POST /talent-market/{card_id}/recompute endpoint.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.talent_market import service
@@ -43,7 +43,7 @@ async def test_auto_populate_stamps_last_matched_at(
     card_dict = await _make_card(db, tenant.id, user.id)
     comp = await _make_competence(db, tenant.id, "C")
     sl = await _make_skill_level(db, tenant.id, sort_index=1)
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     await service.add_required_competences(
         db,
         tenant.id,
@@ -66,7 +66,7 @@ async def test_bulk_picker_save_stamps_last_matched_at(
 ) -> None:
     card_dict = await _make_card(db, tenant.id, user.id)
     emp = await _make_employee(db, tenant.id, name="EmpA")
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     await service.add_candidates_bulk(
         db,
         tenant.id,

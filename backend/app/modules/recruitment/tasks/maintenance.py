@@ -7,7 +7,7 @@ the task_failure status map).
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from celery.signals import task_failure
 
@@ -96,7 +96,7 @@ def cleanup_stuck_recruitment_tasks_task(self) -> dict:
 
     sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
     engine = create_engine(sync_url)
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=_STUCK_AGE_MINUTES)
+    cutoff = datetime.now(UTC) - timedelta(minutes=_STUCK_AGE_MINUTES)
     reset = {
         "interviews_transcription": 0,
         "interviews_analysis": 0,
@@ -202,7 +202,7 @@ def cleanup_stuck_recruitment_tasks_task(self) -> dict:
             # limit) stays in flight - its message acked, never redelivered.
             # Past the task's own time limit no live job can still be
             # filling it; its hold expired with the same lifetime.
-            qs_cutoff = datetime.now(timezone.utc) - timedelta(
+            qs_cutoff = datetime.now(UTC) - timedelta(
                 seconds=celery.conf.task_time_limit
             )
             qs_rows = (
@@ -258,7 +258,7 @@ def cleanup_orphan_upload_sessions_task(self) -> dict:
     aborted = 0
     try:
         with Session(engine) as db:
-            cutoff = datetime.now(timezone.utc)
+            cutoff = datetime.now(UTC)
             rows = (
                 db.execute(
                     select(UploadSession).where(
@@ -369,7 +369,7 @@ def cleanup_detached_resume_files_task(self) -> dict:
 
     sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
     engine = create_engine(sync_url)
-    cutoff = datetime.now(timezone.utc) - timedelta(
+    cutoff = datetime.now(UTC) - timedelta(
         days=_DETACHED_RESUME_RETENTION_DAYS
     )
     removed = 0

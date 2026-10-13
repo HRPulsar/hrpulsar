@@ -13,7 +13,7 @@ import re
 import unicodedata
 import uuid
 from collections.abc import Iterable
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import quote
 
 from fastapi import UploadFile, status
@@ -530,7 +530,7 @@ def _history_entry(
     return {
         "from_stage_id": str(old_stage_id) if old_stage_id else None,
         "to_stage_id": str(new_stage_id),
-        "changed_at": datetime.now(timezone.utc).isoformat(),
+        "changed_at": datetime.now(UTC).isoformat(),
         "comment": comment,
         "changed_by": str(user_id) if user_id else None,
     }
@@ -2037,7 +2037,7 @@ async def patch_candidate_vacancy(
         cv.status = updates["status"]
     if "manager_score" in updates:
         cv.manager_score = updates["manager_score"]
-        cv.manager_score_updated_at = datetime.now(timezone.utc)
+        cv.manager_score_updated_at = datetime.now(UTC)
 
     cv.version = cv.version + 1
     await db.commit()
@@ -2325,7 +2325,7 @@ async def archive_candidate(
     candidate = await _load_canonical_candidate(db, tenant_id, candidate_id)
     if candidate.archived_at is not None:
         return  # idempotent
-    candidate.archived_at = datetime.now(timezone.utc)
+    candidate.archived_at = datetime.now(UTC)
     await db.commit()
 
 
@@ -2534,7 +2534,7 @@ async def get_resumes_parsing_status(
     if file_ids:
         query = query.where(CandidateFile.id.in_(file_ids))
     else:
-        cutoff = datetime.now(timezone.utc) - timedelta(
+        cutoff = datetime.now(UTC) - timedelta(
             hours=_DETACHED_FILES_RECENT_HOURS
         )
         query = query.join(File, File.id == CandidateFile.file_id).where(

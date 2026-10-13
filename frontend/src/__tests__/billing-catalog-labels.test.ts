@@ -28,6 +28,13 @@ describe("billing price-list labels", () => {
     expect(t.has("billingCategory.some_category_added_later")).toBe(false);
   });
 
+  it("keeps the label for the retired mark_item code", () => {
+    // HRP-313 dropped pdp.mark_item from the price list, but history rows
+    // from before HRP-313 still carry the code — the key must survive any
+    // dead-key sweep or those rows lose their de/ru labels.
+    expect(t.has("billingAction.mark_item")).toBe(true);
+  });
+
   it("labels every category the price list can render", () => {
     // The category column had no guard: `billingCategory.skill_level`
     // deliberately reads "Skill Levels" where humanizeAction produced

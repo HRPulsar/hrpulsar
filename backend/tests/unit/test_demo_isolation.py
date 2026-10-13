@@ -26,7 +26,7 @@ Shape:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 import pytest_asyncio
@@ -165,7 +165,7 @@ async def _make_world(
         first_name=label.title(),
         last_name="Owner",
         tenant_id=w.tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(w.user)
     await db.flush()

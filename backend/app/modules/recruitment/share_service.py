@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import status
 from sqlalchemy import select
@@ -121,7 +121,7 @@ async def create_share(
         tenant_id=tenant_id,
         report_id=report_id,
         token=token,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=expires_in_days),
+        expires_at=datetime.now(UTC) + timedelta(days=expires_in_days),
         recipients=list(recipients),
         message=message,
         created_by=user_id,
@@ -260,7 +260,7 @@ async def revoke_share(
         raise AppError("share_link_not_found", status.HTTP_404_NOT_FOUND)
     if share.revoked_at is not None:
         return
-    share.revoked_at = datetime.now(timezone.utc)
+    share.revoked_at = datetime.now(UTC)
     await db.commit()
     await audit_service.record_event(
         db,
@@ -284,7 +284,7 @@ async def open_share(db: AsyncSession, token: str) -> dict:
         raise AppError("share_link_not_found", status.HTTP_404_NOT_FOUND)
     if share.revoked_at is not None:
         raise AppError("share_link_revoked", status.HTTP_404_NOT_FOUND)
-    if share.expires_at < datetime.now(timezone.utc):
+    if share.expires_at < datetime.now(UTC):
         raise AppError("share_link_expired", status.HTTP_410_GONE)
 
     report = (
@@ -309,7 +309,7 @@ async def open_share(db: AsyncSession, token: str) -> dict:
         download_url = get_presigned_url(file_row.path, expires_in=900)
 
     share.open_count = (share.open_count or 0) + 1
-    share.last_opened_at = datetime.now(timezone.utc)
+    share.last_opened_at = datetime.now(UTC)
     await db.commit()
 
     await audit_service.record_event(

@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   registerUser,
   setAuthTokens,
   createDictionaryItem,
@@ -8,8 +9,6 @@ import {
   createIndicator,
   pickFirstSkillLevel,
 } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
 
 // HRP-99: each `upsert_matrix_bulk` call mutated grade_competence_links via
 // db.add / db.delete on a session opened with expire_on_commit=False, so

@@ -110,6 +110,10 @@ ERROR_CODES = (
     "output_truncated",
     # HRP-1005: the workspace's processor list allows no AI provider.
     "no_allowed_processor",
+    # HRP-854: a refused credit hold on the 402 path - the reader's locale
+    # renders "credit limit reached" instead of the stored en message.
+    "credits_limit_reached",
+    "credits_demo_quota_exhausted",
 )
 
 
@@ -575,6 +579,10 @@ class WorkStepSkill(BaseModel, TenantMixin):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="generating", server_default="generating"
     )
+    # The machine-readable cause (HRP-854): the reader's locale renders the
+    # text from it; ``error_message`` stays as the fallback for rows written
+    # before the column existed and for API readers.
+    error_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)

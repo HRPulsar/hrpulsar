@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import status
 from sqlalchemy import delete, exists, select, update
@@ -266,7 +266,7 @@ def _issue_consent_request(
     Shared by the first send and by HRP-684's reissue of an expired link,
     so both mint the token and the lifetime the same way.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return ConsentRequest(
         tenant_id=tenant_id,
         candidate_id=candidate_id,
@@ -282,7 +282,7 @@ def _issue_consent_request(
 
 def _utc(value: datetime) -> datetime:
     """Postgres may hand a timestamp back naive; compare everything in UTC."""
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 async def _deliver_consent_email(
@@ -390,7 +390,7 @@ async def resend_consent_request(
         raise AppError("consent_template_not_found", status.HTTP_404_NOT_FOUND)
 
     email = candidate.email or request.email
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires_at = _utc(request.expires_at)
     if expires_at <= now:
         issued_for = max(
@@ -518,13 +518,13 @@ async def sign_consent(
     # Only a pending request signs: a superseded one (a newer send, or a
     # resend to a corrected address) is as dead as an expired one - its
     # letter may have gone to someone else.
-    if request.status != "pending" or request.expires_at < datetime.now(timezone.utc):
+    if request.status != "pending" or request.expires_at < datetime.now(UTC):
         if request.status == "pending":
             request.status = "expired"
             await db.commit()
         raise AppError("consent_link_expired", status.HTTP_410_GONE)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     request.status = "signed"
     request.signed_at = now
     request.signed_ip = (signed_ip or "")[:45] or None
@@ -823,7 +823,7 @@ async def _record_signed_consent(
         )
         db.add(template)
         await db.flush()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     request = ConsentRequest(
         tenant_id=tenant_id,
         candidate_id=candidate.id,
@@ -940,7 +940,7 @@ async def revoke_consent(db: AsyncSession, token: str) -> dict:
         entity_type="consent",
         entity_id=request.id,
         payload_diff={
-            "revoked_at": datetime.now(timezone.utc).isoformat(),
+            "revoked_at": datetime.now(UTC).isoformat(),
             "requests": len(signed),
         },
     )

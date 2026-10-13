@@ -9,7 +9,7 @@ backend half pins the ordering contract.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 from app.modules.talent_market import service
@@ -23,7 +23,7 @@ async def cards_across_statuses(
     db: AsyncSession, tenant, user
 ) -> dict[str, uuid.UUID]:
     """Cards: 2 active (newer first), 2 completed (newer first), 2 cancelled."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async def _mk(title: str) -> TalentCard:
         c = await service.create_card(

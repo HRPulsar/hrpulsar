@@ -8,7 +8,7 @@ desync the lifecycle invariant the UI relies on).
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from app.modules.assessment import service
@@ -47,7 +47,7 @@ async def _make_extra_employee(db: AsyncSession, tenant, suffix: str):
         first_name=f"F{suffix}",
         last_name=f"L{suffix}",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
@@ -188,7 +188,7 @@ async def test_verify_signup_request_is_idempotent_on_repeat(
         email="verify-2@example.com",
         first_name="V",
         status="pending_moderation",
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(row)
     await db.commit()
@@ -220,7 +220,7 @@ async def test_verify_signup_request_rejects_expired_token(
     expired_payload = {
         "sub": str(row.id),
         "type": "signup_verify",
-        "exp": datetime.now(timezone.utc) - timedelta(minutes=1),
+        "exp": datetime.now(UTC) - timedelta(minutes=1),
     }
     token = jwt.encode(
         expired_payload, settings.jwt_secret, algorithm=settings.jwt_algorithm
@@ -240,7 +240,7 @@ async def test_verify_signup_request_rejects_finalized(
         email="approved@example.com",
         first_name="A",
         status="approved",
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(row)
     await db.commit()
@@ -336,7 +336,7 @@ def _reminder_events(events) -> list[dict]:
 
 def _verified_long_ago() -> datetime:
     """Past the reminder age gate — a genuinely stuck request."""
-    return datetime.now(timezone.utc) - timedelta(hours=2)
+    return datetime.now(UTC) - timedelta(hours=2)
 
 
 async def test_repeat_verify_click_publishes_moderation_reminder(
@@ -500,7 +500,7 @@ async def test_no_reminder_within_age_gate(
         email="fresh@example.com",
         first_name="F",
         status="pending_moderation",
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(row)
     await db.commit()

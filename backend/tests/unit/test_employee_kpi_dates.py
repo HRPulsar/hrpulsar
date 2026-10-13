@@ -8,7 +8,7 @@ events log on every render.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from app.modules.auth import service as auth_service
@@ -37,7 +37,7 @@ class TestStatusChangedAt:
         self, db: AsyncSession, tenant, employee, user
     ) -> None:
         # Seed a known value so we can verify it does not move.
-        employee.status_changed_at = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        employee.status_changed_at = datetime(2024, 6, 1, tzinfo=UTC)
         await db.commit()
         await db.refresh(employee)
         seeded = employee.status_changed_at
@@ -79,7 +79,7 @@ class TestStatusChangedAt:
             first_name="Kpi",
             last_name="Create",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(u)
         await db.commit()
@@ -112,7 +112,7 @@ class TestFirstLoginAt:
             first_name="First",
             last_name="Login",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(u)
         await db.commit()
@@ -147,7 +147,7 @@ class TestFirstLoginAt:
             first_name="Failed",
             last_name="Login",
             tenant_id=tenant.id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(u)
         await db.commit()
@@ -168,7 +168,7 @@ class TestFirstLoginAt:
     ) -> None:
         # Stamp manually — covers the read path even when the user is
         # never funnelled through the login fixture.
-        user.first_login_at = datetime(2025, 9, 1, 12, 0, tzinfo=timezone.utc)
+        user.first_login_at = datetime(2025, 9, 1, 12, 0, tzinfo=UTC)
         await db.commit()
 
         payload = await employee_service.get_employee(db, tenant.id, employee.id)

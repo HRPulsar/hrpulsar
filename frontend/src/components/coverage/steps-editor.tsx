@@ -50,7 +50,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  HOURS_PER_RUN_MIN,
   HoursFields,
   draftOf,
   hoursOutOfRange,
@@ -60,6 +59,7 @@ import { BADGE_COLOR } from "@/lib/badge-tones";
 import { EECreditCostBadge } from "@/lib/ee-hooks";
 import {
   HOURS_PER_RUN_MAX,
+  HOURS_PER_RUN_MIN,
   RECLASSIFY_ACTION,
   RUNS_PER_YEAR_MAX,
   isTentative,

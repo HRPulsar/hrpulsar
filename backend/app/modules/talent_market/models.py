@@ -66,16 +66,16 @@ class TalentCard(BaseModel, TenantMixin):
         DateTime(timezone=True), nullable=True
     )
 
-    specializations: Mapped[list["TalentCardSpecialization"]] = relationship(
+    specializations: Mapped[list[TalentCardSpecialization]] = relationship(
         back_populates="card", cascade="all, delete-orphan"
     )
-    competences: Mapped[list["TalentCardCompetence"]] = relationship(
+    competences: Mapped[list[TalentCardCompetence]] = relationship(
         back_populates="card", cascade="all, delete-orphan"
     )
-    requirements: Mapped[list["TalentCardRequirement"]] = relationship(
+    requirements: Mapped[list[TalentCardRequirement]] = relationship(
         back_populates="card", cascade="all, delete-orphan"
     )
-    candidates: Mapped[list["TalentCandidate"]] = relationship(
+    candidates: Mapped[list[TalentCandidate]] = relationship(
         back_populates="card", cascade="all, delete-orphan"
     )
 
@@ -105,7 +105,7 @@ class TalentCardSpecialization(BaseModel):
     )
     min_experience_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    card: Mapped["TalentCard"] = relationship(back_populates="specializations")
+    card: Mapped[TalentCard] = relationship(back_populates="specializations")
 
 
 class TalentCardCompetence(BaseModel):
@@ -133,7 +133,7 @@ class TalentCardCompetence(BaseModel):
     )
     match_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    card: Mapped["TalentCard"] = relationship(back_populates="competences")
+    card: Mapped[TalentCard] = relationship(back_populates="competences")
 
 
 class TalentCardRequirement(BaseModel):
@@ -148,7 +148,7 @@ class TalentCardRequirement(BaseModel):
     description: Mapped[str] = mapped_column(String(500), nullable=False)
     min_experience_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    card: Mapped["TalentCard"] = relationship(back_populates="requirements")
+    card: Mapped[TalentCard] = relationship(back_populates="requirements")
 
 
 class TalentCandidate(BaseModel):
@@ -192,4 +192,4 @@ class TalentCandidate(BaseModel):
     )
 
     employee = relationship("Employee", lazy="selectin")
-    card: Mapped["TalentCard"] = relationship(back_populates="candidates")
+    card: Mapped[TalentCard] = relationship(back_populates="candidates")

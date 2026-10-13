@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   createCompetence,
   createCompetenceGroup,
   createIndicator,
@@ -276,7 +277,7 @@ test.describe("CR8 — Detail page (publish, indicators, materials, DnD)", () =>
     // Re-publish on the API beforehand to make the test idempotent regardless
     // of the order in which scenarios run.
     await page.request.post(
-      `http://localhost:8100/api/competences/${competenceId}/unpublish`,
+      `${API_BASE}/competences/${competenceId}/unpublish`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     await page.goto(`/competences/${competenceId}`);
@@ -342,7 +343,7 @@ test.describe("CR8 — Detail page (publish, indicators, materials, DnD)", () =>
     page,
   }) => {
     const create = await page.request.post(
-      `http://localhost:8100/api/competences/${competenceId}/indicators`,
+      `${API_BASE}/competences/${competenceId}/indicators`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: {
@@ -406,7 +407,7 @@ test.describe("CR8 — Detail page (publish, indicators, materials, DnD)", () =>
     // page should now show "AI generation in progress" but still be clickable
     // and open the active session drawer rather than being silently disabled.
     const start = await page.request.post(
-      "http://localhost:8100/api/competence-generation/sessions",
+      `${API_BASE}/competence-generation/sessions`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: { scope: "whole_base", params: {} },
@@ -434,20 +435,20 @@ test.describe("CR8 — Detail page (publish, indicators, materials, DnD)", () =>
     // competence detail page only fires when the active session's target_id
     // matches the current competence.
     const existing = await page.request.get(
-      "http://localhost:8100/api/competence-generation/sessions/active",
+      `${API_BASE}/competence-generation/sessions/active`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     if (existing.ok()) {
       const sess = await existing.json().catch(() => null);
       if (sess && sess.id) {
         await page.request.delete(
-          `http://localhost:8100/api/competence-generation/sessions/${sess.id}`,
+          `${API_BASE}/competence-generation/sessions/${sess.id}`,
           { headers: { Authorization: `Bearer ${accessToken}` } },
         );
       }
     }
     const start = await page.request.post(
-      "http://localhost:8100/api/competence-generation/sessions",
+      `${API_BASE}/competence-generation/sessions`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: {
@@ -478,20 +479,20 @@ test.describe("CR8 — Detail page (publish, indicators, materials, DnD)", () =>
     // had no name → no link. Verify the resolver now falls back to walking
     // competences too.
     const existing = await page.request.get(
-      "http://localhost:8100/api/competence-generation/sessions/active",
+      `${API_BASE}/competence-generation/sessions/active`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     if (existing.ok()) {
       const sess = await existing.json().catch(() => null);
       if (sess && sess.id) {
         await page.request.delete(
-          `http://localhost:8100/api/competence-generation/sessions/${sess.id}`,
+          `${API_BASE}/competence-generation/sessions/${sess.id}`,
           { headers: { Authorization: `Bearer ${accessToken}` } },
         );
       }
     }
     const start = await page.request.post(
-      "http://localhost:8100/api/competence-generation/sessions",
+      `${API_BASE}/competence-generation/sessions`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: {
@@ -575,7 +576,7 @@ test.describe("CR8 — Tree usage rules (origin block, used-delete, sorting)", (
     await publishCompetence(opts, comp.id);
     // Wire the competence into a grade-system chain so it's "used".
     const specResp = await page.request.post(
-      "http://localhost:8100/api/dictionaries/specialization",
+      `${API_BASE}/dictionaries/specialization`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: { title: `Used Spec ${stamp}` },
@@ -583,14 +584,14 @@ test.describe("CR8 — Tree usage rules (origin block, used-delete, sorting)", (
     );
     const spec = await specResp.json();
     const gradeResp = await page.request.post(
-      "http://localhost:8100/api/dictionaries/grade",
+      `${API_BASE}/dictionaries/grade`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: { title: `Used Grade ${stamp}` },
       },
     );
     const grade = await gradeResp.json();
-    await page.request.post("http://localhost:8100/api/grade-system/chains", {
+    await page.request.post(`${API_BASE}/grade-system/chains`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       data: {
         grade_id: grade.id,

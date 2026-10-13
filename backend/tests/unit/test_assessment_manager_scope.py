@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import inspect
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest_asyncio
 from app.core.security import create_access_token, hash_password
@@ -47,7 +47,7 @@ async def _user(db: AsyncSession, tenant, code: str) -> User:
         first_name=code,
         last_name="X",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()
@@ -145,7 +145,7 @@ async def scoped(
             tenant_id=tenant.id,
             assessment_id=assessment.id,
             token=uuid.uuid4().hex,
-            expires_at=datetime.now(timezone.utc).replace(year=2030),
+            expires_at=datetime.now(UTC).replace(year=2030),
         )
         db.add_all([item, reviewer])
         await db.commit()

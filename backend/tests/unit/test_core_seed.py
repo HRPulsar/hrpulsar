@@ -18,7 +18,7 @@ Nothing here commits — the seeded tenant rolls back with the session.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -259,7 +259,7 @@ async def _make_tenant_admin(db: AsyncSession, system_roles) -> tuple[Tenant, Us
         first_name="Seed",
         last_name="Admin",
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(admin)
     await db.flush()

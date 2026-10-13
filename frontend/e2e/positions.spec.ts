@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   registerUser,
   setAuthTokens,
   createPosition,
@@ -373,7 +374,7 @@ test.describe("Positions POS6 lifecycle + occupancy + alerts", () => {
     positionId = pos.id;
 
     const assignResp = await page.request.put(
-      `http://localhost:8100/api/employees/${setup.employeeId}`,
+      `${API_BASE}/employees/${setup.employeeId}`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         data: { position_id: positionId },

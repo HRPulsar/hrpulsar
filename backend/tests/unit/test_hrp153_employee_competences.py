@@ -16,7 +16,7 @@ the test surface is just the spec from HRP-153 + the reporter's
   Skill level / Percent table.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest_asyncio
 from app.modules.assessment.models import Assessment, AssessmentStatus
@@ -256,7 +256,7 @@ class TestCompetenceOverview:
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 5, 1, tzinfo=UTC),
         )
         per_assessment_rows = {
             a.id: {
@@ -321,7 +321,7 @@ class TestCompetenceOverview:
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 5, 1, tzinfo=UTC),
         )
         per_assessment_rows = {
             a.id: {
@@ -382,7 +382,7 @@ class TestCompetenceOverview:
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 5, 1, tzinfo=UTC),
         )
         per_assessment_rows = {
             a.id: {
@@ -445,7 +445,7 @@ class TestCompetenceOverview:
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 5, 1, tzinfo=UTC),
         )
         per_assessment_rows = {
             a.id: {
@@ -495,7 +495,7 @@ class TestCompetenceOverview:
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 5, 1, tzinfo=UTC),
         )
         per_assessment_rows = {
             a.id: {
@@ -551,14 +551,14 @@ class TestCompetenceOverview:
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 5, 1, tzinfo=UTC),
         )
         second = await _make_assessment(
             db,
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 6, 1, tzinfo=UTC),
         )
         per_assessment_rows = {
             first.id: {
@@ -646,14 +646,14 @@ class TestCompetenceOverview:
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 1, 1, tzinfo=UTC),
         )
         second = await _make_assessment(
             db,
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 6, 1, tzinfo=UTC),
         )
         higher_breakdown_first = [
             {
@@ -738,14 +738,14 @@ class TestCompetenceOverview:
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 3, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 3, 1, tzinfo=UTC),
         )
         a2 = await _make_assessment(
             db,
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 4, 1, tzinfo=UTC),
         )
         per_assessment_rows = {
             a1.id: {
@@ -807,14 +807,14 @@ class TestCompetenceOverview:
             tenant,
             employee_with_position,
             done_status,
-            completed_at=datetime(2024, 4, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2024, 4, 1, tzinfo=UTC),
         )
         a.finished_at = None
         a.ended_at = None
         await db.commit()
         await db.refresh(a)
         assert a.updated_at is not None
-        assert a.updated_at > datetime(2020, 1, 1, tzinfo=timezone.utc) - timedelta(
+        assert a.updated_at > datetime(2020, 1, 1, tzinfo=UTC) - timedelta(
             days=1
         )
 
@@ -873,7 +873,7 @@ class TestQueryCounts:
                 tenant,
                 employee_with_position,
                 done_status,
-                completed_at=datetime(2024, 1 + i % 12, 1, tzinfo=timezone.utc),
+                completed_at=datetime(2024, 1 + i % 12, 1, tzinfo=UTC),
             )
 
         bind = db.get_bind()

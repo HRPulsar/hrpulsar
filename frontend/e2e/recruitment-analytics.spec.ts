@@ -6,9 +6,7 @@
  * any client-side error (status='ready' on the analytics tab).
  */
 import { test, expect } from "./fixtures";
-import { registerUser, loginViaUI } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, loginViaUI } from "./helpers";
 
 test.describe("Recruitment analytics", () => {
   test("vacancy analytics tab renders for a demo vacancy", async ({ page }) => {

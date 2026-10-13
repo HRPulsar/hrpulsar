@@ -13,9 +13,7 @@
  * /api/auth/dev/auto-register).
  */
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, setAuthTokens } from "./helpers";
 
 test.describe("Vacancy attachments (HRP-846)", () => {
   test("upload and delete an attachment on the vacancy page", async ({ page }) => {

@@ -11,7 +11,7 @@ Spec:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 import pytest_asyncio
@@ -43,7 +43,7 @@ async def _make_user(db: AsyncSession, tenant_id, role, *, prefix: str) -> User:
         first_name=prefix.capitalize(),
         last_name="User",
         tenant_id=tenant_id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

@@ -1,7 +1,7 @@
 """Steps 1–2g: division tree, users & employees, career history, managers."""
 
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.core.security import hash_password
 from app.modules.auth.models import User, user_roles
@@ -197,7 +197,7 @@ async def seed_career_history(ctx: SeedContext) -> None:
                     completed_date=past_date(completed_ago),
                     expiry_date=(
                         (
-                            datetime.now(timezone.utc) + timedelta(days=expiry_ahead)
+                            datetime.now(UTC) + timedelta(days=expiry_ahead)
                         ).date()
                         if expiry_ahead
                         else None

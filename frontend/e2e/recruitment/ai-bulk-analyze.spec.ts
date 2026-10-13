@@ -21,9 +21,7 @@
  * E2E here verifies the recruiter-facing wiring only.
  */
 import { expect, test } from "@playwright/test";
-import { registerUser, setAuthTokens, uniqueEmail } from "../helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, setAuthTokens, uniqueEmail } from "../helpers";
 
 interface BulkSetup {
   accessToken: string;

@@ -39,9 +39,11 @@ async def bump_counter(key: str, ttl_seconds: int) -> int:
 
     Returns the running count. Deliberately not a decision: the throttles
     that call this disagree on what a Redis outage means — signup, demo
-    and feedback fail closed, the demo upload quota fails open — so the
-    error propagates and each caller keeps the policy it already had
-    (HRP-596). Same reason the cap itself stays with the caller.
+    creation and feedback fail closed; the demo upload quota and the EE
+    demo-card visit counter fail open — so the error propagates and each
+    caller keeps the policy it already had (HRP-596). Same reason the cap
+    itself stays with the caller. Checked against every caller for
+    HRP-854; a new caller owns its outage policy the same way.
 
     ``SET key 0 EX ttl NX`` + ``INCR`` rather than ``INCR`` +
     ``EXPIRE ... NX``: both anchor the window, but the ``EXPIRE`` flags

@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { GenerationProgress } from "@/components/coverage/generation-progress";
+import { generationErrorText } from "@/components/coverage/generation-errors";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useCostConfirmation } from "@/hooks/use-cost-confirmation";
 import { EECreditCostBadge } from "@/lib/ee-hooks";
@@ -77,7 +78,11 @@ export function SkillDialog({
         if (cancelled || !existing.content) return;
         started.current = true;
         setSkill(existing);
-        if (existing.error_message) setError(existing.error_message);
+        if (existing.error_code || existing.error_message) {
+          setError(
+            generationErrorText(t, existing.error_code, existing.error_message, "skillFailed"),
+          );
+        }
         setConfirmed(true);
       })
       .catch(() => {})
@@ -87,7 +92,7 @@ export function SkillDialog({
     return () => {
       cancelled = true;
     };
-  }, [probing, step.step_id]);
+  }, [probing, step.step_id, t]);
   // The same price the bulk confirmation on the To do tab names.
   const { cost } = useCostConfirmation(SKILL_ACTION);
 
@@ -118,8 +123,10 @@ export function SkillDialog({
             setStartedAt(new Date().toISOString());
             return;
           }
-          if (existing.status === "failed" && existing.error_message) {
-            setError(existing.error_message);
+          if (existing.status === "failed" && (existing.error_code || existing.error_message)) {
+            setError(
+              generationErrorText(t, existing.error_code, existing.error_message, "skillFailed"),
+            );
           }
           if (existing.content) return;
           // Ready but with nothing to show: a silent regeneration here is a
@@ -160,7 +167,9 @@ export function SkillDialog({
         if (fresh.status === "generating") return;
         setSkill(fresh);
         setError(
-          fresh.status === "failed" ? (fresh.error_message ?? t("skillFailed")) : null,
+          fresh.status === "failed"
+            ? generationErrorText(t, fresh.error_code, fresh.error_message, "skillFailed")
+            : null,
         );
         onChanged();
       } catch {

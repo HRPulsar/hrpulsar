@@ -45,6 +45,7 @@ from app.modules.primitives.catalog_data import CATALOG_VERSION
 from app.modules.primitives.models import Primitive
 from app.modules.work.models import (
     ACTIVE_STATUSES,
+    ERROR_CODES,
     QUOTE_MAX,
     WorkContainer,
     WorkContainerAccessLog,
@@ -1368,17 +1369,29 @@ async def _discardable_work(db: AsyncSession, container_id: uuid.UUID) -> bool:
     return found.first() is not None
 
 
-async def fail_session(db: AsyncSession, session_id: uuid.UUID, message: str) -> None:
+async def fail_session(
+    db: AsyncSession,
+    session_id: uuid.UUID,
+    message: str,
+    *,
+    code: str = "service_error",
+) -> None:
     """The row could not be followed by a run - the credit hold was
     refused, the queue is down: it goes to ``error`` at once rather than
-    holding the container's one-active-run slot until the reaper."""
+    holding the container's one-active-run slot until the reaper. ``code``
+    is what the reader's locale renders (HRP-854): a refused hold says
+    "credit limit reached", not a generic failure. A code outside the
+    row's check constraint degrades to the generic one rather than losing
+    the whole write to a CheckViolation."""
+    if code not in ERROR_CODES:
+        code = "service_error"
     await db.execute(
         update(WorkDecompositionSession)
         .where(WorkDecompositionSession.id == session_id)
         .values(
             status="error",
             phase=None,
-            error_code="service_error",
+            error_code=code,
             error_message=message,
             finished_at=datetime.now(UTC),
         )
@@ -1686,19 +1699,22 @@ async def get_step_skill(
         # cannot flush a status the worker still owns.
         db.expunge(row)
         row.status = effective
+        row.error_code = "reaped_stuck"
         row.error_message = "The generation did not finish"
     return row
 
 
 async def fail_step_skill(
-    db: AsyncSession, skill_id: uuid.UUID, message: str
+    db: AsyncSession, skill_id: uuid.UUID, message: str, *, code: str = "service_error"
 ) -> WorkStepSkill | None:
     """The claim could not be followed by a run - the credit hold was
     refused, the queue is down: the row goes to ``failed`` at once rather
-    than blocking the button until it goes stale."""
+    than blocking the button until it goes stale. ``code`` is what the
+    reader's locale renders (HRP-854); ``message`` stays the en fallback."""
     row = await db.get(WorkStepSkill, skill_id, populate_existing=True)
     if row is not None:
         row.status = "failed"
+        row.error_code = code
         row.error_message = message
         await db.commit()
     return row
@@ -1767,6 +1783,7 @@ async def start_step_skill(
         )
         db.add(row)
     row.status = "generating"
+    row.error_code = None
     row.error_message = None
     row.pack_id = pack["id"]
     row.prompt_version = skills.PROMPT_VERSION

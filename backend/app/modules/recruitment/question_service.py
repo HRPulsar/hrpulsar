@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from fastapi import status
@@ -854,7 +854,7 @@ async def _resolve_target_round(
     # retry takes it over (with the transcripts a Regenerate would not
     # load), and the empty placeholder is archived out of the tab bar.
     for failed in bound:
-        failed.archived_at = datetime.now(timezone.utc)
+        failed.archived_at = datetime.now(UTC)
     return round_row.id, _round_label(round_row.type, round_row.round_number)
 
 
@@ -1244,7 +1244,7 @@ async def generate_question_set(
         target.coverage_note = generated.coverage_note
         target.generation_mode = "regenerated"
         target.status = "ready"
-        target.generated_at = datetime.now(timezone.utc)
+        target.generated_at = datetime.now(UTC)
         target.version = (target.version or 1) + 1
         target.created_by = current_user_id
         if into_set_id is not None:
@@ -1281,7 +1281,7 @@ async def generate_question_set(
             )
             db.add(saved)
             await db.flush()
-        saved.generated_at = datetime.now(timezone.utc)
+        saved.generated_at = datetime.now(UTC)
         for q in _build_questions(
             generated,
             tenant_id=tenant_id,

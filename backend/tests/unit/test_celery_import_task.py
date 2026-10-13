@@ -2,7 +2,7 @@
 
 import base64
 import io
-from datetime import date
+from datetime import UTC, date
 
 from app.modules.data_import.models import ImportJob
 from openpyxl import Workbook
@@ -63,7 +63,7 @@ class TestRunImportTask:
 
     async def test_import_job_status_update(self, db: AsyncSession, tenant, user):
         """Verify ImportJob status can be updated (simulates Celery task flow)."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         job = ImportJob(
             tenant_id=tenant.id,
@@ -78,7 +78,7 @@ class TestRunImportTask:
 
         # Simulate task processing
         job.status = "processing"
-        job.started_at = datetime.now(timezone.utc)
+        job.started_at = datetime.now(UTC)
         await db.commit()
         await db.refresh(job)
         assert job.status == "processing"
@@ -88,7 +88,7 @@ class TestRunImportTask:
         job.processed_rows = 4
         job.error_rows = 1
         job.errors = {"rows": [{"row": 3, "error": "Missing email"}]}
-        job.finished_at = datetime.now(timezone.utc)
+        job.finished_at = datetime.now(UTC)
         await db.commit()
         await db.refresh(job)
 

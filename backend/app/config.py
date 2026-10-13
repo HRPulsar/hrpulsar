@@ -414,7 +414,7 @@ class Settings(BaseSettings):
         ]
 
     @model_validator(mode="after")
-    def _validate_locales(self) -> "Settings":
+    def _validate_locales(self) -> Settings:
         """Fail fast on a broken locale config instead of serving a UI
         whose language switcher and catalogs disagree with the backend.
 
@@ -444,7 +444,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _resolve_version(self) -> "Settings":
+    def _resolve_version(self) -> Settings:
         # Non-numeric values are not release versions: SaaS compose leaks
         # APP_VERSION=latest (its image-tag selector) into the container env,
         # and stale self-hosted .env files carry APP_VERSION=dev. Fall back
@@ -454,7 +454,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _demo_requires_saas(self) -> "Settings":
+    def _demo_requires_saas(self) -> Settings:
         """HRP-391: the public-demo sandbox is enterprise-only.
 
         Community / self-hosted deployments (deployment_mode=onprem) must
@@ -471,7 +471,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _known_ai_processors(self) -> "Settings":
+    def _known_ai_processors(self) -> Settings:
         """HRP-1005: a typo must not silently switch a processor off for
         every tenant — refuse to start instead."""
         names = {
@@ -488,7 +488,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _known_transcription_provider_default(self) -> "Settings":
+    def _known_transcription_provider_default(self) -> Settings:
         """HRP-1007: a typo must not silently leave the platform order as
         measured while the operator believes it changed — refuse to start."""
         known = ("whisper", "deepgram", "assemblyai", "yandex_speechkit")
@@ -502,7 +502,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _demo_secrets_required_in_prod(self) -> "Settings":
+    def _demo_secrets_required_in_prod(self) -> Settings:
         """Refuse to start a production/staging deploy with the public
         demo enabled but no spend guard (HRP-276 / H4 + HRP-264 review).
 
@@ -549,7 +549,7 @@ class Settings(BaseSettings):
     _DEFAULT_JWT_SECRET: ClassVar[str] = "change-me-to-a-random-string"
 
     @model_validator(mode="after")
-    def _secrets_not_default_in_prod(self) -> "Settings":
+    def _secrets_not_default_in_prod(self) -> Settings:
         """Refuse to boot a deployed tier with placeholder secrets.
 
         ``jwt_secret`` seeds the derived ``encryption_key`` (see
@@ -585,7 +585,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _s3_internal_requires_public_endpoint(self) -> "Settings":
+    def _s3_internal_requires_public_endpoint(self) -> Settings:
         """Refuse to boot when presigned URLs would point at an internal host.
 
         SigV4 URLs are host-bound and signed against ``s3_endpoint`` when
@@ -639,7 +639,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _warn_when_public_endpoint_repeats_the_bucket(self) -> "Settings":
+    def _warn_when_public_endpoint_repeats_the_bucket(self) -> Settings:
         """Name the shape that 404s every file link (HRP-780).
 
         ``app.core.s3`` signs path-style URLs — ``<endpoint>/<bucket>/<key>``
@@ -681,7 +681,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _trusted_proxies_fallback(self) -> "Settings":
+    def _trusted_proxies_fallback(self) -> Settings:
         """Inherit ``demo_trusted_proxies`` when the global list is unset.
 
         The demo router shipped a trusted-proxy list first (HRP-276 / M5);
@@ -694,7 +694,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _signup_turnstile_required_in_prod(self) -> "Settings":
+    def _signup_turnstile_required_in_prod(self) -> Settings:
         """Refuse to start a deployed tier with the public moderated
         signup endpoint exposed but no bot-guard secret (HRP-264 — M6
         review-fix).
@@ -715,7 +715,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _warn_brand_defaults(self) -> "Settings":
+    def _warn_brand_defaults(self) -> Settings:
         """Warn a branded install about stock-brand leftovers (HRP-568).
 
         A custom BRAND_NAME rebrands email copy, but three adjacent
@@ -769,7 +769,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _public_check_host_into_cors(self) -> "Settings":
+    def _public_check_host_into_cors(self) -> Settings:
         """PUBLIC_CHECK_HOST joins CORS_ORIGINS while the check is on (HRP-920).
 
         ``app.main`` builds the CORS allowlist from ``cors_origins`` alone,
@@ -789,7 +789,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _public_check_guards(self) -> "Settings":
+    def _public_check_guards(self) -> Settings:
         """The abuse guards of the public check hold or the app does not
         start (HRP-923).
 

@@ -8,7 +8,7 @@ canonical functions.
 
 import logging
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -876,5 +876,5 @@ async def _auto_populate_candidates(
 
     # HRP-242: stamp the recompute timestamp so the Candidates block
     # header can render "today / yesterday / Month dd" labels.
-    card.last_matched_at = datetime.now(timezone.utc)
+    card.last_matched_at = datetime.now(UTC)
     await db.commit()

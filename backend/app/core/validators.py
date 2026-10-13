@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 
 def not_past_deadline(value: datetime | None) -> datetime | None:
@@ -15,8 +15,8 @@ def not_past_deadline(value: datetime | None) -> datetime | None:
     """
     if value is None:
         return value
-    aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    cutoff = (datetime.now(UTC) - timedelta(days=1)).date()
     if aware.date() < cutoff:
         raise ValueError("deadline cannot be in the past")
     return value

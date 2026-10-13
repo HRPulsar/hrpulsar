@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   registerUser,
   setAuthTokens,
   createDictionaryItem,
@@ -7,8 +8,6 @@ import {
   createCompetence,
   pickFirstSkillLevel,
 } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
 
 /**
  * HRP-57 P6 — cold-start scenarios.

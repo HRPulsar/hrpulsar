@@ -12,15 +12,10 @@ import yaml
 
 COMPOSE = Path(__file__).resolve().parents[3] / "docker-compose.self-hosted.yml"
 
-# MinIO withdrew its official images (Docker Hub and quay.io, September
-# 2026); which image replaces them is decided in HRP-1026. Exact match
-# below, so pinning them fails this test until the exemption is removed.
-PENDING = {"minio", "minio-init"}
-
 
 def _pinned(image: str) -> bool:
-    if "@sha256:" in image:
-        return True
+    if "@" in image:
+        return re.search(r"@sha256:[0-9a-f]{64}$", image) is not None
     name = image.rsplit("/", 1)[-1]
     tag = name.split(":", 1)[1] if ":" in name else ""
     return re.search(r"\d+\.\d+|^RELEASE\.", tag) is not None
@@ -35,7 +30,7 @@ def test_every_image_is_pinned_to_a_version() -> None:
         for name, service in services.items()
         if "image" in service and not _pinned(service["image"])
     }
-    assert unpinned == PENDING, f"pin an explicit version tag for: {unpinned}"
+    assert not unpinned, f"pin an explicit version tag for: {unpinned}"
 
 
 @pytest.mark.parametrize(
@@ -49,6 +44,8 @@ def test_every_image_is_pinned_to_a_version() -> None:
         ("pgvector/pgvector:0.8.7-pg17", True),
         ("registry.local:5000/minio/minio", False),
         ("example.org/storage:RELEASE.2025-09-07T16-13-09Z", True),
+        ("pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:" + "0" * 64, True),
+        ("pgsty/minio@sha256:b6bf", False),
     ],
 )
 def test_pinned(image: str, pinned: bool) -> None:

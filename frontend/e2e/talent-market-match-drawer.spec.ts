@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   registerUser,
   setAuthTokens,
   createDictionaryItem,
@@ -8,8 +9,6 @@ import {
   createIndicator,
   pickFirstSkillLevel,
 } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
 
 // HRP-172 redo: the breakdown drawer surfaces the level percent per
 // required competence and stays scrollable when the requirement list

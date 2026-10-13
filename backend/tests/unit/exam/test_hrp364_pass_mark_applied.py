@@ -8,6 +8,8 @@ transparently.
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from app.modules.exam import service
 from app.modules.exam.models import ExamPassMark
 from app.modules.exam.schemas import (
@@ -54,7 +56,7 @@ class TestExamPassedHelper:
 
 async def _second_employee(db: AsyncSession, tenant, position):
     import uuid as uuid_mod
-    from datetime import date, datetime, timezone
+    from datetime import date, datetime
 
     from app.core.security import hash_password
     from app.modules.auth.models import User as AuthUser
@@ -66,7 +68,7 @@ async def _second_employee(db: AsyncSession, tenant, position):
         first_name="Second",
         last_name="Member",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

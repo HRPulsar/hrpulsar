@@ -24,6 +24,7 @@ Legacy ``HumanAssessment`` cells are still entered against the tenant
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 from app.modules.recruitment import (
@@ -203,7 +204,7 @@ class TestManagerSideReachesTheMatrix:
     async def test_archived_round_scores_are_ignored(
         self, db: AsyncSession, tenant, user, matrix_scale
     ) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from app.modules.recruitment.manager_assessment_models import AssessmentRound
 
@@ -212,7 +213,7 @@ class TestManagerSideReachesTheMatrix:
             db, tenant, user, cv_id, {"python-skills": 4}
         )
         rnd = await db.get(AssessmentRound, round_id)
-        rnd.archived_at = datetime.now(timezone.utc)
+        rnd.archived_at = datetime.now(UTC)
         await db.commit()
 
         matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)
@@ -388,7 +389,7 @@ class TestAiSideReachesTheMatrix:
     async def test_archived_run_does_not_fill_cells(
         self, db: AsyncSession, tenant, user, matrix_scale
     ) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         vacancy_id, cv_id = await _vacancy_with_candidate(db, tenant, user)
         run = await _resume_only_run(
@@ -397,7 +398,7 @@ class TestAiSideReachesTheMatrix:
             cv_id,
             [{"competence_id": "python-skills", "score": 0.8, "status": "assessed"}],
         )
-        run.archived_at = datetime.now(timezone.utc)
+        run.archived_at = datetime.now(UTC)
         await db.commit()
 
         matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)

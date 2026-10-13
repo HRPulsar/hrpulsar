@@ -143,8 +143,12 @@ export function isTentative(c: StepCapability): boolean {
   return c.confidence !== null && c.confidence < TENTATIVE_BELOW && !c.confirmed;
 }
 
-/** Bounds of the hours estimate - mirror work/models.py and the CHECKs. */
+/** Bounds of the hours estimate - mirror work/models.py and the CHECKs.
+ * Anything the backend accepts must leave the browser, so the mins may
+ * not be narrower. */
+export const HOURS_PER_RUN_MIN = 0.01;
 export const HOURS_PER_RUN_MAX = 200;
+export const RUNS_PER_YEAR_MIN = 1;
 export const RUNS_PER_YEAR_MAX = 1_000_000;
 
 export type StepPatch = Partial<
@@ -300,6 +304,9 @@ export interface StepSkill {
   status: "generating" | "ready" | "failed";
   skill_name: string | null;
   content: string | null;
+  /** HRP-854: the failure's code; the UI renders it in the reader's locale
+   * and falls back to `error_message` (en) on rows written before codes. */
+  error_code: string | null;
   error_message: string | null;
   generated_at: string | null;
 }

@@ -1,7 +1,5 @@
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens, uniqueEmail } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, setAuthTokens, uniqueEmail } from "./helpers";
 
 /**
  * EMP3 — division manager assignment auto-upgrades a user's role; clearing

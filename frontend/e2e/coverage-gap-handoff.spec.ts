@@ -1,7 +1,5 @@
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens } from "./helpers";
-
-const API_BASE = process.env.E2E_API_BASE ?? "http://localhost:8100/api";
+import { API_BASE, registerUser, setAuthTokens } from "./helpers";
 
 /**
  * HRP-762 — a gap handed to Recruitment (REFACTOR_PLAN §6, §7.6).

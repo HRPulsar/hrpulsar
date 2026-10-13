@@ -9,7 +9,7 @@ based on the caller's role + division scope:
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest_asyncio
 from app.modules.auth.models import Role, User, user_roles
@@ -42,7 +42,7 @@ async def _make_user(db: AsyncSession, tenant_id: uuid.UUID, role: Role) -> User
         first_name="U",
         last_name="X",
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()

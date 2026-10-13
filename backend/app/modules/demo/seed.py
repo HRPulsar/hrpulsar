@@ -23,7 +23,7 @@ import logging
 import secrets
 import uuid
 from copy import deepcopy
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -3235,7 +3235,7 @@ async def clone_seed_into_demo_tenant(
         anchor = await _pick_anchor_division(db, tenant_id)
         anchor_division_id = anchor.id if anchor is not None else None
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # HRP-281 / S3: 40 employees + their backing users, with division
     # leadership wired up (manager_id / deputy_manager_id).

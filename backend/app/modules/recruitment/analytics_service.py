@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from statistics import median
 
 from fastapi import status
@@ -90,7 +90,7 @@ async def vacancy_analytics(
             if prev_ts:
                 delta = max(
                     0.0,
-                    (datetime.now(timezone.utc) - prev_ts).total_seconds(),
+                    (datetime.now(UTC) - prev_ts).total_seconds(),
                 )
                 medians.setdefault(cv.stage_id, []).append(delta)
 
@@ -288,7 +288,7 @@ async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
 
     velocity: list[tuple[Vacancy, float]] = []
     drop_off: list[tuple[Vacancy, float]] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     cv_rows = (
         (

@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 
 from fastapi import status
@@ -189,9 +189,9 @@ async def change_mass_exam_status(
         # left empty intentionally — started_at is set when first employee starts
         pass
     if new_status == "in_progress" and not me.started_at:
-        me.started_at = datetime.now(timezone.utc)
+        me.started_at = datetime.now(UTC)
     elif new_status in {"done", "cancelled"}:
-        me.finished_at = datetime.now(timezone.utc)
+        me.finished_at = datetime.now(UTC)
         # HRP-236: closing the procedure cascades to participant surveys.
         # Cancel voids every survey (submitted scores stay on the row);
         # complete keeps finished surveys done and voids the unfinished.
@@ -216,12 +216,12 @@ async def change_mass_exam_status(
 async def _assert_send_prerequisites(db: AsyncSession, me: MassExam) -> None:
     """draft → sent requires ≥1 question, ≥1 assigned employee, future deadline."""
     if me.ended_at is not None:
-        cutoff = datetime.now(timezone.utc).date()
+        cutoff = datetime.now(UTC).date()
         ended = me.ended_at
         ended_date = (
-            ended.astimezone(timezone.utc).date()
+            ended.astimezone(UTC).date()
             if ended.tzinfo is not None
-            else ended.replace(tzinfo=timezone.utc).date()
+            else ended.replace(tzinfo=UTC).date()
         )
         if ended_date < cutoff:
             raise AppError("exam_deadline_in_past", status.HTTP_400_BAD_REQUEST)
@@ -1049,7 +1049,7 @@ async def submit_answer(
 
     if exam.status == "assigned":
         exam.status = "in_progress"
-        exam.started_at = datetime.now(timezone.utc)
+        exam.started_at = datetime.now(UTC)
 
         # Auto-flip the mass exam to in_progress on the first participant's
         # first answer (the manager can't do this manually under the new
@@ -1057,7 +1057,7 @@ async def submit_answer(
         if mass_exam is not None and mass_exam.status == "sent":
             mass_exam.status = "in_progress"
             if mass_exam.started_at is None:
-                mass_exam.started_at = datetime.now(timezone.utc)
+                mass_exam.started_at = datetime.now(UTC)
 
     # Load question to auto-score
     q_result = await db.execute(
@@ -1434,7 +1434,7 @@ async def finish_exam(
 
     exam.score = total_score
     exam.status = "done"
-    exam.finished_at = datetime.now(timezone.utc)
+    exam.finished_at = datetime.now(UTC)
 
     # HRP-328: when the last participant finishes, the mass exam flips to
     # done automatically (the manager no longer has to close it by hand).
@@ -1465,7 +1465,7 @@ async def finish_exam(
         )
         if not remaining:
             mass_exam.status = "done"
-            mass_exam.finished_at = datetime.now(timezone.utc)
+            mass_exam.finished_at = datetime.now(UTC)
 
     await db.commit()
 

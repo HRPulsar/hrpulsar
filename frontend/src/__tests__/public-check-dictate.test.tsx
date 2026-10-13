@@ -330,6 +330,40 @@ describe("a recording", () => {
   });
 });
 
+describe("a permission changed in the browser's settings (HRP-947 REDO)", () => {
+  it("asks for the microphone again on the next click after a refusal", async () => {
+    getUserMedia.mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
+    await render();
+    await click(button());
+    expect(status().textContent).toBe(t.voiceErrorDenied);
+
+    // The visitor allowed the microphone in the site settings: the next
+    // click must ask again, never read a remembered refusal.
+    await click(button());
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(status().dataset.state).toBe("recording");
+    expect(FakeRecorder.instances).toHaveLength(1);
+  });
+
+  it("records after a reload once the permission was granted in the site settings", async () => {
+    // Blocked in the site settings: every click is refused, no prompt.
+    getUserMedia.mockRejectedValue(new DOMException("denied", "NotAllowedError"));
+    await render();
+    await click(button());
+    expect(status().textContent).toBe(t.voiceErrorDenied);
+
+    // Granted in the site settings, then the page reloaded (the QA steps).
+    act(() => root.unmount());
+    root = createRoot(container);
+    getUserMedia.mockReset().mockResolvedValue({ getTracks: () => [track] });
+    await render();
+    await click(button());
+    expect(status().dataset.state).toBe("recording");
+    expect(status().textContent).toBe(t.voiceRecording);
+    expect(FakeRecorder.instances).toHaveLength(1);
+  });
+});
+
 describe("asking for the microphone (review M1)", () => {
   function pendingPermission() {
     let grant!: (stream: unknown) => void;

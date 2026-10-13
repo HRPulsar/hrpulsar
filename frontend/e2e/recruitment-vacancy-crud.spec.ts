@@ -9,9 +9,7 @@
  * /auth/dev/auto-register).
  */
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
+import { API_BASE, registerUser, setAuthTokens } from "./helpers";
 
 async function createVacancy(
   page: import("@playwright/test").Page,

@@ -10,7 +10,7 @@ sum for specialization tenure).
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from app.core.errors import AppError
@@ -63,7 +63,7 @@ async def _make_user(db: AsyncSession, tenant_id: uuid.UUID, name: str = "U") ->
         first_name=name,
         last_name="Test",
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()
@@ -161,7 +161,7 @@ async def _add_done_assessment(
         type_id=a_type.id,
         status_id=a_status.id,
         initiator_id=initiator_id,
-        finished_at=finished_at or datetime.now(timezone.utc),
+        finished_at=finished_at or datetime.now(UTC),
     )
     db.add(a)
     await db.flush()
@@ -408,7 +408,7 @@ class TestAutoMatchCompetence:
             c.id,
             sl.id,
             95,
-            finished_at=datetime.now(timezone.utc) - timedelta(days=30),
+            finished_at=datetime.now(UTC) - timedelta(days=30),
         )
         # Newest scored lower — matcher must still pick the newer one.
         await _add_done_assessment(
@@ -419,7 +419,7 @@ class TestAutoMatchCompetence:
             c.id,
             sl.id,
             60,
-            finished_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(UTC),
         )
 
         await service.add_required_competences(

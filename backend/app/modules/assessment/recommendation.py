@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -627,7 +627,7 @@ async def compute_grade_recommendation(
         recommended_grade_title=rec.grade_title if rec else None,
         recommended_grade_passed=rec_passed,
         grades=items,
-        computed_at=datetime.now(timezone.utc),
+        computed_at=datetime.now(UTC),
     )
 
     assessment.recommended_grade_id = rec.grade_id if rec else None

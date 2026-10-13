@@ -13,7 +13,7 @@ Two layers:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from app.core.email_templates import render_talent_market_removed_candidate_email
 from app.modules.auth.models import User
@@ -36,7 +36,7 @@ async def _make_employee(db: AsyncSession, tenant, *, suffix: str) -> Employee:
         first_name=f"F{suffix}",
         last_name=f"L{suffix}",
         is_active=True,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()
@@ -52,7 +52,7 @@ async def _force_published(db: AsyncSession, card_id: uuid.UUID) -> None:
     assert card is not None
     card.status = "published"
     card.is_published = True
-    card.published_at = datetime.now(timezone.utc)
+    card.published_at = datetime.now(UTC)
     await db.commit()
 
 

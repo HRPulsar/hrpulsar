@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import status
@@ -603,16 +603,16 @@ def _format_interview_datetime(
 
     if moment is None:
         return None
-    aware = moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    aware = moment if moment.tzinfo else moment.replace(tzinfo=UTC)
     if tz_name:
         try:
             from zoneinfo import ZoneInfo
 
             aware = aware.astimezone(ZoneInfo(tz_name))
         except Exception:  # noqa: BLE001 — unknown zone: keep UTC
-            aware = aware.astimezone(timezone.utc)
+            aware = aware.astimezone(UTC)
     else:
-        aware = aware.astimezone(timezone.utc)
+        aware = aware.astimezone(UTC)
     # HRP-699: name the zone. Interviewers read these emails from other
     # countries, and a reschedule notice that says "14:00" without saying
     # whose 14:00 is worse than no notice.
@@ -688,8 +688,8 @@ def _interview_is_upcoming(interview: Interview) -> bool:
         return False
     moment = interview.interview_date
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return moment > datetime.now(timezone.utc)
+        moment = moment.replace(tzinfo=UTC)
+    return moment > datetime.now(UTC)
 
 
 async def create_interview(
@@ -912,7 +912,7 @@ async def _notify_interview_changed(
     def _aware(moment: datetime | None) -> datetime | None:
         if moment is None:
             return None
-        return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+        return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
     date_changed = _aware(date_before) != _aware(interview.interview_date)
     upcoming = _interview_is_upcoming(interview)
@@ -1284,7 +1284,7 @@ async def init_interview_upload(
         s3_key=key,
         s3_parts=[],
         status="active",
-        expires_at=datetime.now(timezone.utc) + UPLOAD_SESSION_TTL,
+        expires_at=datetime.now(UTC) + UPLOAD_SESSION_TTL,
         created_by=user_id,
     )
     db.add(session)
@@ -1365,7 +1365,7 @@ async def ack_uploaded_chunk(
     session = await _get_active_session(db, tenant_id, interview_id, upload_id)
     if not session:
         raise AppError("upload_session_not_found", status.HTTP_404_NOT_FOUND)
-    if session.expires_at <= datetime.now(timezone.utc):
+    if session.expires_at <= datetime.now(UTC):
         session.status = "expired"
         await db.commit()
         raise AppError("upload_session_expired", status.HTTP_410_GONE)
@@ -1834,7 +1834,7 @@ async def archive_interview(
         if interview.status == "scheduled"
         else []
     )
-    interview.archived_at = datetime.now(timezone.utc)
+    interview.archived_at = datetime.now(UTC)
     interview.archived_by = user_id
     interview.status = "archived"
     interview.round_id = None
@@ -1872,12 +1872,12 @@ async def restore_interview(
     if interview.archived_at is None:
         return await _interview_read(db, interview, role="recruiter")
 
-    retention_cutoff = datetime.now(timezone.utc) - timedelta(
+    retention_cutoff = datetime.now(UTC) - timedelta(
         days=ARCHIVE_RETENTION_DAYS
     )
     archived_at = interview.archived_at
     if archived_at.tzinfo is None:
-        archived_at = archived_at.replace(tzinfo=timezone.utc)
+        archived_at = archived_at.replace(tzinfo=UTC)
     if archived_at < retention_cutoff:
         raise AppError("interview_retention_window_passed", status.HTTP_410_GONE)
 
@@ -1924,7 +1924,7 @@ async def purge_expired_archived_interviews(
 
     from app.core.s3 import delete_file
 
-    cutoff = (now or datetime.now(timezone.utc)) - timedelta(
+    cutoff = (now or datetime.now(UTC)) - timedelta(
         days=ARCHIVE_RETENTION_DAYS
     )
     rows = (
@@ -1966,7 +1966,7 @@ async def purge_expired_archived_interviews(
         interview.video_file_id = None
         interview.transcript_file_id = None
         interview.file_s3_key = None
-        interview.purged_at = datetime.now(timezone.utc)
+        interview.purged_at = datetime.now(UTC)
         purged += 1
     if purged:
         if orphaned_file_ids:
@@ -2050,7 +2050,7 @@ async def record_av_scan_result(
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     interview.av_status = verdict
-    interview.av_scanned_at = datetime.now(timezone.utc)
+    interview.av_scanned_at = datetime.now(UTC)
     if verdict == "infected":
         if interview.file_s3_key:
             try:
@@ -2089,7 +2089,7 @@ async def cleanup_orphan_upload_sessions(
 
     from app.core.s3 import abort_multipart_upload
 
-    cutoff = now or datetime.now(timezone.utc)
+    cutoff = now or datetime.now(UTC)
     rows = (
         (
             await db.execute(

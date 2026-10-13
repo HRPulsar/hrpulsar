@@ -10,12 +10,7 @@
  * covered by SaaS-only tests.
  */
 import { test, expect } from "./fixtures";
-import { registerUser, setAuthTokens, loginViaUI } from "./helpers";
-
-// Same default as every other spec, overridable: a worktree runs its
-// backend on its own port, and the hardcoded one made this file the only
-// spec that could not be run outside CI.
-const API_BASE = process.env.E2E_API_BASE ?? "http://localhost:8100/api";
+import { API_BASE, registerUser, setAuthTokens, loginViaUI } from "./helpers";
 
 function isoToday(): string {
   return new Date().toISOString().slice(0, 10);

@@ -26,6 +26,8 @@ os.environ["SMTP_HOST"] = ""
 # outside DEBUG/E2E — pin the same value CI uses so the suite still boots.
 os.environ.setdefault("JWT_SECRET", "test-secret")
 
+from datetime import UTC
+
 import bcrypt
 import pytest
 import pytest_asyncio
@@ -337,7 +339,7 @@ async def admin_role(db: AsyncSession):
 
 @pytest_asyncio.fixture
 async def user(db: AsyncSession, tenant, admin_role):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.modules.auth.models import User, user_roles
 
@@ -347,7 +349,7 @@ async def user(db: AsyncSession, tenant, admin_role):
         first_name="Test",
         last_name="User",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

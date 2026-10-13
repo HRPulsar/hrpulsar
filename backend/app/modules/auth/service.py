@@ -3,7 +3,7 @@ import contextlib
 import logging
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -283,7 +283,7 @@ async def register(
         first_name=data.first_name,
         last_name=data.last_name,
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc) if auto_verify else None,
+        email_verified_at=datetime.now(UTC) if auto_verify else None,
     )
     db.add(user)
     await db.flush()
@@ -365,7 +365,7 @@ async def dev_auto_register(
         select(User).options(selectinload(User.roles)).where(User.email == data.email)
     )
     user = result.scalar_one()
-    user.email_verified_at = datetime.now(timezone.utc)
+    user.email_verified_at = datetime.now(UTC)
 
     # Optionally grant an extra system role
     if system_role:
@@ -431,7 +431,7 @@ async def verify_email(db: AsyncSession, token: str) -> dict[str, Any]:
         tokens = _make_tokens(user)
         return {"user": _user_to_dict(user), **tokens, "token_type": "bearer"}
 
-    user.email_verified_at = datetime.now(timezone.utc)
+    user.email_verified_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(user)
     # HRP-927 (b): the saved public checks of the address follow the user.
@@ -626,7 +626,7 @@ async def _stamp_first_login(db: AsyncSession, user: User) -> None:
     """
     if user.first_login_at is not None:
         return
-    user.first_login_at = datetime.now(timezone.utc)
+    user.first_login_at = datetime.now(UTC)
     await db.commit()
 
 
@@ -1023,7 +1023,7 @@ async def reset_password(db: AsyncSession, token: str, new_password: str) -> Non
         # imported account is created unverified and could not sign in
         # otherwise.
         if account.email_verified_at is None:
-            account.email_verified_at = datetime.now(timezone.utc)
+            account.email_verified_at = datetime.now(UTC)
         # Revoke every previously-issued access/refresh token (review P1-12).
         account.token_version += 1
     await db.commit()
@@ -1427,7 +1427,7 @@ async def create_invitation(
         position_id=data.position_id,
         tenant_id=tenant_id,
         status="pending",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=INVITATION_EXPIRE_DAYS),
+        expires_at=datetime.now(UTC) + timedelta(days=INVITATION_EXPIRE_DAYS),
     )
     db.add(inv)
     await db.commit()
@@ -1520,7 +1520,7 @@ async def resend_invitation(
     await _refuse_demo_invitation_resend(db, tenant_id)
 
     # Extend expiry
-    inv.expires_at = datetime.now(timezone.utc) + timedelta(days=INVITATION_EXPIRE_DAYS)
+    inv.expires_at = datetime.now(UTC) + timedelta(days=INVITATION_EXPIRE_DAYS)
     await db.commit()
     inv = await _load_invitation(db, inv.id)
 
@@ -1639,7 +1639,7 @@ async def update_invitation_email(
 
     inv.email = new_email
     inv.token = secrets.token_urlsafe(32)
-    inv.expires_at = datetime.now(timezone.utc) + timedelta(days=INVITATION_EXPIRE_DAYS)
+    inv.expires_at = datetime.now(UTC) + timedelta(days=INVITATION_EXPIRE_DAYS)
     await db.commit()
     inv = await _load_invitation(db, inv.id)
 
@@ -1685,7 +1685,7 @@ async def get_invitation_preview(db: AsyncSession, token: str) -> dict[str, Any]
         raise AppError("invitation_not_found", status.HTTP_404_NOT_FOUND)
     if inv.status != "pending":
         raise AppError("invitation_no_longer_valid", status.HTTP_400_BAD_REQUEST)
-    if inv.expires_at < datetime.now(timezone.utc):
+    if inv.expires_at < datetime.now(UTC):
         raise AppError("invitation_has_expired", status.HTTP_400_BAD_REQUEST)
     return {"email": inv.email, "name": inv.name}
 
@@ -1700,7 +1700,7 @@ async def accept_invitation(
         raise AppError("invitation_not_found", status.HTTP_404_NOT_FOUND)
     if inv.status != "pending":
         raise AppError("invitation_no_longer_valid", status.HTTP_400_BAD_REQUEST)
-    if inv.expires_at < datetime.now(timezone.utc):
+    if inv.expires_at < datetime.now(UTC):
         inv.status = "expired"
         await db.commit()
         raise AppError("invitation_has_expired", status.HTTP_400_BAD_REQUEST)
@@ -1726,7 +1726,7 @@ async def accept_invitation(
         user.password_hash = hash_password(data.password)
         user.first_name = data.first_name
         user.last_name = data.last_name
-        user.email_verified_at = datetime.now(timezone.utc)
+        user.email_verified_at = datetime.now(UTC)
         # The previous employment's roles do not survive the re-hire: a
         # deleted admin re-invited as employee must come back holding
         # exactly what the invitation grants, not their old authority.
@@ -1740,7 +1740,7 @@ async def accept_invitation(
             first_name=data.first_name,
             last_name=data.last_name,
             tenant_id=inv.tenant_id,
-            email_verified_at=datetime.now(timezone.utc),
+            email_verified_at=datetime.now(UTC),
         )
         db.add(user)
         await db.flush()
@@ -1771,7 +1771,7 @@ async def accept_invitation(
             division_id=inv.division_id,
             position_id=inv.position_id,
             position_title=position_title,
-            hire_date=datetime.now(timezone.utc).date(),
+            hire_date=datetime.now(UTC).date(),
         )
         db.add(emp)
         await db.flush()
@@ -1799,7 +1799,7 @@ async def accept_invitation(
 
     # Mark invitation as accepted
     inv.status = "accepted"
-    inv.accepted_at = datetime.now(timezone.utc)
+    inv.accepted_at = datetime.now(UTC)
     await db.commit()
 
     # Reload user with roles

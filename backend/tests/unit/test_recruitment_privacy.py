@@ -10,7 +10,7 @@ never touch the recruitment audit log.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.config import settings
@@ -346,7 +346,7 @@ class TestErasureCompleteness:
                 candidate_vacancy_id=cv_id,
                 token=uuid.uuid4().hex,
                 email="evaluator@example.com",
-                expires_at=datetime.now(timezone.utc) + timedelta(days=3),
+                expires_at=datetime.now(UTC) + timedelta(days=3),
                 personal_message=f"Please look at {name}",
             )
         )
@@ -383,9 +383,9 @@ class TestErasureCompleteness:
             template_id=template.id,
             token=uuid.uuid4().hex,
             email=email,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=3),
+            expires_at=datetime.now(UTC) + timedelta(days=3),
             status="signed",
-            signed_at=datetime.now(timezone.utc),
+            signed_at=datetime.now(UTC),
             signed_ip="203.0.113.9",
         )
         db.add(consent)
@@ -407,7 +407,7 @@ class TestErasureCompleteness:
                 subject_id=cand_id,
                 status="completed",
                 file_id=export_file.id,
-                expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+                expires_at=datetime.now(UTC) + timedelta(days=7),
             )
         )
         await db.flush()
@@ -950,7 +950,7 @@ class TestRetention:
 
     async def _seed(self, db, tenant, user, fake_s3, age_days: int) -> dict:
         """One interview, resume, consent and report created ``age_days`` ago."""
-        created_at = datetime.now(timezone.utc) - timedelta(days=age_days)
+        created_at = datetime.now(UTC) - timedelta(days=age_days)
         cand = await _candidate(
             db, tenant.id, user.id, f"ret-{uuid.uuid4().hex[:8]}@example.com"
         )
@@ -1278,7 +1278,7 @@ class TestRetention:
             subject_id=uuid.uuid4(),
             status="completed",
             file_id=blob.id,
-            expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            expires_at=datetime.now(UTC) - timedelta(hours=1),
         )
         db.add(export)
         await db.commit()
@@ -1310,7 +1310,7 @@ class TestRetention:
     async def test_expired_export_file_deleted(
         self, db: AsyncSession, tenant, user, fake_s3
     ) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         rows = []
         for expires_at in (now - timedelta(hours=1), now + timedelta(days=6)):
             blob = await _stored_file(db, tenant.id, fake_s3, "export", user.id)

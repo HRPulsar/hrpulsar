@@ -9,7 +9,7 @@ analysis payload populated (the demo's first-screen promise).
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from app.config import settings
@@ -374,7 +374,7 @@ async def test_every_seeded_candidate_has_signed_the_consent(
     template, and their interviews carry the signature, so re-running an
     analysis on stage never stops at the consent check.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from app.modules.recruitment.models import ConsentRequest, ConsentTemplate
 
@@ -407,7 +407,7 @@ async def test_every_seeded_candidate_has_signed_the_consent(
         .scalars()
         .all()
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     signed = {
         r.candidate_id: r
         for r in requests
@@ -920,7 +920,7 @@ async def test_seed_reruns_without_minting_a_second_person(
     # Rebuild the context the seeder passes around (both helpers are
     # idempotent on an already-seeded tenant) and run the extras again --
     # this time the candidate lookup misses and the Person branch runs.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ctx = await _seed_company_structure(db, tenant.id)
     await _seed_employees(db, tenant.id, ctx, now=now)
     await _seed_recruitment_extras(
@@ -1246,7 +1246,7 @@ async def test_seed_cross_tenant_isolation(db: AsyncSession, tenant, user):
     """Two demo sessions on different tenants must not see each other's
     employee rows."""
     import uuid as _uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from app.core.security import hash_password
     from app.modules.auth.models import User
@@ -1271,7 +1271,7 @@ async def test_seed_cross_tenant_isolation(db: AsyncSession, tenant, user):
         first_name="Other",
         last_name="Owner",
         tenant_id=other_tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(other_user)
     await db.commit()

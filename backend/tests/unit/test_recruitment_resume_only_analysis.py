@@ -415,7 +415,7 @@ class TestTopupEligibility:
         ``Resume + interview`` dropdown — they're soft-deleted and a
         40-cr run against a retired row is not what the recruiter
         meant."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         interview = Interview(
             tenant_id=tenant.id,
@@ -424,7 +424,7 @@ class TestTopupEligibility:
             transcription_status="completed",
             analysis_status="not_started",
             transcript="ipsum",
-            archived_at=datetime.now(timezone.utc),
+            archived_at=datetime.now(UTC),
         )
         db.add(interview)
         await db.commit()

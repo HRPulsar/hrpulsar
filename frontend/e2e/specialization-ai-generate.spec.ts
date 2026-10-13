@@ -1,11 +1,10 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   registerUser,
   setAuthTokens,
   createDictionaryItem,
 } from "./helpers";
-
-const API_BASE = "http://localhost:8100/api";
 
 // POS5 — AI Generate matrix page. We exercise the form, file rejection, and
 // the banner. The actual LLM call is mocked at the route level so the test

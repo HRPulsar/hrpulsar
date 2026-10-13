@@ -14,7 +14,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { API_BASE, registerUser, setAuthTokens } from "../helpers";
+import { apiSend, registerUser, setAuthTokens } from "../helpers";
 
 const SECTION_CODES = [
   "summary_ranking",
@@ -30,32 +30,21 @@ interface ReportFixture {
 
 async function seedVacancyWithCandidates(page: Page): Promise<ReportFixture> {
   const reg = await registerUser(page);
-  const auth = { headers: { Authorization: `Bearer ${reg.accessToken}` } };
+  const opts = { page, accessToken: reg.accessToken };
   const stamp = Date.now().toString(36);
 
-  async function post<T>(path: string, data: unknown): Promise<T> {
-    const resp = await page.request.post(`${API_BASE}${path}`, {
-      ...auth,
-      data: data as Record<string, unknown>,
-    });
-    if (!resp.ok()) {
-      throw new Error(`POST ${path} failed (${resp.status()}): ${await resp.text()}`);
-    }
-    return resp.json() as Promise<T>;
-  }
-
-  const vacancy = await post<{ id: string }>("/recruitment/vacancies", {
+  const vacancy = await apiSend<{ id: string }>(opts, "post", "/recruitment/vacancies", {
     title: `Report E2E ${stamp}`,
   });
 
   const candidateVacancyIds: string[] = [];
   for (const label of ["Ada", "Grace"]) {
-    const candidate = await post<{ id: string }>("/recruitment/candidates", {
+    const candidate = await apiSend<{ id: string }>(opts, "post", "/recruitment/candidates", {
       first_name: label,
       last_name: "Reportee",
       email: `report-${label.toLowerCase()}-${stamp}@test.com`,
     });
-    const cv = await post<{ id: string }>("/recruitment/candidate-vacancies", {
+    const cv = await apiSend<{ id: string }>(opts, "post", "/recruitment/candidate-vacancies", {
       candidate_id: candidate.id,
       vacancy_id: vacancy.id,
     });

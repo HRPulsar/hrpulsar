@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from app.config import settings
@@ -93,9 +93,9 @@ class TestJWT:
         # getting bounced to /login mid-session.
         uid = str(uuid.uuid4())
         tid = str(uuid.uuid4())
-        before = datetime.now(timezone.utc).timestamp()
+        before = datetime.now(UTC).timestamp()
         token = create_demo_access_token(uid, tid)
-        after = datetime.now(timezone.utc).timestamp()
+        after = datetime.now(UTC).timestamp()
 
         payload = decode_token(token)
         assert payload["type"] == "access"
@@ -571,7 +571,7 @@ async def _make_user_in_tenant(
         last_name="Tenant",
         tenant_id=tenant.id,
         is_active=active,
-        email_verified_at=datetime.now(timezone.utc) if verified else None,
+        email_verified_at=datetime.now(UTC) if verified else None,
     )
     db.add(u)
     await db.flush()

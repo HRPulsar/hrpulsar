@@ -9,7 +9,7 @@ it.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.modules.assessment import service
 from app.modules.assessment.models import (
@@ -57,7 +57,7 @@ async def _make_extra_employee(db: AsyncSession, tenant, suffix: str):
         first_name=f"F{suffix}",
         last_name=f"L{suffix}",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

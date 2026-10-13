@@ -1,4 +1,4 @@
-import { expect, test, Page } from "@playwright/test";
+import { expect, test, type APIResponse, Page } from "@playwright/test";
 
 /**
  * Backend API root.
@@ -206,20 +206,35 @@ interface ApiHelperOpts {
   accessToken: string;
 }
 
-async function apiPost(
+/**
+ * Authenticated JSON call to `${API_BASE}${path}`; throws on a non-2xx.
+ * `T` defaults to whatever `json()` returns, so untyped callers keep working.
+ */
+export async function apiSend<T = Awaited<ReturnType<APIResponse["json"]>>>(
   opts: ApiHelperOpts,
+  method: "get" | "post" | "put",
   path: string,
-  data: Record<string, unknown>,
-) {
-  const resp = await opts.page.request.post(`${API_BASE}${path}`, {
+  data?: unknown,
+): Promise<T> {
+  const resp = await opts.page.request[method](`${API_BASE}${path}`, {
     headers: { Authorization: `Bearer ${opts.accessToken}` },
     data,
   });
   if (!resp.ok()) {
     const text = await resp.text();
-    throw new Error(`API POST ${path} failed (${resp.status()}): ${text}`);
+    throw new Error(
+      `API ${method.toUpperCase()} ${path} failed (${resp.status()}): ${text}`,
+    );
   }
   return resp.json();
+}
+
+function apiPost(
+  opts: ApiHelperOpts,
+  path: string,
+  data: Record<string, unknown>,
+) {
+  return apiSend(opts, "post", path, data);
 }
 
 /** Complete onboarding for the current tenant. */

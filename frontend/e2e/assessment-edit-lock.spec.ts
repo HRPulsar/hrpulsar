@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import {
+  API_BASE,
   createAssessment,
   createCompetence,
   createCompetenceGroup,
@@ -18,13 +19,11 @@ import {
  * assessments-v160-bugs.spec.ts.
  */
 
-const API = "http://localhost:8100/api";
-
 async function pickDefaultScaleId(
   page: import("@playwright/test").Page,
   accessToken: string,
 ): Promise<string> {
-  const resp = await page.request.get(`${API}/answer-scales`, {
+  const resp = await page.request.get(`${API_BASE}/answer-scales`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   expect(resp.ok()).toBeTruthy();
@@ -42,7 +41,7 @@ async function makeIndicatorBackedCriteria(
   page: import("@playwright/test").Page,
   accessToken: string,
 ): Promise<{ competence_id: string; skill_level_id: string }> {
-  const slResp = await page.request.get(`${API}/skill-levels`, {
+  const slResp = await page.request.get(`${API_BASE}/skill-levels`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   expect(slResp.ok()).toBeTruthy();
@@ -69,7 +68,7 @@ async function configureAssessment(
 ): Promise<void> {
   const criteriaCompetence = await makeIndicatorBackedCriteria(page, accessToken);
   const criteria = await page.request.put(
-    `${API}/assessments/${assessmentId}/criteria`,
+    `${API_BASE}/assessments/${assessmentId}/criteria`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       data: {
@@ -81,7 +80,7 @@ async function configureAssessment(
   );
   expect(criteria.ok()).toBeTruthy();
   const scale = await page.request.put(
-    `${API}/assessments/${assessmentId}/scale`,
+    `${API_BASE}/assessments/${assessmentId}/scale`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       data: { scale_id: scaleId },
@@ -96,7 +95,7 @@ async function sendAssessment(
   assessmentId: string,
 ): Promise<void> {
   const resp = await page.request.post(
-    `${API}/assessments/${assessmentId}/status`,
+    `${API_BASE}/assessments/${assessmentId}/status`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
       data: { status_code: "sent" },
@@ -147,7 +146,7 @@ test.describe("HRP-36 — criteria/scale edit locked after draft", () => {
     // Create a group, configure it, then push every child to sent. The group
     // page mirrors the per-child status — once nothing is in draft, edit
     // affordances must disappear.
-    const groupResp = await page.request.post(`${API}/assessment-groups`, {
+    const groupResp = await page.request.post(`${API_BASE}/assessment-groups`, {
       headers: { Authorization: `Bearer ${setup.accessToken}` },
       data: {
         title: "HRP-36 mass edit lock",
@@ -166,7 +165,7 @@ test.describe("HRP-36 — criteria/scale edit locked after draft", () => {
       setup.accessToken,
     );
     const criteriaResp = await page.request.put(
-      `${API}/assessment-groups/${group.id}/criteria`,
+      `${API_BASE}/assessment-groups/${group.id}/criteria`,
       {
         headers: { Authorization: `Bearer ${setup.accessToken}` },
         data: {
@@ -178,7 +177,7 @@ test.describe("HRP-36 — criteria/scale edit locked after draft", () => {
     );
     expect(criteriaResp.ok()).toBeTruthy();
     const scaleResp = await page.request.put(
-      `${API}/assessment-groups/${group.id}/scale`,
+      `${API_BASE}/assessment-groups/${group.id}/scale`,
       {
         headers: { Authorization: `Bearer ${setup.accessToken}` },
         data: { scale_id: scaleId },

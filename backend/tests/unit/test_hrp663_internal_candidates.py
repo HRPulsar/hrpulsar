@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from unittest.mock import patch
 
 import pytest
@@ -80,7 +80,7 @@ async def _make_internal_candidate(db: AsyncSession, tenant_id) -> Candidate:
         last_name="Hire",
         tenant_id=tenant_id,
         person_id=person.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()
@@ -927,7 +927,7 @@ async def _employee_with_profile(
         last_name="Probelov",
         tenant_id=tenant_id,
         person_id=person.id if person else None,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.flush()
@@ -1336,7 +1336,7 @@ async def _viewer_with_role(db: AsyncSession, tenant_id, code: str) -> User:
         first_name=code.title(),
         last_name="Viewer",
         tenant_id=tenant_id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest_asyncio
 from app.modules.exam import service
@@ -40,7 +41,7 @@ async def employee_role(db: AsyncSession):
 
 @pytest_asyncio.fixture
 async def employee_user(db: AsyncSession, tenant, employee_role, position):
-    from datetime import date, datetime, timezone
+    from datetime import date, datetime
 
     from app.core.security import hash_password
     from app.modules.auth.models import User, user_roles
@@ -54,7 +55,7 @@ async def employee_user(db: AsyncSession, tenant, employee_role, position):
         first_name="Alice",
         last_name="Worker",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(u)
     await db.commit()

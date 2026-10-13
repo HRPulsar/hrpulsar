@@ -1,7 +1,7 @@
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from html import unescape
 
@@ -228,11 +228,11 @@ async def send_notification(
         )
         if in_app_enabled:
             notif.status = "sent"
-            notif.sent_at = datetime.now(timezone.utc)
+            notif.sent_at = datetime.now(UTC)
     elif in_app_enabled:
         # No email to send, but in-app notification is recorded
         notif.status = "sent"
-        notif.sent_at = datetime.now(timezone.utc)
+        notif.sent_at = datetime.now(UTC)
 
     await db.commit()
 

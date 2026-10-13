@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.modules.exam import service
@@ -38,7 +38,7 @@ class TestPastDeadlineBlocksSend:
         await service.assign_employees(db, tenant.id, me["id"], [employee.id])
 
         row = await db.get(MassExam, me["id"])
-        row.ended_at = datetime.now(timezone.utc) - timedelta(days=3)
+        row.ended_at = datetime.now(UTC) - timedelta(days=3)
         await db.commit()
 
         with pytest.raises(HTTPException) as exc:
@@ -58,7 +58,7 @@ class TestPastDeadlineBlocksSend:
         await service.assign_employees(db, tenant.id, me["id"], [employee.id])
 
         row = await db.get(MassExam, me["id"])
-        row.ended_at = datetime.now(timezone.utc)
+        row.ended_at = datetime.now(UTC)
         await db.commit()
 
         sent = await service.change_mass_exam_status(db, tenant.id, me["id"], "sent")

@@ -7,7 +7,7 @@ rejection of non-demo bearers, and the 404 gate outside saas mode.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.config import settings
@@ -42,7 +42,7 @@ async def _paid_account_headers(db: AsyncSession) -> dict[str, str]:
         first_name="Paid",
         last_name="User",
         tenant_id=tenant.id,
-        email_verified_at=datetime.now(timezone.utc),
+        email_verified_at=datetime.now(UTC),
     )
     db.add(user)
     await db.commit()
@@ -141,7 +141,7 @@ async def test_expired_demo_tenant_rejected(
     assert start.status_code == 201
     token = start.json()["access_token"]
     tenant = await db.get(Tenant, start.json()["tenant_id"])
-    tenant.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    tenant.expires_at = datetime.now(UTC) - timedelta(minutes=1)
     await db.commit()
 
     resp = await client.post(
