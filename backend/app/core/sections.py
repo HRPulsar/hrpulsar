@@ -155,11 +155,14 @@ SECTIONS: tuple[Section, ...] = (
     # authoring. The reads other sections are built on stay outside the
     # gate (SHARED_READS). Self-guarded since HRP-632: a division head adds
     # a personal draft at ``view``, every other write asks ``manage`` itself.
+    # The roles below ``manager`` open no menu entry by default (QA 13.10):
+    # their assessments, plans and pickers read the catalogue through
+    # SHARED_READS, never through the section.
     Section(
         "competences",
         ("/competences", "/competence-groups", "/competence-tree", "/indicators", "/materials",
          "/skill-levels", "/competence-generation"),
-        _row("manage", "manage", "view", "view", "view", "view"),
+        _row("manage", "manage", "view", "none", "none", "none"),
         self_guarded=True,
     ),
     # HRP-821: ``manage`` is the section's manager - every process, the
@@ -223,12 +226,13 @@ SECTIONS: tuple[Section, ...] = (
         _row("manage", "manage", "manage", "none", "none", "none"),
     ),
     # HRP-827: ``manage`` edits the dictionaries (grades, specializations,
-    # competence types) and opens their page; ``view`` is the pickers every
-    # form reads, which SHARED_READS keeps open whatever the matrix says.
+    # competence types); ``view`` opens their page read-only (QA 13.10).
+    # The pickers every form reads are SHARED_READS, open whatever the
+    # matrix says - so ``none`` below ``hr`` only takes the menu entry.
     Section(
         "dictionaries",
         ("/dictionaries",),
-        _row("manage", "view", "view", "view", "view", "view"),
+        _row("manage", "manage", "none", "none", "none", "none"),
         admin_locked=True,
         never_hidden=True,
     ),

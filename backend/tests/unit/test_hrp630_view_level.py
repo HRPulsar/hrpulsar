@@ -12,12 +12,14 @@ card, the way ``hr`` does; ``employee`` still reads only its own.
 
 import uuid
 
+import pytest
 from app.modules.company.models import Division
 from app.modules.recruitment.models import QuestionSet
 
 from tests.unit.test_recruitment_manager_scope import _headers, _user
 from tests.unit.test_recruitment_section_access import (  # noqa: F401
     GATE,
+    SCOPE,
     _refused,
     hiring,
 )
@@ -128,3 +130,82 @@ async def test_the_hiring_roles_read_every_talent_card_at_view(auth_client, clie
     listed = await client.post("/api/talent-market/search", json={}, headers=employee)
     assert cid not in {c["id"] for c in listed.json()["items"]}
     assert (await client.get(f"/api/talent-market/{cid}", headers=employee)).status_code == 404
+
+
+# HRP-629 / HRP-630 REDO (QA 12.10): a manager or hiring manager at ``view``
+# who is not on a round's evaluator list reads the sheets of a live round
+# (QA 09.10), and once the round is completed or archived its averages too -
+# the data row and each competence's round average. A live round's
+# averages stay closed to a non-evaluator below ``runs_rounds``.
+
+
+async def _scored_round(client, db, tenant, cv, evaluators=()):
+    recruiter = _headers(await _user(db, tenant, "recruiter"))
+    me = (await client.get("/api/auth/me", headers=recruiter)).json()["id"]
+    created = await client.post(
+        f"/api/v1/candidate-vacancies/{cv.id}/assessment-rounds", json={"type": "interview"}, headers=recruiter
+    )
+    assert created.status_code == 201, created.text
+    rid = created.json()["id"]
+    for user_id in (me, *evaluators):
+        added = await client.post(
+            f"/api/v1/assessment-rounds/{rid}/evaluators", json={"user_id": str(user_id)}, headers=recruiter
+        )
+        assert added.status_code == 201, added.text
+    listed = (await client.get(f"/api/v1/assessment-rounds/{rid}/assessments", headers=recruiter)).json()
+    sheet = next(s["id"] for s in listed if s["evaluator_user_id"] == me)
+    competence = str(uuid.uuid4())
+    scored = await client.patch(
+        f"/api/v1/assessments/{sheet}/competence-scores/{competence}",
+        json={"score_value": 4, "score_source": "manual"},
+        headers=recruiter,
+    )
+    assert scored.status_code == 200, scored.text
+    return rid, recruiter, competence
+
+
+@pytest.mark.parametrize("viewer", ["mgr", "hm"])
+async def test_a_non_evaluator_reads_a_closed_rounds_averages(client, db, tenant, hiring, viewer):  # noqa: F811
+    rid, recruiter, competence = await _scored_round(client, db, tenant, hiring["mine_cv"])
+    v = _headers(hiring[viewer])
+    aggregate = f"/api/v1/assessment-rounds/{rid}/aggregate"
+    live = await client.get(aggregate, headers=v)
+    if viewer == "hm":
+        # Below ``runs_rounds`` a live round's averages stay closed.
+        assert _refused(live), live.text
+    else:
+        # The manager role runs rounds (HRP-830) - unchanged.
+        assert live.status_code == 200, live.text
+    for action in ("complete", "archive"):
+        closed = await client.patch(f"/api/v1/assessment-rounds/{rid}", json={"action": action}, headers=recruiter)
+        assert closed.status_code == 200, closed.text
+        resp = await client.get(aggregate, headers=v)
+        assert resp.status_code == 200, (action, resp.text)
+        body = resp.json()
+        assert [(c["competence_id"], c["average"]) for c in body["competences"]] == [(competence, 4.0)], action
+        assert body["average"] is not None, action
+        sheets = (await client.get(f"/api/v1/assessment-rounds/{rid}/assessments", headers=v)).json()
+        assert [c["score_value"] for s in sheets for c in s["competence_scores"]] == [4], action
+
+
+@pytest.mark.parametrize("viewer", ["mgr", "hm"])
+async def test_a_closed_round_of_another_vacancy_stays_out_of_scope(client, db, tenant, hiring, viewer):  # noqa: F811
+    rid, recruiter, _ = await _scored_round(client, db, tenant, hiring["theirs_cv"])
+    aggregate = f"/api/v1/assessment-rounds/{rid}/aggregate"
+    # The scope answers first, live or closed alike: the refusal does not
+    # tell an out-of-scope round's status.
+    live = await client.get(aggregate, headers=_headers(hiring[viewer]))
+    assert _refused(live, SCOPE), live.text
+    closed = await client.patch(f"/api/v1/assessment-rounds/{rid}", json={"action": "complete"}, headers=recruiter)
+    assert closed.status_code == 200, closed.text
+    resp = await client.get(aggregate, headers=_headers(hiring[viewer]))
+    assert _refused(resp, SCOPE), resp.text
+
+
+async def test_the_hiring_manager_evaluator_reads_only_their_own_live_averages(client, db, tenant, hiring):  # noqa: F811
+    # On the round the hiring manager evaluates, the averages read the way
+    # they do for the manager: theirs only until their own sheet is in (HRP-373).
+    rid, _, _ = await _scored_round(client, db, tenant, hiring["mine_cv"], evaluators=(hiring["hm"].id,))
+    resp = await client.get(f"/api/v1/assessment-rounds/{rid}/aggregate", headers=_headers(hiring["hm"]))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["competences"] == [] and resp.json()["average"] is None

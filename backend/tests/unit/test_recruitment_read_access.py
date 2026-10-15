@@ -155,7 +155,14 @@ class TestRecruitmentReadGate:
 # ``get_current_user`` for reads - the section gate answers ``view`` - and
 # the section's own level guards from ``routers/common.py``.
 AUTH_DEPENDENCIES = frozenset(
-    {"get_current_user", "runs_hiring", "evaluates", "runs_rounds", "reads_hiring_settings"}
+    {
+        "get_current_user",
+        "runs_hiring",
+        "evaluates",
+        "runs_rounds",
+        "reads_hiring_settings",
+        "reads_round_aggregate",
+    }
 )
 
 
@@ -325,7 +332,7 @@ def _declared_guards(node) -> set[str]:
 # the whole workspace, and ``require_role("admin"[, "hr"])`` is admin-level:
 # a route only those reach needs no guard - and stating it this way rather
 # than as an allowlist means widening such a route re-arms the check.
-SCOPED_REACH = frozenset({"get_current_user", "evaluates", "runs_rounds"})
+SCOPED_REACH = frozenset({"get_current_user", "evaluates", "runs_rounds", "reads_round_aggregate"})
 
 
 def _reached_by_scoped_callers(node) -> bool:

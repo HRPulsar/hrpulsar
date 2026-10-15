@@ -16,7 +16,6 @@ test.describe("Coverage — AI decomposition UI", () => {
   let accessToken: string;
   let refreshToken: string;
   let containerId: string;
-  let bareContainerId: string;
   let stepContainerId: string;
 
   test.beforeAll(async ({ browser }) => {
@@ -35,11 +34,6 @@ test.describe("Coverage — AI decomposition UI", () => {
       },
     });
     containerId = (await described.json()).id;
-    const bare = await page.request.post(`${API_BASE}/work/containers`, {
-      headers,
-      data: { type: "initiative", title: "Undescribed project" },
-    });
-    bareContainerId = (await bare.json()).id;
     // Its own container: a step on the generated one would turn Generate
     // into the confirm-replace dialog for the test above.
     const withStep = await page.request.post(`${API_BASE}/work/containers`, {
@@ -58,12 +52,20 @@ test.describe("Coverage — AI decomposition UI", () => {
     await setAuthTokens(page, accessToken, refreshToken);
   });
 
-  test("no description, no Generate button", async ({ page }) => {
-    await page.goto(`/coverage/${bareContainerId}`);
-    await expect(page.getByTestId("coverage-detail")).toBeVisible({ timeout: 10000 });
-    await page.getByTestId("coverage-tab-steps").click();
-    await expect(page.getByTestId("coverage-steps-empty")).toBeVisible();
-    await expect(page.getByTestId("coverage-btn-generate")).toHaveCount(0);
+  // HRP-1055: the breakdown is generated from the description, so neither
+  // the create form nor the Edit dialog saves without one.
+  test("no description, no save", async ({ page }) => {
+    await page.goto("/coverage/new");
+    await page.getByTestId("coverage-input-title").fill("Undescribed project");
+    await expect(page.getByTestId("coverage-btn-submit")).toBeDisabled();
+    await page.getByTestId("coverage-textarea-description").fill("   ");
+    await expect(page.getByTestId("coverage-btn-submit")).toBeDisabled();
+
+    await page.goto(`/coverage/${stepContainerId}`);
+    await page.getByTestId("coverage-btn-edit").click();
+    await page.getByTestId("coverage-edit-textarea-description").fill("");
+    await expect(page.getByTestId("coverage-btn-edit-save")).toBeDisabled();
+    await expect(page.getByTestId("coverage-edit-description-required")).toBeVisible();
   });
 
   test("Generate shows the banner; discard or dismiss frees the container", async ({

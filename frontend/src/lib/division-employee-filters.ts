@@ -34,6 +34,14 @@ export const EMPTY_FILTERS: DivisionEmployeeFilters = {
   gradeId: null,
 };
 
+/** HRP-1057: directory rows (outside the reader's scope) carry no ids and
+ * no hire date, so the id-based tiles, the filters and the HR columns only
+ * hold while every loaded row is a full one. One trimmed row turns them off
+ * for the whole page - counting part of the people would mislead. */
+export function allFullRows(employees: readonly object[]): boolean {
+  return employees.every((e) => "hire_date" in e);
+}
+
 export type FilterDropdownOption = {
   id: string;
   title: string;

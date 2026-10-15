@@ -399,3 +399,66 @@ async def test_a_plan_is_only_for_someone_in_the_authors_subtree(client, db, boa
     )
     assert inside.status_code == 409
     assert "tm_no_required_competences" in inside.text
+
+
+async def test_the_division_picker_offers_what_create_accepts(
+    auth_client, client, db, tenant, board
+):
+    """HRP-639 (QA 12.10): the Create card form fills its Division picker
+    from ``GET /divisions/scope`` - the manager's own and child divisions,
+    every division for an admin-level role. Pinned to what the create route
+    actually accepts, so the picker never offers a division that answers
+    403 or hides one that would pass."""
+    from tests.unit.test_section_gate import _save
+
+    child = Division(
+        tenant_id=tenant.id,
+        name=f"Child {uuid.uuid4().hex[:4]}",
+        parent_id=board["mine_division"].id,
+    )
+    db.add(child)
+    await db.commit()
+    await db.refresh(child)
+    hr_user = await _user(db, tenant, "hr")
+    await _save(auth_client, levels={"talent-market": {"hr": "manage"}})
+    all_ids = {
+        d.id
+        for d in (
+            await db.execute(select(Division).where(Division.tenant_id == tenant.id))
+        ).scalars()
+    }
+    expected = {
+        "admin_user": all_ids,
+        "hr": all_ids,
+        "mgr_user": {board["mine_division"].id, child.id},
+        "lonely_user": set(),
+    }
+    users = {**board, "hr": hr_user}
+    for who, want in expected.items():
+        h = _headers(users[who])
+        scope = await client.get("/api/divisions/scope", headers=h)
+        assert scope.status_code == 200, (who, scope.text)
+        offered = {uuid.UUID(d["id"]) for d in scope.json()}
+        assert offered == want, who
+        for division_id in all_ids:
+            r = await client.post(
+                "/api/talent-market",
+                headers=h,
+                json={
+                    "title": "Picked",
+                    "card_type": "vacancy",
+                    "division_id": str(division_id),
+                },
+            )
+            assert (r.status_code == 201) == (division_id in offered), (
+                who,
+                division_id,
+                r.text,
+            )
+        # "None" is always on offer.
+        r = await client.post(
+            "/api/talent-market",
+            headers=h,
+            json={"title": "Unfiled", "card_type": "vacancy"},
+        )
+        assert r.status_code == 201, (who, r.text)

@@ -137,7 +137,12 @@ class TestWhoSeesTheGrounds:
         await db.commit()
         cid = (
             await auth_client.post(
-                "/api/work/containers", json={"type": "process", "title": "Bonus pool"}
+                "/api/work/containers",
+                json={
+                    "description": "Test process",
+                    "type": "process",
+                    "title": "Bonus pool",
+                },
             )
         ).json()["id"]
         sid = (

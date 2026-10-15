@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.5.2] - 2026-10-15
+
+### Fixed
+- Recruitment: a manager or hiring manager with view access who is not a round's evaluator no longer sees evaluator names over the round's sheets, and a completed or archived round shows them its assessed-competences row, average score and per-competence round averages (HRP-629, HRP-630)
+- Coverage: admins and HR see every process without being added to it, even when the section access matrix gives them view only (HRP-810)
+- Coverage: Save access closes the Who sees this process dialog after the success message (HRP-810)
+- Company: the division page shows the Specialization column between Position and Grade to the Employee role and to a manager on another division (HRP-633)
+- Company: a manager sees the people of a division outside their own subtree, opening their cards in the trimmed view (HRP-1057)
+- Coverage: the process and project counter under the title follows the search, type and status filters (HRP-1056)
+- Coverage: a process or project cannot be created or saved without a description, which the step breakdown is generated from (HRP-1055)
+- Dictionaries: View access in the section access matrix opens the menu entry, every tab and direct links read-only (HRP-827)
+- Talent Market: the Division field of a card offers a manager only their own and child divisions (HRP-639)
+- Section access: by default Dictionaries opens to HR at Manage and closes to Manager and below, Competences opens to Manager at View and closes to Recruiter and below (HRP-827)
+
 ## [2.5.1] - 2026-10-13
 
 ### Fixed

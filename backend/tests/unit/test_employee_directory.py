@@ -395,6 +395,41 @@ async def test_manager_lists_the_tenant_in_full_only_inside_the_subtree(
 
 
 @pytest.mark.asyncio
+async def test_manager_sees_people_of_a_division_outside_the_subtree(
+    client: AsyncClient, db: AsyncSession, persona: DemoPersona
+):
+    """HRP-1057: the division page lists a foreign division's people for a
+    manager, as directory rows - not "No employees in this division"."""
+    headers, visible = await _manager_headers(db, persona)
+    result = await db.execute(
+        select(Employee.id, Employee.division_id)
+        .where(
+            Employee.tenant_id == persona.tenant_id,
+            Employee.division_id.is_not(None),
+            Employee.id.not_in(visible),
+            Employee.status == "active",
+        )
+        .limit(1)
+    )
+    row = result.first()
+    assert row is not None, "demo seed has nobody outside the managed subtree"
+    outsider, foreign = row
+
+    base = f"/api/employees?division_id={foreign}&include_sub_divisions=true"
+    scoped = await client.get(base, headers=headers)
+    assert scoped.status_code == 200, scoped.text
+    assert str(outsider) not in {r["id"] for r in scoped.json()["items"]}
+
+    resp = await client.get(f"{base}&tenant_wide=true", headers=headers)
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["items"]
+    assert str(outsider) in {r["id"] for r in rows}
+    for row in rows:
+        if row["id"] not in {str(i) for i in visible}:
+            assert "hire_date" not in row and "roles" not in row, row
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "query", ["role=employee", "unassigned_only=true", "issue=assessment_stale"]
 )

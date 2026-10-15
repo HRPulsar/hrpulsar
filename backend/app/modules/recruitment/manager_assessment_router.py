@@ -46,6 +46,7 @@ from app.modules.recruitment.manager_assessment_schemas import (
     ScaleUpdate,
 )
 from app.modules.recruitment.routers.common import (
+    reads_round_aggregate,
     recruitment_public_limiter,
     runs_hiring,
     runs_rounds,
@@ -230,10 +231,11 @@ async def add_evaluator_endpoint(
 async def round_aggregate_endpoint(
     round_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    # HRP-374: the payload now names each evaluator and their individual
-    # score, so it is gated like the round's other hiring-team surfaces
-    # rather than left open to any authenticated tenant member.
-    current_user: User = Depends(runs_rounds),
+    # HRP-374: the payload names each evaluator and their individual
+    # score, so it is not open to every reader of the round: ``runs_rounds``,
+    # the round's own evaluators, and - once the round is closed - the rest
+    # of its readers (HRP-629 / HRP-630 REDO).
+    current_user: User = Depends(reads_round_aggregate),
     _scope: None = Depends(round_scope),
 ) -> dict[str, Any]:
     # HRP-373: it also names each scorer, so an evaluator of this round

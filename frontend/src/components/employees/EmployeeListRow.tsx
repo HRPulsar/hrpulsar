@@ -63,22 +63,23 @@ const ALERT_CLASS: Record<EmployeeAlertCode, string> = {
 const GRID_TEMPLATE =
   "minmax(180px,1.2fr) minmax(180px,1.4fr) minmax(140px,1fr) 120px minmax(140px,1fr) 100px 120px";
 
-// HRP-623: the directory schema carries no specialization, status or hire
-// date, so rendering those columns for a rank-and-file caller means four
-// permanently empty cells. Same order, minus the fields that never arrive.
+// HRP-623: the directory schema carries no hire date, so those callers get
+// the same order minus the HR columns. Specialization is not one of them: the
+// directory carries it since the HRP-623 REDO, and QA asked for it back for
+// the Employee role (HRP-633 REDO).
 //
-// Order: Name | Position | Grade | Division
+// Order: Name | Position | Specialization | Grade | Division
 const DIRECTORY_GRID_TEMPLATE =
-  "minmax(180px,1.2fr) minmax(180px,1.4fr) 120px minmax(140px,1fr)";
+  "minmax(180px,1.2fr) minmax(180px,1.4fr) minmax(140px,1fr) 120px minmax(140px,1fr)";
 
 export interface EmployeeListRowProps {
   employee: EmployeeListItem;
   href?: string;
   testIdPrefix?: string;
   /**
-   * HRP-623: render the HR-only columns (specialization, status, hire
-   * date). Off for callers the API answers in the directory schema —
-   * those fields are absent from the payload, not merely empty.
+   * HRP-623: render the HR-only columns (status, hire date). Off for
+   * callers the API answers in the directory schema. Specialization is
+   * shown either way (HRP-633 REDO).
    */
   hrColumns?: boolean;
 }
@@ -206,15 +207,13 @@ function EmployeeListHeader({
       >
         {t("position")}
       </span>
-      {hrColumns && (
-        <span
-          role="columnheader"
-          data-testid={`${testIdPrefix}-column-specialization`}
-          className={cellClass}
-        >
-          {t("specialization")}
-        </span>
-      )}
+      <span
+        role="columnheader"
+        data-testid={`${testIdPrefix}-column-specialization`}
+        className={cellClass}
+      >
+        {t("specialization")}
+      </span>
       <span
         role="columnheader"
         data-testid={`${testIdPrefix}-column-grade`}
@@ -341,15 +340,13 @@ export function EmployeeListRow({
           className="text-muted-foreground"
         />
       </div>
-      {hrColumns && (
-        <div className="min-w-0" role="cell">
-          <CellText
-            value={employee.specialization_title ?? null}
-            testId={`${testIdPrefix}-${employee.id}-specialization`}
-            className="text-muted-foreground"
-          />
-        </div>
-      )}
+      <div className="min-w-0" role="cell">
+        <CellText
+          value={employee.specialization_title ?? null}
+          testId={`${testIdPrefix}-${employee.id}-specialization`}
+          className="text-muted-foreground"
+        />
+      </div>
       <div className="min-w-0" role="cell">
         {employee.grade_title ? (
           <Badge

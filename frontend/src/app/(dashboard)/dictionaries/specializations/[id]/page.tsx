@@ -9,7 +9,7 @@ import { useTranslations } from "next-intl";
 
 import { api } from "@/lib/api";
 import type { DictionaryItem, GradeSpecialization } from "@/lib/types";
-import { RequireRole } from "@/components/require-role";
+import { usePermissions } from "@/hooks/use-permissions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,18 +23,13 @@ import {
 } from "@/components/ui/table";
 import { gradeTitleLabel } from "@/lib/reference-labels";
 
-// HRP-436: guard the whole component, not just its JSX, so the page's
-// effects never fire for someone who is about to be redirected.
+// HRP-827: the page is part of the dictionaries section - the dashboard's
+// SectionGate opens it at `view` (QA 13.10). The passing score writes the
+// grade system, which stays the admin role's, so it is read-only to anyone
+// else.
 export default function SpecializationDetailPage() {
-  return (
-    <RequireRole admin>
-      <SpecializationDetailPageContent />
-    </RequireRole>
-  );
-}
-
-function SpecializationDetailPageContent() {
   const t = useTranslations("dictionaries");
+  const { isAdmin } = usePermissions();
   const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
   const [specialization, setSpecialization] = useState<DictionaryItem | null>(null);
@@ -146,7 +141,7 @@ function SpecializationDetailPageContent() {
                           </span>
                         </span>
                       </TableHead>
-                      <TableHead className="w-32" />
+                      {isAdmin && <TableHead className="w-32" />}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -165,36 +160,47 @@ function SpecializationDetailPageContent() {
                               {chain.competence_links.length}
                             </TableCell>
                             <TableCell>
-                              <Input
-                                type="number"
-                                min={0}
-                                max={100}
-                                step={1}
-                                value={draft}
-                                onChange={(e) =>
-                                  setDrafts((prev) => ({
-                                    ...prev,
-                                    [chain.id]: e.target.value,
-                                  }))
-                                }
-                                className="w-24"
-                                data-testid={`grade-spec-passing-score-input-${chain.grade_id}`}
-                              />
+                              {isAdmin ? (
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  step={1}
+                                  value={draft}
+                                  onChange={(e) =>
+                                    setDrafts((prev) => ({
+                                      ...prev,
+                                      [chain.id]: e.target.value,
+                                    }))
+                                  }
+                                  className="w-24"
+                                  data-testid={`grade-spec-passing-score-input-${chain.grade_id}`}
+                                />
+                              ) : (
+                                <span
+                                  className="tabular-nums"
+                                  data-testid={`grade-spec-passing-score-${chain.grade_id}`}
+                                >
+                                  {chain.passing_score ?? 75}
+                                </span>
+                              )}
                             </TableCell>
-                            <TableCell>
-                              <Button
-                                size="xs"
-                                variant={dirty ? "default" : "outline"}
-                                disabled={!dirty || savingId === chain.id}
-                                onClick={() => saveScore(chain)}
-                                data-testid={`grade-spec-passing-score-save-${chain.grade_id}`}
-                              >
-                                <Save className="mr-1 h-3 w-3" />
-                                {savingId === chain.id
-                                  ? t("savingEllipsis")
-                                  : t("save")}
-                              </Button>
-                            </TableCell>
+                            {isAdmin && (
+                              <TableCell>
+                                <Button
+                                  size="xs"
+                                  variant={dirty ? "default" : "outline"}
+                                  disabled={!dirty || savingId === chain.id}
+                                  onClick={() => saveScore(chain)}
+                                  data-testid={`grade-spec-passing-score-save-${chain.grade_id}`}
+                                >
+                                  <Save className="mr-1 h-3 w-3" />
+                                  {savingId === chain.id
+                                    ? t("savingEllipsis")
+                                    : t("save")}
+                                </Button>
+                              </TableCell>
+                            )}
                           </TableRow>
                         );
                       })}

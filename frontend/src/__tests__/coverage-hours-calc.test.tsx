@@ -613,10 +613,11 @@ describe("the list", () => {
     await type(byTestId("coverage-input-search") as HTMLInputElement, "PORTAL");
     expect(byTestId("coverage-row-launch")).not.toBeNull();
     expect(document.querySelector('[data-testid="coverage-row-hiring"]')).toBeNull();
-    // The count is of the list, not of what the search left.
-    expect(byTestId("coverage-count").textContent).toBe("2 processes · 1 project");
+    // HRP-1056: the count follows the filters, like the Talent Market's.
+    expect(byTestId("coverage-count").textContent).toBe("0 processes · 1 project");
 
     await type(byTestId("coverage-input-search") as HTMLInputElement, "nothing like it");
     expect(byTestId("coverage-empty-filtered").textContent).toBe(enMessages.coverage.emptyFiltered);
+    expect(byTestId("coverage-count").textContent).toBe("0 processes · 0 projects");
   });
 });

@@ -36,13 +36,13 @@ function NewContainerForm() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || !description.trim()) return;
     setSaving(true);
     try {
       const created = await workApi.createContainer({
         type,
         title: title.trim(),
-        description: description.trim() || null,
+        description: description.trim(),
         goal: goal.trim() || null,
       });
       router.push(`/coverage/${created.id}`);
@@ -96,6 +96,7 @@ function NewContainerForm() {
           onChange={(e) => setDescription(e.target.value)}
           rows={8}
           placeholder={t("descriptionPlaceholder")}
+          required
           data-testid="coverage-textarea-description"
         />
         <p className="text-xs text-muted-foreground">{t("descriptionHint")}</p>
@@ -113,7 +114,11 @@ function NewContainerForm() {
       </div>
 
       <div className="flex gap-2">
-        <Button type="submit" disabled={saving || !title.trim()} data-testid="coverage-btn-submit">
+        <Button
+          type="submit"
+          disabled={saving || !title.trim() || !description.trim()}
+          data-testid="coverage-btn-submit"
+        >
           {t("saveAndContinue")}
         </Button>
         <Button type="button" variant="outline" onClick={() => router.push("/coverage")}>

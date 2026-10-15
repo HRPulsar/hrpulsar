@@ -89,9 +89,8 @@ const emptyForm = { title: "", description: "", sort_index: 0, is_active: true }
 // effects never fire for someone who is about to be redirected.
 export default function DictionariesPage() {
   return (
-    // HRP-827: the page edits - it opens at `manage`, `view` on the
-    // section is the pickers other pages read.
-    <RequireSection code="dictionaries" level="manage">
+    // HRP-827: the page opens at `view`, read-only; `manage` edits (QA 13.10).
+    <RequireSection code="dictionaries">
       <DictionariesPageContent />
     </RequireSection>
   );
@@ -99,9 +98,9 @@ export default function DictionariesPage() {
 
 function DictionariesPageContent() {
   const t = useTranslations("dictionaries");
-  // HRP-827: a specialization's grade page writes the grade system, which
-  // is still the admin role's - the link stays with it.
-  const { isAdmin } = usePermissions();
+  // HRP-827: below `manage` the page is read-only - no add, edit or delete.
+  const { canManageSection } = usePermissions();
+  const canEdit = canManageSection("dictionaries");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
@@ -256,10 +255,12 @@ function DictionariesPageContent() {
           </div>
           <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
         </div>
-        <Button size="sm" onClick={openCreate} data-testid="dictionaries-btn-add" className="sm:self-auto self-start">
-          <Plus className="mr-1 h-4 w-4" />
-          {t("addItem")}
-        </Button>
+        {canEdit && (
+          <Button size="sm" onClick={openCreate} data-testid="dictionaries-btn-add" className="sm:self-auto self-start">
+            <Plus className="mr-1 h-4 w-4" />
+            {t("addItem")}
+          </Button>
+        )}
       </div>
 
       {/* Type tabs — horizontal scroll on narrow viewports so labels don't collide */}
@@ -375,14 +376,14 @@ function DictionariesPageContent() {
                 <TableHead>{t("columnSortIndex")}</TableHead>
                 <TableHead>{t("columnSource")}</TableHead>
                 <TableHead>{t("columnStatus")}</TableHead>
-                <TableHead className="w-10" />
+                {canEdit && <TableHead className="w-10" />}
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.map((item) => (
                 <TableRow key={item.id} data-testid={`dictionaries-item-${item.id}`}>
                   <TableCell className="font-medium">
-                    {activeType === "specialization" && isAdmin ? (
+                    {activeType === "specialization" ? (
                       <Link
                         href={`/dictionaries/specializations/${item.id}`}
                         className="text-primary hover:underline"
@@ -419,31 +420,33 @@ function DictionariesPageContent() {
                       {item.is_active ? t("statusActive") : t("statusInactive")}
                     </Badge>
                   </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" />}>
-                        <MoreHorizontal className="h-4 w-4" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => openEdit(item)} data-testid={`dictionaries-item-${item.id}-btn-edit`}>
-                          <Pencil className="mr-2 h-4 w-4" />
-                          {t("edit")}
-                        </DropdownMenuItem>
-                        {/* HRP-286: Delete is hidden for Source=System rows —
-                            origin items can never be deleted by a tenant. */}
-                        {item.tenant_id && (
-                          <DropdownMenuItem
-                            variant="destructive"
-                            onClick={() => openDelete(item)}
-                            data-testid={`dictionaries-item-${item.id}-btn-delete`}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            {tc("delete")}
+                  {canEdit && (
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" />}>
+                          <MoreHorizontal className="h-4 w-4" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => openEdit(item)} data-testid={`dictionaries-item-${item.id}-btn-edit`}>
+                            <Pencil className="mr-2 h-4 w-4" />
+                            {t("edit")}
                           </DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
+                          {/* HRP-286: Delete is hidden for Source=System rows —
+                              origin items can never be deleted by a tenant. */}
+                          {item.tenant_id && (
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onClick={() => openDelete(item)}
+                              data-testid={`dictionaries-item-${item.id}-btn-delete`}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              {tc("delete")}
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>

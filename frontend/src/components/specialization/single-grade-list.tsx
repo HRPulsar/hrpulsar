@@ -93,7 +93,10 @@ export function SingleGradeList({
   const [removing, setRemoving] = useState(false);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
 
-  const { canViewHrData } = usePermissions();
+  const { canViewHrData, canViewSection } = usePermissions();
+  // HRP-827: the competence card is the competences section's page - a
+  // role it is closed to gets the title, not a link that bounces.
+  const opensCompetences = canViewSection("competences");
   const hasSalary = grade.salary_min != null || grade.salary_max != null;
   const salaryLabel = hasSalary
     ? `${grade.salary_min ?? "?"} – ${grade.salary_max ?? "?"} ${grade.salary_currency}`
@@ -298,18 +301,27 @@ export function SingleGradeList({
                   warning. Min-w-0 + truncate so long titles do not
                   push the selector off the row. */}
               <div className="flex min-w-0 flex-1 items-center gap-2">
-                <Link
-                  href={`/competences/${comp.id}?from=matrix&specialization_id=${specId}`}
-                  data-testid={`matrix-row-${comp.id}-competence-link`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex min-w-0 items-center gap-1 text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
-                >
-                  <span className="truncate">
+                {!opensCompetences ? (
+                  <span
+                    className="min-w-0 truncate text-sm font-medium"
+                    data-testid={`matrix-row-${comp.id}-competence-title`}
+                  >
                     {competenceTitles.get(comp.id) ?? comp.title}
                   </span>
-                  <ExternalLink className="h-3 w-3 flex-shrink-0 opacity-60" />
-                </Link>
+                ) : (
+                  <Link
+                    href={`/competences/${comp.id}?from=matrix&specialization_id=${specId}`}
+                    data-testid={`matrix-row-${comp.id}-competence-link`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex min-w-0 items-center gap-1 text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                  >
+                    <span className="truncate">
+                      {competenceTitles.get(comp.id) ?? comp.title}
+                    </span>
+                    <ExternalLink className="h-3 w-3 flex-shrink-0 opacity-60" />
+                  </Link>
+                )}
                 {compIsLitUp && onOpenActiveSession && (
                   <ActiveAiSessionBadge
                     sessions={compSessions}
@@ -317,7 +329,17 @@ export function SingleGradeList({
                     testIdSuffix={`matrix-comp-${comp.id}`}
                   />
                 )}
-                {coverageWarning && (
+                {coverageWarning && !opensCompetences && (
+                  <span
+                    data-testid={`matrix-row-${comp.id}-coverage-warning`}
+                    aria-label={coverageWarning}
+                    title={coverageWarning}
+                    className="text-amber-600"
+                  >
+                    <AlertCircle className="h-4 w-4" />
+                  </span>
+                )}
+                {coverageWarning && opensCompetences && (
                   <Link
                     href={`/competences/${comp.id}?from=matrix&specialization_id=${specId}`}
                     data-testid={`matrix-row-${comp.id}-coverage-warning`}

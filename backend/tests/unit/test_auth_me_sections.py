@@ -47,7 +47,7 @@ async def test_employee_gets_the_defaults_without_none(client, db, tenant):
     sections = await _me_sections(client, await _headers(db, tenant, "employee"))
     assert sections == {
         "employees": "view", "company": "view", "assessments": "view", "development": "view",
-        "exams": "view", "competences": "view", "talent-market": "view", "dictionaries": "view",
+        "exams": "view", "talent-market": "view",
     }
 
 

@@ -367,7 +367,12 @@ class TestRoute:
         await db.execute(catalog_data.seed_insert())
         await db.commit()
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Payroll run"}
+            "/api/work/containers",
+            json={
+                "description": "Test process",
+                "type": "process",
+                "title": "Payroll run",
+            },
         )
         cid = created.json()["id"]
         _, _, stranger = await _person(db, tenant, "employee")

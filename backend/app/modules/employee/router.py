@@ -114,9 +114,9 @@ async def list_employees(
     # HRP-729: severity ordering. Default when ``issue`` is set, so the list a
     # dashboard chip opens leads with the same person the chip named.
     sort: Literal["severity", "created"] | None = Query(default=None),
-    # HRP-623 REDO: the employees page asks a manager's list to span the
-    # tenant. Off by default - every people picker reads this route and must
-    # keep offering the subtree only.
+    # HRP-623 REDO: the employees and division pages (HRP-1057) ask a
+    # manager's list to span the tenant. Off by default - every people picker
+    # reads this route and must keep offering the subtree only.
     tenant_wide: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),

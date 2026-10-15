@@ -47,6 +47,7 @@ import type { Position } from "@/lib/types";
 import {
   EMPTY_FILTERS,
   activeFilterCount,
+  allFullRows,
   applyDivisionFilters,
   collectDivisionSubtreeIds,
   deriveGradeOptions,
@@ -182,9 +183,13 @@ export default function DivisionDetailPage() {
           // every counter on this page is computed from this array, and
           // a silently truncated one undercounts the plates and can show
           // an empty table for a division that has people.
+          //
+          // HRP-1057: `tenant_wide` - without it a manager's list stays
+          // inside the managed subtree, and a division outside it reads
+          // as empty. Out-of-subtree people come back as directory rows.
           fetchAllPages<Employee>((skip, limit) =>
             api.get<EmployeeListResponse>(
-              `/employees?division_id=${id}&include_sub_divisions=true` +
+              `/employees?division_id=${id}&include_sub_divisions=true&tenant_wide=true` +
                 `&skip=${skip}&limit=${limit}`,
             ),
           ),
@@ -220,6 +225,10 @@ export default function DivisionDetailPage() {
     [allDivisions, id],
   );
   const hasSubDivisions = subtreeIds.length > 1;
+  // HRP-1057: outside a manager's subtree the rows are directory rows -
+  // no specialization / position / grade ids, no hire date - so the tiles,
+  // the filters and the HR columns follow the rows, not the role.
+  const hrView = canViewHrData && allFullRows(employees);
 
   // Every block on this page reads the same scoped set, so the tiles, the
   // dropdown options, the counters and the table can never disagree —
@@ -497,7 +506,7 @@ export default function DivisionDetailPage() {
           specialization, a field the directory schema does not carry, so
           for a rank-and-file caller every tile would read 0 while the
           table below lists the whole department. */}
-      {canViewHrData && (
+      {hrView && (
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
@@ -583,7 +592,7 @@ export default function DivisionDetailPage() {
                   {t("includeSubDivisions")}
                 </label>
               ) : null}
-              {canViewHrData && (
+              {hrView && (
               <>
               {/* HRP-58: Position filter — dropdown, options derived from
                   the loaded employees so the picker never offers a value
@@ -833,7 +842,7 @@ export default function DivisionDetailPage() {
               <EmployeeList
                 employees={filteredEmployees}
                 testIdPrefix="division-detail-employees-row"
-                hrColumns={canViewHrData}
+                hrColumns={hrView}
               />
             </div>
           )}

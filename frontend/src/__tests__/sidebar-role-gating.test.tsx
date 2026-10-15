@@ -14,9 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import enMessages from "../../messages/en.json";
 import { SECTION_CODES } from "@/lib/sections";
 
-// HRP-820: /auth/me lists every open section; a role flag stays on top
-// only where a section asks for one (dictionaries, HRP-827). Coverage
-// stays dynamic, so it is left out of the default.
+// HRP-820: /auth/me lists every open section and the entry follows it.
+// Coverage stays dynamic, so it is left out of the default.
 const OPEN_ALL: Record<string, string> = Object.fromEntries(
   SECTION_CODES.filter((c) => c !== "coverage").map((c) => [c, "view"]),
 );
@@ -210,13 +209,14 @@ describe("section access (HRP-820)", () => {
 
   it("opens the admin block to whoever the matrix opened it to (HRP-831)", async () => {
     // Until HRP-831 the four entries kept an admin flag on top of the
-    // matrix; now the row alone decides. Dictionaries still asks for
-    // `manage` (its `view` is the pickers), so `view` there hides it.
+    // matrix; now the row alone decides. Dictionaries too since QA 13.10
+    // on HRP-827: `view` opens its page read-only.
     await renderAs(["hr"], OPEN_ALL);
-    expect(hrefs()).not.toContain("/dictionaries");
-    for (const href of ["/settings/invitations", "/settings/import", "/settings/roles", "/settings/ai"]) {
+    for (const href of ["/dictionaries", "/settings/invitations", "/settings/import", "/settings/roles", "/settings/ai"]) {
       expect(hrefs()).toContain(href);
     }
+    await renderAs(["manager"], { ...OPEN_ALL, dictionaries: "" });
+    expect(hrefs()).not.toContain("/dictionaries");
     await renderAs(["admin"], { ...OPEN_ALL, invitations: "" });
     expect(hrefs()).not.toContain("/settings/invitations");
   });

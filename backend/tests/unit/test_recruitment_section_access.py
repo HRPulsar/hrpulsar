@@ -185,7 +185,14 @@ def _guards(dependant) -> list[tuple[str, dict]]:
     out: list[tuple[str, dict]] = []
     for dep in dependant.dependencies:
         name = getattr(dep.call, "__name__", "")
-        if name in ("section_checker", "section_or_role_checker", "role_checker", "admin_checker", "sheet_owner_checker"):
+        if name in (
+            "section_checker",
+            "section_or_role_checker",
+            "role_checker",
+            "admin_checker",
+            "sheet_owner_checker",
+            "reads_round_aggregate",
+        ):
             out.append((name, inspect.getclosurevars(dep.call).nonlocals))
         out.extend(_guards(dep))
     return out
@@ -199,7 +206,9 @@ def _asks_for_itself(name: str, env: dict) -> bool:
     if name == "role_checker":
         return set(env["role_codes"]) in ({"admin"}, {"admin", "hr"})
     # HRP-630: ``runs_rounds``, or the sheet's own evaluator at any level.
-    return name == "sheet_owner_checker"
+    # HRP-629 / HRP-630 REDO: ``runs_rounds``, the round's evaluators, or a
+    # closed round's readers for its averages.
+    return name in ("sheet_owner_checker", "reads_round_aggregate")
 
 
 # E2E seams, 404 outside ``E2E_MODE``.
@@ -225,8 +234,9 @@ _RESTRICTED_READS = {
     # manage or the hiring_manager role
     "/api/recruitment/settings/matrix",
     # manage or the manager role
-    "/api/v1/assessment-rounds/{round_id}/aggregate",
     "/api/v1/assessment-rounds/{round_id}/eligible-evaluators",
+    # manage, the manager role, the round's evaluators, or a closed round
+    "/api/v1/assessment-rounds/{round_id}/aggregate",
     # the admin role / admin and hr
     "/api/recruitment/settings/llm-providers",
     "/api/recruitment/settings/transcription-providers",
@@ -301,7 +311,9 @@ def test_what_a_scoped_caller_reaches_is_scoped():
             continue
         guards_of = _guards(r.dependant)
         roles = {env["role"] for name, env in guards_of if name == "section_or_role_checker"}
-        opens_view = roles & {"hiring_manager", "manager"} or any(n == "sheet_owner_checker" for n, _ in guards_of)
+        opens_view = roles & {"hiring_manager", "manager"} or any(
+            n in ("sheet_owner_checker", "reads_round_aggregate") for n, _ in guards_of
+        )
         if not opens_view or r.path in _TENANT_SETTINGS_READS:
             continue
         named = {k for k in keyed if f"{{{k}}}" in r.path}

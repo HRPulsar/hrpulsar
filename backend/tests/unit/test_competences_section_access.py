@@ -27,18 +27,29 @@ def _refused(r):
     return r.status_code == 403 and r.json()["code"] == GATE
 
 
-async def test_the_default_matrix_keeps_todays_answers(auth_client, client, db, tenant):
-    # admin and hr author the catalogue, nobody else does - the role list
-    # the routes carried until HRP-827, read off the matrix instead.
+async def test_the_default_matrix(auth_client, client, db, tenant):
+    # admin and hr author the catalogue and edit the dictionaries; a
+    # manager reads the catalogue (QA 13.10), the roles below it open
+    # neither section.
     for code in ("admin", "hr"):
-        created = await _group(client, await _as(db, tenant, code), f"By {code}")
+        h = await _as(db, tenant, code)
+        created = await _group(client, h, f"By {code}")
         assert created.status_code == 201, (code, created.text)
-    for code in ("manager", "recruiter", "hiring_manager", "employee"):
+        item = await client.post("/api/dictionaries/grade", json={"title": f"G {code}"}, headers=h)
+        assert item.status_code == 201, (code, item.text)
+    expected = {
+        "manager": ("view", None),
+        "recruiter": (None, None),
+        "hiring_manager": (None, None),
+        "employee": (None, None),
+    }
+    for code, (competences, dictionaries) in expected.items():
         h = await _as(db, tenant, code)
         assert _refused(await _group(client, h)), code
         assert (await client.post("/api/dictionaries/grade", json={"title": "G"}, headers=h)).status_code == 403
-        me = await client.get("/api/auth/me", headers=h)
-        assert me.json()["sections"]["competences"] == "view", code
+        me = (await client.get("/api/auth/me", headers=h)).json()["sections"]
+        assert me.get("competences") == competences, code
+        assert me.get("dictionaries") == dictionaries, code
 
     # Deleting, the skill-level ladder and generation stay the admin role's.
     hr = await _as(db, tenant, "hr")
@@ -48,7 +59,30 @@ async def test_the_default_matrix_keeps_todays_answers(auth_client, client, db, 
     assert _refused(await client.get("/api/competence-generation/sessions/active", headers=hr))
     assert (await auth_client.delete(f"/api/competence-groups/{gid}")).status_code == 204
     assert (await auth_client.get("/api/competence-generation/sessions/active")).status_code == 200
-    assert (await client.post("/api/dictionaries/grade", json={"title": "G"}, headers=hr)).status_code == 403
+
+
+async def test_closed_by_default_keeps_the_shared_reads(auth_client, client, db, tenant):
+    # QA 13.10: ``none`` below ``manager`` on competences and below ``hr``
+    # on dictionaries must not take a picker, an assessment or a profile -
+    # they read the catalogue through SHARED_READS.
+    gid = (await _group(auth_client, None)).json()["id"]
+    cid = (
+        await auth_client.post("/api/competences", json={"title": "Listening", "group_id": gid})
+    ).json()["id"]
+    for code in ("recruiter", "hiring_manager", "employee", "manager"):
+        h = await _as(db, tenant, code)
+        for path in (
+            "/api/competence-tree",
+            f"/api/competences/{cid}",
+            f"/api/competences/{cid}/indicators-by-level",
+            "/api/skill-levels",
+            "/api/dictionaries/grade",
+            "/api/dictionaries/competence_type",
+        ):
+            r = await client.get(path, headers=h)
+            assert r.status_code == 200, (code, path, r.text)
+        if code != "manager":
+            assert _refused(await client.get(f"/api/competences/{cid}/usage", headers=h)), code
 
 
 async def test_handing_the_section_to_a_manager_opens_authoring_only(
@@ -110,10 +144,27 @@ async def test_taking_the_catalogue_away_keeps_the_shared_reads(auth_client, cli
         assert r.status_code == 200, (path, r.text)
 
 
-async def test_handing_dictionaries_to_hr_opens_editing(auth_client, client, db, tenant):
-    hr = await _as(db, tenant, "hr")
-    await _save(auth_client, levels={"dictionaries": {"hr": "manage"}})
+async def test_dictionaries_at_view_read_and_do_not_write(auth_client, client, db, tenant):
+    # QA 13.10: ``view`` opens the page read-only - every tab's list and
+    # item answer, the writes and the usage preview stay ``manage``'s.
+    iid = (await auth_client.post("/api/dictionaries/grade", json={"title": "Lead"})).json()["id"]
+    manager = await _as(db, tenant, "manager")
+    await _save(auth_client, levels={"dictionaries": {"manager": "view"}})
 
+    me = (await client.get("/api/auth/me", headers=manager)).json()["sections"]
+    assert me["dictionaries"] == "view"
+    for item_type in ("grade", "specialization", "competence_type", "role", "goal", "project"):
+        r = await client.get(f"/api/dictionaries/{item_type}", headers=manager)
+        assert r.status_code == 200, (item_type, r.text)
+    assert (await client.get(f"/api/dictionaries/items/{iid}", headers=manager)).status_code == 200
+    assert _refused(await client.post("/api/dictionaries/grade", json={"title": "X"}, headers=manager))
+    assert _refused(await client.put(f"/api/dictionaries/items/{iid}", json={"title": "X"}, headers=manager))
+    assert _refused(await client.delete(f"/api/dictionaries/items/{iid}", headers=manager))
+    assert _refused(await client.get(f"/api/dictionaries/items/{iid}/usage", headers=manager))
+
+
+async def test_hr_edits_dictionaries_by_default(client, db, tenant):
+    hr = await _as(db, tenant, "hr")
     created = await client.post("/api/dictionaries/grade", json={"title": "Staff"}, headers=hr)
     assert created.status_code == 201, created.text
     iid = created.json()["id"]
@@ -129,11 +180,12 @@ async def test_drafting_the_catalogue_with_ai_asks_the_level(auth_client, client
         assert _refused(await client.post(path, json={}, headers=manager)), path
 
 
-async def test_hr_at_the_default_view_does_not_preview_dictionary_usage(auth_client, client, db, tenant):
+async def test_hr_lowered_to_view_does_not_preview_dictionary_usage(auth_client, client, db, tenant):
     # HRP-637: the usage preview maps positions to grades - it stays with
     # whoever may delete the entry.
     iid = (await auth_client.post("/api/dictionaries/grade", json={"title": "Lead"})).json()["id"]
     hr = await _as(db, tenant, "hr")
+    await _save(auth_client, levels={"dictionaries": {"hr": "view"}})
     assert _refused(await client.get(f"/api/dictionaries/items/{iid}/usage", headers=hr))
 
 

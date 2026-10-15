@@ -37,6 +37,7 @@ import { SingleGradeList } from "@/components/specialization/single-grade-list";
 import { UnsavedChangesBar } from "@/components/specialization/unsaved-changes-bar";
 import { ActiveAiSessionBadge } from "@/components/competence-generation/ActiveAiSessionBadge";
 import type { ActiveAiSession } from "@/hooks/use-active-ai-sessions";
+import { usePermissions } from "@/hooks/use-permissions";
 import { activeAiSessionsKey } from "@/hooks/use-active-ai-sessions";
 import { coverageGapMessage } from "@/lib/matrix-grading";
 
@@ -114,6 +115,9 @@ export function MatrixEditor({
   readOnly = false,
 }: Props) {
   const t = useTranslations("company");
+  // HRP-827: the competence card is the competences section's page - a
+  // role it is closed to gets the title, not a link that bounces.
+  const opensCompetences = usePermissions().canViewSection("competences");
   const grades = useMemo(() => gradesFromMeta(gradeMeta), [gradeMeta]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -496,16 +500,25 @@ export function MatrixEditor({
                           tab so the matrix editing state stays untouched
                           while the operator inspects indicators or runs AI
                           generation on the other surface. */}
-                      <Link
-                        href={`/competences/${comp.id}?from=matrix&specialization_id=${specId}`}
-                        data-testid={`matrix-row-${comp.id}-competence-link`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-primary hover:underline min-w-0"
-                      >
-                        <span className="truncate">{comp.title}</span>
-                        <ExternalLink className="h-3 w-3 flex-shrink-0 opacity-60" />
-                      </Link>
+                      {!opensCompetences ? (
+                        <span
+                          className="min-w-0 truncate"
+                          data-testid={`matrix-row-${comp.id}-competence-title`}
+                        >
+                          {comp.title}
+                        </span>
+                      ) : (
+                        <Link
+                          href={`/competences/${comp.id}?from=matrix&specialization_id=${specId}`}
+                          data-testid={`matrix-row-${comp.id}-competence-link`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-primary hover:underline min-w-0"
+                        >
+                          <span className="truncate">{comp.title}</span>
+                          <ExternalLink className="h-3 w-3 flex-shrink-0 opacity-60" />
+                        </Link>
+                      )}
                       {compIsLitUp && onOpenActiveSession && (
                         <ActiveAiSessionBadge
                           sessions={compSessions}
@@ -513,7 +526,17 @@ export function MatrixEditor({
                           testIdSuffix={`matrix-comp-${comp.id}`}
                         />
                       )}
-                      {coverageWarning && (
+                      {coverageWarning && !opensCompetences && (
+                        <span
+                          data-testid={`matrix-row-${comp.id}-coverage-warning`}
+                          aria-label={coverageWarning}
+                          title={coverageWarning}
+                          className="text-amber-600"
+                        >
+                          <AlertCircle className="h-4 w-4" />
+                        </span>
+                      )}
+                      {coverageWarning && opensCompetences && (
                         <Link
                           href={`/competences/${comp.id}?from=matrix&specialization_id=${specId}`}
                           data-testid={`matrix-row-${comp.id}-coverage-warning`}

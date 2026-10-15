@@ -24,7 +24,7 @@ test.describe("Coverage — manual mode and agent type", () => {
     const container = await (
       await page.request.post(`${API_BASE}/work/containers`, {
         headers,
-        data: { type: "process", title: `Month-end close ${Date.now()}` },
+        data: { type: "process", description: "E2E fixture", title: `Month-end close ${Date.now()}` },
       })
     ).json();
     const step = async (title: string, codes: string[], hours: number, runs: number) =>

@@ -16,7 +16,13 @@ from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
-from app.modules.recruitment.manager_assessment_models import RecruitmentAssessment
+from app.modules.recruitment.manager_assessment_models import (
+    AssessmentRound,
+    AssessmentRoundEvaluator,
+    RecruitmentAssessment,
+)
+from app.modules.recruitment.manager_assessment_service import _round_is_closed
+from app.modules.recruitment.scope import round_scope
 
 
 def resolve_page_params(
@@ -113,6 +119,46 @@ async def sheet_owner_checker(
         )
     )
     if owner is None or owner != current_user.id:
+        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
+    return current_user
+
+
+async def reads_round_aggregate(
+    round_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    # Scope first: an out-of-scope round answers the same whether it is live
+    # or closed, so the refusal does not tell its status.
+    _scope: None = Depends(round_scope),
+) -> User:
+    """HRP-629 / HRP-630 REDO (QA 12.10): who reads a round's averages.
+
+    ``runs_rounds`` at any time, as before. Below it the round's own
+    evaluators read them - behind the HRP-373 anchoring gate the service
+    applies - and every other reader of the round once it is completed or
+    archived: its scores are final, and the sheets themselves are already
+    open to them. A live round's averages stay closed to a non-evaluator.
+    The vacancy scope guard on the route still fences all of this.
+    """
+    if "manager" in {r.code for r in current_user.roles} or await runs_hiring_level(
+        db, current_user
+    ):
+        return current_user
+    rd = await db.scalar(
+        select(AssessmentRound).where(
+            AssessmentRound.id == round_id,
+            AssessmentRound.tenant_id == current_user.tenant_id,
+        )
+    )
+    if rd is not None and _round_is_closed(rd):
+        return current_user
+    on_round = await db.scalar(
+        select(AssessmentRoundEvaluator.user_id).where(
+            AssessmentRoundEvaluator.round_id == round_id,
+            AssessmentRoundEvaluator.user_id == current_user.id,
+        )
+    )
+    if on_round is None:
         raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
     return current_user
 

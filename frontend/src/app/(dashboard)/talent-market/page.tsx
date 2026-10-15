@@ -178,6 +178,10 @@ export default function TalentMarketPage() {
   // filter is active, so tenants past 50 cards aren't under-reported.
   const [total, setTotal] = useState(0);
   const [divisions, setDivisions] = useState<Division[]>([]);
+  // HRP-639: the divisions a card may be filed under - the caller's own and
+  // child divisions, all of them for an admin-level role. Mirrors
+  // `assert_division_in_scope`, which refuses the rest on create and update.
+  const [scopeIds, setScopeIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
 
@@ -211,13 +215,15 @@ export default function TalentMarketPage() {
 
   async function load() {
     try {
-      const [searchData, divData] = await Promise.all([
+      const [searchData, divData, scopeData] = await Promise.all([
         api.post<{ items: TalentCard[]; total: number }>("/talent-market/search", { limit: 50 }),
         api.get<Division[]>("/divisions"),
+        api.get<{ id: string }[]>("/divisions/scope"),
       ]);
       setCards(searchData.items);
       setTotal(searchData.total);
       setDivisions(divData);
+      setScopeIds(new Set(scopeData.map((d) => d.id)));
       setLoadError(false);
     } catch {
       setLoadError(true);
@@ -693,9 +699,13 @@ export default function TalentMarketPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">{t("divisionNone")}</SelectItem>
-                  {flatDivisions.map((d) => (
-                    <SelectItem key={d.id} value={d.id}>{"—".repeat(d.depth)} {d.name}</SelectItem>
-                  ))}
+                  {/* HRP-639: the caller's scope; a card already filed
+                      elsewhere keeps its current division listed. */}
+                  {flatDivisions
+                    .filter((d) => scopeIds.has(d.id) || d.id === form.division_id)
+                    .map((d) => (
+                      <SelectItem key={d.id} value={d.id}>{"—".repeat(d.depth)} {d.name}</SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>

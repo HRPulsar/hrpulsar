@@ -16,7 +16,7 @@ test.describe("Coverage - process access", () => {
 
     const created = await page.request.post(`${API_BASE}/work/containers`, {
       headers,
-      data: { type: "process", title },
+      data: { type: "process", description: "E2E fixture", title },
     });
     expect(created.ok()).toBeTruthy();
     const container = await created.json();
@@ -52,6 +52,9 @@ test.describe("Coverage - process access", () => {
       await expect(page.getByTestId("coverage-access-dialog")).toBeVisible();
       await page.getByTestId("coverage-access-visibility-company").click();
       await page.getByTestId("coverage-access-btn-save").click();
+      // HRP-810 REDO: saving closes the dialog; the change is in its history.
+      await expect(page.getByTestId("coverage-access-dialog")).toHaveCount(0);
+      await page.getByTestId("coverage-btn-access").click();
       await expect(page.getByTestId("coverage-access-history").locator("li")).toHaveCount(1);
 
       await colleague.goto("/dashboard");

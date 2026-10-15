@@ -6,6 +6,9 @@ these holds:
 
 * they manage the section (``manage`` on ``coverage`` in the tenant's
   section access matrix - HRP-821);
+* they hold an admin-level role (``admin``, ``hr``): those read every
+  process whatever level the matrix gives them, and edit only at the
+  matrix's ``manage`` or as the owner (HRP-810 REDO);
 * the container is ``company``-wide;
 * they own it;
 * one of its rules names their role, their current position or them;
@@ -31,7 +34,7 @@ from fastapi import Depends
 from sqlalchemy import ColumnElement, exists, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.access_scope import get_current_employee
+from app.core.access_scope import ADMIN_ROLE_CODES, get_current_employee
 from app.core.errors import AppError
 from app.core.sections import Level, matrix_levels
 from app.database import get_db
@@ -62,6 +65,10 @@ class Actor:
     employee_id: uuid.UUID | None
     position_id: uuid.UUID | None
 
+    @property
+    def reads_all(self) -> bool:
+        return self.manage or not ADMIN_ROLE_CODES.isdisjoint(self.role_codes)
+
 
 async def actor_for(
     db: AsyncSession, user: User, *, matrix_level: Level | None = None
@@ -87,7 +94,7 @@ async def actor_for(
 def visible(actor: Actor) -> ColumnElement[bool]:
     """The read condition on ``WorkContainer``. The tenant filter stays the
     caller's: every query already has one."""
-    if actor.manage:
+    if actor.reads_all:
         return true()
     rule = WorkContainerAccessRule
     matches: list[ColumnElement[bool]] = [rule.role_code.in_(actor.role_codes)]

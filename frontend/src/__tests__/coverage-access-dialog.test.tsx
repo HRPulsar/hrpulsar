@@ -14,14 +14,17 @@ import type { ContainerAccess, ProcessPerson } from "@/lib/api/work";
 
 const getAccess = vi.fn();
 const listPeople = vi.fn();
+const setAccess = vi.fn();
+const onClose = vi.fn();
 
 vi.mock("@/lib/api/work", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/work")>()),
-  workApi: { getAccess, listPeople, setAccess: vi.fn(), updateContainer: vi.fn() },
+  workApi: { getAccess, listPeople, setAccess, updateContainer: vi.fn() },
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const { AccessDialog } = await import("@/components/coverage/access-dialog");
+const { toast } = await import("sonner");
 
 const ACCESS: ContainerAccess = {
   visibility: "restricted",
@@ -57,6 +60,9 @@ let root: Root;
 beforeEach(() => {
   getAccess.mockReset().mockResolvedValue(ACCESS);
   listPeople.mockReset().mockResolvedValue(PEOPLE);
+  setAccess.mockReset().mockResolvedValue(ACCESS);
+  onClose.mockReset();
+  vi.mocked(toast.success).mockReset();
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -74,7 +80,7 @@ async function render() {
         <AccessDialog
           containerId="c-1"
           canChangeOwner
-          onClose={() => {}}
+          onClose={onClose}
           onOwnerChanged={() => {}}
         />
       </NextIntlClientProvider>,
@@ -142,4 +148,24 @@ it("filters the owner list by its own search box", async () => {
   // The rule picker's own box is a second state (`ruleSearch`); its list
   // sits behind a base-ui select that jsdom cannot open, so the separation
   // is not asserted here.
+});
+
+it("closes after saving the access, with the success toast (HRP-810 REDO)", async () => {
+  await render();
+  await click("coverage-access-visibility-company");
+  await click("coverage-access-btn-save");
+
+  expect(setAccess).toHaveBeenCalledWith("c-1", expect.objectContaining({ visibility: "company" }));
+  expect(toast.success).toHaveBeenCalledWith(enMessages.coverage.accessSaved);
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it("stays open when saving fails", async () => {
+  setAccess.mockRejectedValue(new Error("nope"));
+  await render();
+  await click("coverage-access-btn-save");
+
+  expect(toast.success).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  expect((byTestId("coverage-access-btn-save") as HTMLButtonElement).disabled).toBe(false);
 });

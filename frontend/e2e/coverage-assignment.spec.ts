@@ -25,7 +25,7 @@ test.describe("Coverage — step assignment", () => {
     const container = await (
       await page.request.post(`${API_BASE}/work/containers`, {
         headers,
-        data: { type: "process", title: `Credit release ${Date.now()}` },
+        data: { type: "process", description: "E2E fixture", title: `Credit release ${Date.now()}` },
       })
     ).json();
     const step = await (

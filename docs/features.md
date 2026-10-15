@@ -153,7 +153,7 @@ The competence library: groups, competences, indicators, and learning materials.
 - Drag-and-drop reorganization of the tree with referential integrity checks
 - A per-competence audit log records every publish, move, activation, and deletion with actor and timestamp
 - The competence page groups indicators and materials by skill level, with editable indicator weights and drag-and-drop ordering
-- Who edits the library is the section access setting; admins and HR unless you change it. Deleting from it, the skill levels and the AI generation of the tree stay with admins. Everyone else reads it, and the competence tree every assessment, vacancy and profile picks from stays readable even for a role whose Competences section is closed
+- Who edits the library is the section access setting; admins and HR unless you change it. Deleting from it, the skill levels and the AI generation of the tree stay with admins. Division managers read it by default; for recruiters, hiring managers and employees the Competences section is closed unless you open it, and the competence tree every assessment, vacancy and profile picks from stays readable even for a role whose Competences section is closed
 - Division heads add their own competence drafts to an existing group, rename and delete them; a draft is seen only by its author, HR and admins, is offered in no picker, and joins the library once HR or an admin publishes it
 
 ### Grade System
@@ -171,7 +171,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Built-in and custom entries with sort ordering and active/inactive status
 - Built-in entries can be switched on or off per workspace; their titles stay fixed
 - Deleting a custom entry that is referenced elsewhere is blocked with a clear message
-- Who edits dictionaries is the section access setting, admins by default; every form keeps reading them whatever the setting says
+- Who edits dictionaries is the section access setting, admins and HR by default; a role at view opens the section read-only, and every form keeps reading them whatever the setting says
 
 ---
 
@@ -247,7 +247,7 @@ Reference data shared across the platform: specializations, grades, skill levels
 - Workspace-defined assessment scales (2–10 weighted levels); each vacancy freezes its scale on the first score. Each scale carries its own divergence threshold, readable and adjustable on the scale itself after it was created
 - Assessment rounds per candidate (pre-interview, numbered interviews, final) with a separate sheet per evaluator, always listed in hiring order
 - Several colleagues can score the same round: add an evaluator and they get their own sheet plus an email invitation with a direct link. Each writes only their own row, and a colleague's sheet stays hidden until you submit yours, so nobody anchors on someone else's answers. Pre-interview rounds keep a single evaluator
-- Round lifecycle from the tab menu: complete, reopen, archive, restore. Completing or archiving a round freezes it — sheets turn read-only for the hiring team and for external evaluators alike, and the outstanding invitation links are revoked. A round only external evaluators scored shows its progress and can be marked complete too, once their submitted sheets cover every Critical competence. An archived round keeps every score but drops out of the candidate's average and is marked as excluded. An evaluator who already submitted can still open their sheet and sees why it is read-only; once the round is reopened, a sheet whose invitation allows re-editing takes edits again until the link expires
+- Round lifecycle from the tab menu: complete, reopen, archive, restore. Completing or archiving a round freezes it — sheets turn read-only for the hiring team and for external evaluators alike, and the outstanding invitation links are revoked. A closed round shows its progress, average and per-competence round averages to everyone who reads the candidate, not only to its evaluators. A round only external evaluators scored shows its progress and can be marked complete too, once their submitted sheets cover every Critical competence. An archived round keeps every score but drops out of the candidate's average and is marked as excluded. An evaluator who already submitted can still open their sheet and sees why it is read-only; once the round is reopened, a sheet whose invitation allows re-editing takes edits again until the link expires
 - The candidate's Manager score for a vacancy comes from a single round — the last completed one in hiring order (pre-interview, interviews, final), regardless of when it was closed, falling back to the last scored round while none is complete and skipping archived rounds entirely. Both the candidate page and the vacancy table name that round in the score's tooltip
 - Indicator-level and competence-level scoring with autosave and a completion marker. Every saved score, round action and revoked invitation also refreshes the Manager score shown in the candidate page's Vacancy applications block, without reloading the page. Scoring a competence's indicators derives its overall score; setting the overall by hand instead clears the indicator answers, so the two never contradict each other
 - The round header carries the round's average score — the mean across every evaluator and competence, alongside its percent of scale — and shows an em dash until the first score lands. While you are still scoring the round yourself, it counts only the sheets you may already read, so the header cannot hand you a colleague's number before you submit
@@ -527,7 +527,7 @@ Break a process or a project down into steps, see who covers each step - an AI a
 
 ### Breakdowns
 
-- Describe a process or a project in plain language; the AI drafts the ordered list of steps in two calls - one splits the description into steps, one tags every step with the capabilities it requires from a fixed catalog of seventeen
+- Describe a process or a project in plain language - the description is required, since the steps are drafted from it; the AI drafts the ordered list of steps in two calls - one splits the description into steps, one tags every step with the capabilities it requires from a fixed catalog of seventeen
 - Every step carries who answers for it (nobody, reputational, formal, regulatory), whether it produces a draft or changes the outside world, an optional reversibility, and the model's estimate of hours per run and runs per year, which you correct in place
 - The first breakdown of a container applies itself: there is nothing to replace, so you land on the coverage with a number instead of on a button. A regeneration still asks, and shows the current and the proposed step lists side by side before you decide
 - Long generations show a progress strip with the phase and a running clock
@@ -573,7 +573,7 @@ Everything the breakdown leaves unclosed, in two sections.
 Not every process is for the whole company - payroll, severance or compensation work often is not.
 
 - Whoever the section access setting gives Coverage management - admins and HR unless you change it - sees and edits every process. Besides them, a process is seen by its owner and by the people assigned to its steps
-- Each process is visible either to the whole company or only to the roles, positions and employees you name. A new process starts restricted, with its creator as the owner
+- Each process is visible either to the whole company or only to the roles, positions and employees you name. A new process starts restricted, with its creator as the owner. Admins and HR see every process
 - The owner edits the process - steps, AI runs, acceptance and who sees it - but does not delete it or hand it to another owner; that stays with the section's managers, so a process never depends on one person staying with the company
 - An owner who has left is marked as such, and the section's managers name a new one - an archived process included
 - A colleague who only reads a process sees every verdict and who is assigned to a step, but not which colleague a match found or what an assignee lacks: both come from assessments. A manager sees them for the people in their own divisions, and everyone sees their own
@@ -653,7 +653,7 @@ Per-workspace configuration that applies to every AI call.
 - The sidebar only offers what the role can actually open: hiring stays out of a rank-and-file employee's menu, and the controls on the company page appear for the roles the API accepts
 - A rank-and-file employee keeps the company overview only: the Profile, Positions and Specializations tabs are not shown to them, a direct link returns them to the dashboard with an error, and the API refuses the data behind those tabs. Raising the Employee role to Manage on the company section in the access setting hands the tabs back
 - A read-only **Roles** page in the Admin area lists every role of the workspace with what it can actually do and how many people hold it — the descriptions follow the gates the product enforces. The count opens the employee list filtered by that role
-- The Admin area (dictionaries, invitations, data import, roles, AI settings) follows the section access setting - admins by default, plus HR and division managers for invitations: the sidebar group shows only the entries open to the role, and opening a closed one directly shows an error and returns the user to the dashboard
+- The Admin area (dictionaries, invitations, data import, roles, AI settings) follows the section access setting - admins by default, plus HR for dictionaries and HR and division managers for invitations: the sidebar group shows only the entries open to the role, and opening a closed one directly shows an error and returns the user to the dashboard
 - Every action in the Admin area is gated the same way on the API, so a hidden section is never merely hidden (reference data stays readable across the product, as the rest of the app depends on it)
 - Reading is scoped as tightly as writing: hiring data (candidates, resumes, interviews, reports) is reserved for the roles that do hiring, and the sections under an employee card — competences, timeline, education, employment history, compensation — open only for the person themselves, their division manager, and admins
 - Everyone can still look a colleague up: the employee list is a company directory for rank-and-file staff, showing name, job title, department, specialization and whether the colleague is active or on leave, with no other HR data attached. People who have left are not listed, and the directory filters by those two statuses. Grades appear there only if the workspace switches them on

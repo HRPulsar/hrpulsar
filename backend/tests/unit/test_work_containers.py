@@ -398,6 +398,56 @@ class TestSteps:
 
 
 class TestRouter:
+    async def test_description_is_required(self, auth_client, primitives):
+        """HRP-1055: the breakdown is generated from the description, so a
+        container is neither created nor saved without one."""
+        url = "/api/work/containers"
+        for body in (
+            {"type": "process", "title": "Payroll"},
+            {"type": "process", "title": "Payroll", "description": None},
+            {"type": "process", "title": "Payroll", "description": "   "},
+        ):
+            refused = await auth_client.post(url, json=body)
+            assert refused.status_code == 422, body
+
+        created = await auth_client.post(
+            url, json={"type": "process", "title": "Payroll", "description": "Pay"}
+        )
+        assert created.status_code == 201, created.text
+        cid = created.json()["id"]
+        for description in (None, "", "  "):
+            cleared = await auth_client.patch(
+                f"{url}/{cid}", json={"description": description}
+            )
+            assert cleared.status_code == 422, description
+        # A save that leaves the description out keeps it.
+        renamed = await auth_client.patch(f"{url}/{cid}", json={"title": "Payroll run"})
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["description"] == "Pay"
+
+    async def test_a_row_from_before_without_a_description_still_works(
+        self, auth_client, db, primitives
+    ):
+        """HRP-1055 left the column nullable: a container saved before the rule
+        still lists, reads and takes a save that does not touch the text."""
+        url = "/api/work/containers"
+        created = await auth_client.post(
+            url, json={"type": "process", "title": "Legacy", "description": "x"}
+        )
+        cid = created.json()["id"]
+        row = await db.get(WorkContainer, uuid.UUID(cid))
+        row.description = None
+        await db.commit()
+
+        listed = await auth_client.get(url)
+        assert listed.status_code == 200, listed.text
+        assert cid in {c["id"] for c in listed.json()["items"]}
+        read = await auth_client.get(f"{url}/{cid}")
+        assert read.status_code == 200 and read.json()["description"] is None
+        renamed = await auth_client.patch(f"{url}/{cid}", json={"title": "Legacy run"})
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["description"] is None
+
     async def test_roles_and_tenants(self, client, auth_client, db, tenant, primitives):
         admin_headers = dict(client.headers)
         created = await auth_client.post(
@@ -459,7 +509,10 @@ class TestRouter:
                 f"/api/work/containers/{container_id}/steps", json={"title": "x"}
             ),
             client.post(f"/api/work/containers/{container_id}/accept"),
-            client.post("/api/work/containers", json={"type": "process", "title": "x"}),
+            client.post(
+                "/api/work/containers",
+                json={"description": "Test process", "type": "process", "title": "x"},
+            ),
             client.delete(f"/api/work/containers/{container_id}"),
             client.delete(f"/api/work/steps/{step_id}"),
             client.put(
@@ -561,7 +614,12 @@ class TestRouter:
         owner, owner_token = await _user_with_role(db, tenant, "manager")
         created = await auth_client.post(
             "/api/work/containers",
-            json={"type": "initiative", "title": "Launch", "owner_id": str(owner.id)},
+            json={
+                "description": "Test process",
+                "type": "initiative",
+                "title": "Launch",
+                "owner_id": str(owner.id),
+            },
         )
         assert created.status_code == 201, created.text
         container_id = created.json()["id"]

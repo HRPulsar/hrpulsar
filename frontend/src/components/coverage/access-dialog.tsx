@@ -166,20 +166,19 @@ export function AccessDialog({
   async function save() {
     setSaving(true);
     try {
-      apply(
-        await workApi.setAccess(containerId, {
-          visibility,
-          rules: rules.map(({ role_code, position_id, employee_id }) => ({
-            role_code,
-            position_id,
-            employee_id,
-          })),
-        }),
-      );
+      await workApi.setAccess(containerId, {
+        visibility,
+        rules: rules.map(({ role_code, position_id, employee_id }) => ({
+          role_code,
+          position_id,
+          employee_id,
+        })),
+      });
       toast.success(t("accessSaved"));
+      // HRP-810 REDO: a saved dialog is done - it closes like any other form.
+      onClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("saveFailed"));
-    } finally {
       setSaving(false);
     }
   }

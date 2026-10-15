@@ -38,7 +38,7 @@ test.describe("Coverage — row links", () => {
     const container = await (
       await page.request.post(`${API_BASE}/work/containers`, {
         headers,
-        data: { type: "process", title: `Invoice run ${Date.now()}` },
+        data: { type: "process", description: "E2E fixture", title: `Invoice run ${Date.now()}` },
       })
     ).json();
     const step = async (data: Record<string, unknown>) =>

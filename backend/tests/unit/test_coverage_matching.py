@@ -78,7 +78,12 @@ async def origin_competence(db: AsyncSession):
 
 async def _container(db, tenant, user, **overrides):
     data = ContainerCreate(
-        **{"type": "process", "title": "Month-end close", **overrides}
+        **{
+            "type": "process",
+            "title": "Month-end close",
+            "description": "Finance closes the month",
+            **overrides,
+        }
     )
     return await service.create_container(db, tenant.id, data, user_id=user.id)
 

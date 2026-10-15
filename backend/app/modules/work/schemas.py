@@ -59,12 +59,17 @@ TEXT_MAX = 20_000
 Title = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=TITLE_MAX)
 ]
+# HRP-1055: the breakdown is generated from it, so a container is not saved
+# without one. The column stays nullable for the rows from before.
+Description = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=TEXT_MAX)
+]
 
 
 class ContainerCreate(BaseModel):
     type: ContainerType
     title: Title
-    description: str | None = Field(default=None, max_length=TEXT_MAX)
+    description: Description
     goal: str | None = Field(default=None, max_length=TEXT_MAX)
     owner_id: uuid.UUID | None = None
     gap_default_label: GapLabel = "hire"
@@ -81,11 +86,11 @@ def _not_null(value: Any) -> Any:
 
 class ContainerUpdate(BaseModel):
     _reject_null = field_validator(
-        "title", "status", "gap_default_label", mode="before"
+        "title", "description", "status", "gap_default_label", mode="before"
     )(_not_null)
 
     title: Title | None = None
-    description: str | None = Field(default=None, max_length=TEXT_MAX)
+    description: Description | None = None
     goal: str | None = Field(default=None, max_length=TEXT_MAX)
     # ``active`` is reached only through accept, which also flips the steps
     # and pins the catalog version.

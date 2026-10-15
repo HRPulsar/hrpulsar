@@ -201,8 +201,9 @@ function buildBackendQuery(
   // Costs an assessment + plan scan over the page, so only ask when there
   // is a column to render it in. The directory schema drops it anyway.
   if (withAlerts) params.set("with_alerts", "true");
-  // HRP-623 REDO: a manager's list spans the tenant here (and only here -
-  // the people pickers that read the same route keep the subtree).
+  // HRP-623 REDO: a manager's list spans the tenant here (and on the
+  // division page - the people pickers that read the same route keep the
+  // subtree).
   params.set("tenant_wide", "true");
   for (const key of FILTER_KEYS) {
     for (const v of filters[key]) params.append(key, v);

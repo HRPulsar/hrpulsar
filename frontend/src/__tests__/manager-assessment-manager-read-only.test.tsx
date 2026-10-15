@@ -86,10 +86,17 @@ vi.mock("@/lib/api", () => ({
       }
       if (url.endsWith("/aggregate"))
         return Promise.resolve({
-          average: null,
+          average: 4,
           average_weight: null,
           divergence_threshold: 1,
-          competences: [],
+          competences: [
+            {
+              competence_id: "c-1",
+              average: 4,
+              diverges: false,
+              scorers: [{ evaluator: "u-recruiter", evaluator_type: "internal", score: 4 }],
+            },
+          ],
         });
       return Promise.reject(new Error(`not mocked: ${url}`));
     }),
@@ -111,7 +118,8 @@ vi.mock("sonner", () => ({
 }));
 
 // The score list stands in for the sheet: one button scores the single
-// competence, and it is live only when the sheet takes input.
+// competence, and it is live only when the sheet takes input. It carries the
+// competence's round average when the sheet is given one.
 vi.mock("@/components/recruitment/evaluation-sheet-form", async (orig) => ({
   ...(await orig<object>()),
   toProfileCompetences: () =>
@@ -120,13 +128,17 @@ vi.mock("@/components/recruitment/evaluation-sheet-form", async (orig) => ({
     ]),
   CompetenceScoreList: ({
     disabled,
+    aggregates,
     onCompetenceScore,
   }: {
     disabled: boolean;
+    aggregates?: Record<string, { average: number; scorers: unknown[] }>;
     onCompetenceScore: (id: string, value: number) => void;
   }) => (
     <button
       data-testid="score-stub"
+      data-round-average={aggregates?.["c-1"]?.average}
+      data-scorers={aggregates?.["c-1"]?.scorers.length}
       disabled={disabled}
       onClick={() => onCompetenceScore("c-1", 4)}
     />
@@ -235,8 +247,6 @@ describe("Manager assessments for a manager below manage (HRP-629)", () => {
     await openTab(OTHER.id);
     const readonly = anyById("assessment-readonly-sheet-");
     expect(readonly).not.toBeNull();
-    // The colleague's name heads their sheet.
-    expect(readonly!.textContent).toContain("u-recruiter");
     const score = byId("score-stub");
     expect(score).not.toBeNull();
     expect(score!.disabled).toBe(true);
@@ -300,4 +310,55 @@ describe("Manager assessments for a manager below manage (HRP-629)", () => {
         expect(anyById(id), `${who}: ${id}`).not.toBeNull();
     }
   });
+
+  // HRP-629 / HRP-630 REDO (QA 12.10): the same for the manager and the
+  // hiring manager at view who is not on the round - no evaluator name over
+  // a sheet; a live round shows the sheets alone, a completed or archived
+  // one its data row and each competence's round average as well.
+  for (const role of ["manager", "hiring_manager"]) {
+    it(`${role} not on a live round: sheets without a name or averages`, async () => {
+      vi.mocked(api.get).mockClear();
+      await render([role], "view");
+      await openTab(OTHER.id);
+      const readonly = anyById("assessment-readonly-sheet-");
+      expect(readonly).not.toBeNull();
+      expect(container.querySelector('[data-testid="assessment-readonly-sheets"]')!.textContent).not.toContain(
+        "u-recruiter",
+      );
+      expect(byId("assessment-progress-counter")).toBeNull();
+      expect(byId("score-stub")!.dataset.roundAverage).toBeUndefined();
+      if (role === "hiring_manager")
+        // A live round's averages are not theirs to read (reads_round_aggregate).
+        expect(vi.mocked(api.get).mock.calls.map(([u]) => u)).not.toContain(
+          `/v1/assessment-rounds/${OTHER.id}/aggregate`,
+        );
+    });
+
+    for (const [status, badge] of [
+      ["complete", "Completed"],
+      ["archived", "Archived"],
+    ] as const) {
+      it(`${role} not on the ${status} round: data row and round averages, no name`, async () => {
+        OTHER.status = status;
+        try {
+          await render([role], "view");
+          await openTab(OTHER.id);
+          expect(byId("assessment-progress-counter")!.textContent).toContain("1 / 1");
+          expect(byId("assessment-round-average-score")!.textContent).toContain("4.0");
+          expect(byId("assessment-round-status-badge")!.textContent).toContain(badge);
+          expect(container.querySelectorAll('[data-testid="assessment-round-status-badge"]')).toHaveLength(1);
+          expect(byId("score-stub")!.dataset.roundAverage).toBe("4");
+          // The average's tooltip names no evaluator either.
+          expect(byId("score-stub")!.dataset.scorers).toBe("0");
+          expect(byId("score-stub")!.disabled).toBe(true);
+          expect(container.querySelector('[data-testid="assessment-readonly-sheets"]')!.textContent).not.toContain(
+            "u-recruiter",
+          );
+          for (const id of WRITES) expect(anyById(id), id).toBeNull();
+        } finally {
+          OTHER.status = "in_progress";
+        }
+      });
+    }
+  }
 });

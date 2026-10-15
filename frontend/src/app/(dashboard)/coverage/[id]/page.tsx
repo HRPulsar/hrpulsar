@@ -643,13 +643,13 @@ function EditContainerDialog({
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || !description.trim()) return;
     setSaving(true);
     try {
       onSaved(
         await workApi.updateContainer(container.id, {
           title: title.trim(),
-          description: description.trim() || null,
+          description: description.trim(),
           goal: goal.trim() || null,
         }),
       );
@@ -684,8 +684,17 @@ function EditContainerDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={6}
+              required
               data-testid="coverage-edit-textarea-description"
             />
+            {!description.trim() && (
+              <p
+                className="text-xs text-muted-foreground"
+                data-testid="coverage-edit-description-required"
+              >
+                {t("descriptionRequired")}
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="coverage-edit-goal">{t("fieldGoal")}</Label>
@@ -701,7 +710,11 @@ function EditContainerDialog({
             <Button type="button" variant="outline" onClick={onClose}>
               {t("cancel")}
             </Button>
-            <Button type="submit" disabled={saving || !title.trim()} data-testid="coverage-btn-edit-save">
+            <Button
+              type="submit"
+              disabled={saving || !title.trim() || !description.trim()}
+              data-testid="coverage-btn-edit-save"
+            >
               {t("save")}
             </Button>
           </DialogFooter>

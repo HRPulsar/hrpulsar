@@ -30,9 +30,6 @@ export interface NavItem {
   requireAdmin?: boolean;
   /** HRP-810: /auth/me opens Coverage (see usePermissions.canViewCoverage). */
   requireCoverage?: boolean;
-  /** HRP-827: the entry opens at `manage` - `view` on the section is the
-   *  pickers other pages read, not a page of its own. */
-  requireSectionManage?: boolean;
 }
 
 interface NavSection {
@@ -160,7 +157,6 @@ export const navigation: NavItem[] = [
     id: "dictionaries",
     labelKey: "dictionaries",
     href: "/dictionaries",
-    requireSectionManage: true,
     icon: (
       <svg className="h-[15px] w-[15px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
@@ -234,7 +230,6 @@ export function Sidebar() {
     isAdmin,
     canViewCoverage,
     canViewSection,
-    canManageSection,
   } = usePermissions();
   const { user } = useAuth();
   const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
@@ -327,7 +322,7 @@ export function Sidebar() {
               // HRP-820: the matrix only narrows, and only what it knows - an
               // id outside SECTION_CODES (dashboard, the enterprise entries)
               // is not its business; the flags below narrow further where
-              // an entry asks for more than `view` (dictionaries, coverage).
+              // an entry asks for more than `view` (coverage).
               if (
                 (SECTION_CODES as readonly string[]).includes(item.id) &&
                 !canViewSection(item.id as SectionCode)
@@ -336,11 +331,6 @@ export function Sidebar() {
               if (item.requireAdmin && !isAdmin) return false;
               if (item.requireManage && !canManage) return false;
               if (item.requireCoverage && !canViewCoverage) return false;
-              if (
-                item.requireSectionManage &&
-                !canManageSection(item.id as SectionCode)
-              )
-                return false;
               return true;
             });
           if (visible.length === 0) return null;

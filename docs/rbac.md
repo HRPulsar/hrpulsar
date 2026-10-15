@@ -8,7 +8,7 @@ HRPulsar ships with seven built-in role codes, all seeded by migrations. Roles a
 |------------------|------------------|-------|
 | `platform_admin` | Platform-wide    | Operates across tenants. Cannot be self-assigned. |
 | `admin`          | Tenant           | Full tenant access. |
-| `hr`             | Tenant           | Reads every employee record like `admin`, invites any role below admin, runs the whole hiring surface. Not a write role on `/employees`, dictionaries or assessments — see the note under the write matrix. |
+| `hr`             | Tenant           | Reads every employee record like `admin`, invites any role below admin, runs the whole hiring surface. Not a write role on `/employees` or assessments — see the note under the write matrix; edits the dictionaries by default (HRP-827). |
 | `manager`        | Tenant + division subtree | Read/write limited to employees in managed division subtree. |
 | `recruiter`      | Tenant           | Hiring: vacancies, candidates, interviews, reports - `manage` on the recruitment section by default. |
 | `hiring_manager` | Tenant, own vacancies | Evaluates candidates on the vacancies they are named on, own or manage the division of - `view` on the recruitment section plus the evaluation, by role. |
@@ -76,8 +76,9 @@ everyone else for `manage` - an HR user at `view` writing on somebody else's
 education gets `employee_write_forbidden`. Until HRP-829 the scope check
 waved the admin tier through there, so `hr` could do that through the API
 (never from the UI, which this table already described); Maxim closed it on
-24.09. The same holds for dictionaries and assessments on the default
-matrix - since HRP-826…829 the tenant may raise `hr` to `manage` on each.
+24.09. The same holds for assessments on the default matrix - since
+HRP-826…829 the tenant may raise `hr` to `manage` there. Dictionaries
+differ: `hr` edits them by default since QA 13.10 on HRP-827.
 
 **A new record and a transfer land in the caller's subtree (HRP-829).**
 `POST /api/employees` and a `PUT /api/employees/{id}` that changes
@@ -240,7 +241,7 @@ every route where somebody has to have decided.
 | `GET /specializations/{id}/grades`, `GET /specializations/{id}`, `GET /grade-system/specializations/{id}`, `GET /grade-system/divisions/{id}` | the bands only; the grade ladder itself says what grades exist, not who holds them |
 | `GET /specializations/{id}/matrix-bulk` | the whole ladder (`grades: []`) — `grade_id` is a required uuid there, so the payload cannot be blanked field-by-field, and the grade-to-competence mapping it carries is half of the fingerprint oracle below |
 | `GET /specializations/{id}/matrix` | 403 — it carries no grade key, but takes `grade_id` as a *query* parameter, which makes it the other half of that oracle |
-| `GET /dictionaries/items/{id}/usage` | 403, `admin` only — see below |
+| `GET /dictionaries/items/{id}/usage` | 403 below `manage` on dictionaries (admin and HR by default) — see below |
 
 `GET /dictionaries/items/{id}/usage` was the cheapest way around all of the
 above and it touches none of the routes the ticket named. On bare
@@ -248,8 +249,8 @@ authentication: `GET /dictionaries/grade` hands any member every grade id,
 and one call per id answered the exact list of positions holding that grade,
 by title. Joined with `position_title` from the employee directory that is a
 named colleague's grade in N+1 requests. The route exists to tell an admin
-what a delete would break, and the delete is `require_role("admin")`, so the
-preview is too.
+what a delete would break, so it sits behind the same gate as the writes:
+`manage` on the dictionaries section (HRP-827).
 
 ### Known remainders
 
@@ -289,7 +290,7 @@ asset.
 | competence groups, competences, indicators, materials | `manage` on `competences` (HRP-827; `admin`, `hr` by default); deleting also needs the `admin` role; a division head's own personal draft at `view` (HRP-632) | the tree, the card, skill levels: open whatever the matrix says — everyone builds assessments on them |
 | skill-level ladder | `manage` on `competences` **and** the `admin` role | open whatever the matrix says |
 | AI generation of the tree (`/competence-generation`) | `manage` on `competences` **and** the `admin` role, reads included | — |
-| dictionaries (grades, specializations, competence types) | `manage` on `dictionaries` (HRP-827; `admin` by default, locked there) | open whatever the matrix says |
+| dictionaries (grades, specializations, competence types) | `manage` on `dictionaries` (HRP-827; `admin` (locked there) and `hr` by default) | open whatever the matrix says |
 | answer scales | `admin`, `hr` | unchanged |
 | specialization grade ladder and competence matrices | `admin`, `hr` by role; `company` only opens them (HRP-828) | open whatever the matrix says |
 | `POST /ai/generate-competences`, `/ai/generate-indicators` | `manage` on `competences` (HRP-827) | — |
@@ -341,8 +342,23 @@ dialog ask `dictionaries`; adding a grade inline also chains it into the
 grade system, which stays the `admin` role's. The AI matrix of a
 specialization, its history tab and the position's AI card are the
 competence generation, so they ask `admin` + `manage` on `competences`. The
-grade page of a specialization under `/dictionaries` writes the grade
-system and stays `admin`-only.
+grade page of a specialization under `/dictionaries` opens with the section;
+its passing score writes the grade system and stays the `admin` role's.
+
+**QA 13.10 on HRP-827: the defaults and `view`.** `dictionaries` opens to
+`admin` and `hr` (`manage`) and to nobody else by default; `competences`
+opens to `manager` at `view` and closes below it (`recruiter`,
+`hiring_manager`, `employee` - the role order of the matrix). `none` there
+takes the menu entry and the section's own reads (usage previews, material
+overrides), not the catalogue: assessments, self-assessments, the competence
+profile and every picker read it through `SHARED_READS`. `view` on
+`dictionaries` opens the menu entry, every tab and the direct links
+read-only - no add, edit or delete; the writes and the usage preview stay
+`manage`'s. A specialization's matrix shows a competence's title rather than
+a link to its card to a caller the competences section is closed to.
+Defaults live in the registry and only deviations are stored, so a tenant
+that never touched a cell reads the new default and a saved deviation
+stays as it was.
 
 The AI generators follow the surface they write to: the two that fill the
 catalogue moved with it. `POST /ai/generate-positions` drafts the
@@ -794,6 +810,7 @@ assignments. `admin` and `hr` hold it by default, and the setting moves it
 | Actor | List | Read a process, its steps, coverage, To do, skills, runs | Edit steps, run AI, accept | Access panel | Change owner, delete | Hire need, register an agent |
 |-------|------|------|------|------|------|------|
 | `manage` on `coverage` (`admin`, `hr` by default; `platform_admin` reaches it like every section) | every process | x | x | x | x | x* |
+| `admin` / `hr` the matrix leaves at `view` (HRP-810 REDO: they see every process whatever the matrix says) | every process | x | own only | own only | `403` | `403` |
 | owner | own and readable ones | x | x | x | `403` | `403` |
 | reader: the process is `company`-wide, a rule names their role / position / them, or they do or check one of its steps | readable ones | x | `403` `work_container_edit_forbidden` | `403` | `403` | `403` |
 | anyone else | nothing | `404` | `404` | `404` | `404` / `403` | `404` / `403` |
@@ -1000,12 +1017,12 @@ carries the diff, and empty tables are exactly today's behaviour.
 | assessments | manage | view | manage | view | view | view |
 | development | manage | view | manage | view | view | view |
 | exams | manage | view | manage | view | view | view |
-| competences | manage | manage | view | view | view | view |
+| competences | manage | manage | view | none | none | none |
 | coverage | manage | manage | view | view | view | view |
 | talent-market | manage | view | manage | view | view | view |
 | recruitment | manage | manage | view | manage | view | none |
 | analytics | manage | manage | manage | none | none | none |
-| dictionaries | manage | view | view | view | view | view |
+| dictionaries | manage | manage | none | none | none | none |
 | import | manage | none | none | none | none | none |
 | invitations | manage | manage | manage | none | none | none |
 | roles | manage | none | none | none | none | none |
@@ -1014,7 +1031,9 @@ carries the diff, and empty tables are exactly today's behaviour.
 The defaults are today's behaviour read from the code - the sidebar flags
 for visibility, the privileged mutations for `manage` - oddities included
 (`hr` does not write on `/employees`, `manager` does not edit the
-competence catalogue). `test_section_defaults.py` pins this table.
+competence catalogue). The `competences` and `dictionaries` rows were
+narrowed on QA's request of 13.10 (HRP-827, see "Catalogues").
+`test_section_defaults.py` pins this table.
 
 **Every section reads the matrix.** HRP-821…831 put each section's routes
 on `require_section`, so all three levels mean something everywhere and the
@@ -1097,11 +1116,10 @@ alone - the gate reads the matrix only, so a caller who reads no process
 still gets the `/api/work` routes' own answers (an empty list, 404 for a
 hidden process) rather than a blanket 403. The SPA hides a menu entry
 whose section is absent, bounces a direct link to the dashboard, and
-keeps a role flag on top only where a section says so -
-`dictionaries` is `view` for every role on the API (every picker reads
-it) but its menu entry and page open at `manage` (HRP-827; `admin` by
-default). The other four entries of the admin block open at `view`
-(HRP-831; see "The admin block" below).
+keeps a role flag on top only where a section says so. The admin block's
+entries open at `view` (HRP-831; see "The admin block" below) -
+`dictionaries` too since QA 13.10 on HRP-827, read-only below `manage`;
+its pickers stay open to every role on the API (`SHARED_READS`).
 
 Analytics has `none` cells by default, so it is
 where the split by method shows: a role the tenant lowers to `view` keeps

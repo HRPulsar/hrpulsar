@@ -15,7 +15,7 @@ test.describe("Coverage - access dialog picker search", () => {
 
     const created = await page.request.post(`${API_BASE}/work/containers`, {
       headers,
-      data: { type: "process", title: `Picker search ${Date.now()}` },
+      data: { type: "process", description: "E2E fixture", title: `Picker search ${Date.now()}` },
     });
     expect(created.ok()).toBeTruthy();
     const container = await created.json();

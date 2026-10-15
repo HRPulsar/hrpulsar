@@ -243,7 +243,7 @@ class TestHttpMatrix:
         await db.execute(catalog_data.seed_insert())
         await db.commit()
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Payroll run"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Payroll run"}
         )
         assert created.status_code == 201, created.text
         cid = created.json()["id"]
@@ -332,7 +332,7 @@ class TestHttpMatrix:
         # so the tenant moves it - away from hr, over to the managers - and
         # both the container reads and the privileged routes follow.
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Severance"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Severance"}
         )
         assert created.status_code == 201, created.text
         cid = created.json()["id"]
@@ -344,20 +344,21 @@ class TestHttpMatrix:
 
         await _save(auth_client, levels={"coverage": {"hr": "view", "manager": "manage"}})
 
-        # hr keeps the section - the menu entry needs a process they read,
-        # and a restricted one is no longer theirs - but not its management.
-        assert (await client.get(f"/api/work/containers/{cid}", headers=hr_h)).status_code == 404
+        # hr still reads every process (HRP-810 REDO: admins and HR see
+        # them all), but only reads - managing the section moved away.
+        got = await client.get(f"/api/work/containers/{cid}", headers=hr_h)
+        assert got.status_code == 200 and got.json()["my_access"] == "read"
         refused = await client.post(
-            "/api/work/containers", json={"type": "process", "title": "Payroll"}, headers=hr_h
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Payroll"}, headers=hr_h
         )
         assert refused.status_code == 403
         me = await client.get("/api/auth/me", headers=hr_h)
-        assert "coverage" not in me.json()["sections"]
+        assert me.json()["sections"]["coverage"] == "view"
 
         # The managers manage it, with no process of their own to start from.
         assert (await client.get(f"/api/work/containers/{cid}", headers=manager_h)).status_code == 200
         started = await client.post(
-            "/api/work/containers", json={"type": "process", "title": "Payroll"}, headers=manager_h
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Payroll"}, headers=manager_h
         )
         assert started.status_code == 201, started.text
         me = await client.get("/api/auth/me", headers=manager_h)
@@ -376,13 +377,49 @@ class TestHttpMatrix:
         )
         assert blocked.status_code == 403
 
+    @pytest.mark.parametrize(
+        ("levels", "expected"),
+        [
+            # The defaults: admin and hr manage the section.
+            ({}, {"admin": "manage", "hr": "manage", "manager": None, "employee": None}),
+            # HRP-810 REDO: lowered to ``view``, admin and hr still read every
+            # process - the list, its total and the card - without a rule;
+            # the matrix sets how much they may do there, not whether they see.
+            (
+                {"admin": "view", "hr": "view"},
+                {"admin": "read", "hr": "read", "manager": None, "employee": None},
+            ),
+        ],
+    )
+    async def test_admin_and_hr_read_every_process(
+        self, client, auth_client, db, tenant, levels, expected
+    ):
+        created = await auth_client.post(
+            "/api/work/containers",
+            json={"description": "Test process", "type": "process", "title": "Severance"},
+        )
+        cid = created.json()["id"]
+        heads = {code: (await _person(db, tenant, code))[2] for code in expected}
+        if levels:
+            await _save(auth_client, levels={"coverage": levels})
+        for code, level in expected.items():
+            listed = (await client.get("/api/work/containers", headers=heads[code])).json()
+            got = await client.get(f"/api/work/containers/{cid}", headers=heads[code])
+            if level is None:
+                assert listed == {"items": [], "total": 0}, code
+                assert got.status_code == 404, code
+            else:
+                assert [c["id"] for c in listed["items"]] == [cid], code
+                assert listed["total"] == 1, code
+                assert got.status_code == 200 and got.json()["my_access"] == level, code
+
     async def test_the_platform_admin_manages_every_process(self, client, auth_client, db, tenant):
         # The matrix answers ``manage`` on every section for
         # ``platform_admin`` (core/sections.py), and Coverage now reads the
         # matrix - so the support account is not stopped by a restricted
         # process the way a tenant role without the section is.
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Compensation"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Compensation"}
         )
         cid = created.json()["id"]
         _, _, platform_h = await _person(db, tenant, "platform_admin")
@@ -395,7 +432,7 @@ class TestAccessApi:
         self, client, auth_client, db, tenant, user, position
     ):
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Severance"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Severance"}
         )
         body = created.json()
         cid = body["id"]
@@ -516,7 +553,7 @@ class TestAccessApi:
 
     async def test_access_change_keeps_an_accepted_breakdown(self, auth_client):
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Month end"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Month end"}
         )
         cid = created.json()["id"]
         step = await auth_client.post(
@@ -544,7 +581,7 @@ class TestMeSections:
         me = await client.get("/api/auth/me", headers=employee_h)
         assert "coverage" not in me.json()["sections"]
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Onboarding"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Onboarding"}
         )
         opened = await auth_client.put(
             f"/api/work/containers/{created.json()['id']}/access",
@@ -568,7 +605,7 @@ class TestReviewFollowUps:
         await db.execute(catalog_data.seed_insert())
         await db.commit()
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Bonus pool"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Bonus pool"}
         )
         cid = created.json()["id"]
         step = await auth_client.post(
@@ -683,7 +720,7 @@ class TestReviewFollowUps:
 
     async def test_on_leave_is_still_with_the_company(self, auth_client, db, tenant):
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Parental leave"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Parental leave"}
         )
         cid = created.json()["id"]
         owner, owner_emp, _ = await _person(db, tenant, "employee")
@@ -854,7 +891,7 @@ class TestReaderScope:
         is the leave status. Admin / hr read it; an owner outside them sees
         everyone as assignable, and the assignment itself refuses."""
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Rota"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Rota"}
         )
         cid = created.json()["id"]
         owner, _, owner_h = await _person(db, tenant, "employee")
@@ -888,7 +925,7 @@ class TestReaderScope:
         await db.execute(catalog_data.seed_insert())
         await db.commit()
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Close"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Close"}
         )
         cid = created.json()["id"]
         await auth_client.post(
@@ -925,7 +962,7 @@ class TestLeaveFollowsTheSectionLevel:
 
     async def _away_on_a_step(self, auth_client, db, tenant) -> str:
         created = await auth_client.post(
-            "/api/work/containers", json={"type": "process", "title": "Sign-off"}
+            "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Sign-off"}
         )
         cid = created.json()["id"]
         step = await auth_client.post(

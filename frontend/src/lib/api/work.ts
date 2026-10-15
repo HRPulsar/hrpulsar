@@ -445,7 +445,7 @@ export const workApi = {
   createContainer: (body: {
     type: ContainerType;
     title: string;
-    description?: string | null;
+    description: string;
     goal?: string | null;
   }) => api.post<WorkContainer>("/work/containers", body),
   updateContainer: (

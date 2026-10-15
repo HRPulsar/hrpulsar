@@ -1,8 +1,9 @@
 // HRP-827: the competence catalogue and the dictionaries follow the tenant's
 // matrix. Authoring the catalogue is `manage` on competences; deleting from
 // it and generating it with AI stay the admin role's on top. The
-// dictionaries page opens at `manage` on dictionaries, and every button
-// outside the two sections that writes into them reads their row.
+// dictionaries page opens at `view` read-only (QA 13.10) and writes at
+// `manage`, and every button outside the two sections that writes into
+// them reads their row.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -13,6 +14,9 @@ const treePage = read("../app/(dashboard)/competences/page.tsx");
 const competencePage = read("../app/(dashboard)/competences/[id]/page.tsx");
 const indicatorsEditor = read("../components/competence/indicators-editor.tsx");
 const dictionariesPage = read("../app/(dashboard)/dictionaries/page.tsx");
+const dictSpecPage = read("../app/(dashboard)/dictionaries/specializations/[id]/page.tsx");
+const matrixEditor = read("../components/specialization/matrix-editor.tsx");
+const singleGradeList = read("../components/specialization/single-grade-list.tsx");
 const sidebar = read("../components/sidebar.tsx");
 const specList = read("../app/(dashboard)/company/specializations/page.tsx");
 const specPage = read("../app/(dashboard)/company/specializations/[id]/page.tsx");
@@ -38,9 +42,26 @@ describe("the competence catalogue follows the section level (HRP-827)", () => {
     expect(indicatorsEditor).toMatch(/\{canAdministerCompetences && \(\s*<Button[^>]*?onClick=\{\(\) => openDelete\(ind\)\}/);
   });
 
-  it("opens the dictionaries page and its menu entry at manage", () => {
-    expect(dictionariesPage).toContain('<RequireSection code="dictionaries" level="manage">');
-    expect(sidebar).toMatch(/href: "\/dictionaries",\s*requireSectionManage: true,/);
+  it("opens the dictionaries page and its menu entry at view, read-only", () => {
+    expect(dictionariesPage).toContain('<RequireSection code="dictionaries">');
+    expect(dictionariesPage).toContain('const canEdit = canManageSection("dictionaries");');
+    expect(dictionariesPage).toMatch(/\{canEdit && \(\s*<Button[^>]*data-testid="dictionaries-btn-add"/);
+    expect(dictionariesPage).toMatch(/\{canEdit && \(\s*<TableCell>\s*<DropdownMenu>/);
+    // Every tab and the specialization's grade page open to the reader.
+    expect(dictionariesPage).toContain('{activeType === "specialization" ? (');
+    expect(sidebar).not.toContain("requireSectionManage");
+    // The grade page writes the grade system - the admin role's.
+    expect(dictSpecPage).not.toContain("RequireRole");
+    expect(dictSpecPage).toMatch(/\{isAdmin \? \(\s*<Input/);
+    expect(dictSpecPage).toMatch(/\{isAdmin && \(\s*<TableCell>\s*<Button/);
+  });
+
+  it("links a matrix competence only for a caller the section opens to", () => {
+    for (const src of [matrixEditor, singleGradeList]) {
+      expect(src).toContain('canViewSection("competences")');
+      expect(src).toMatch(/\{!opensCompetences \? \(\s*<span/);
+      expect(src).toContain("{coverageWarning && opensCompetences && (");
+    }
   });
 
   it("reads the written section's row on the company pages", () => {

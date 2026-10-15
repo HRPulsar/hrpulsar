@@ -25,8 +25,9 @@ async function expectPermissionToast(page: Page) {
 /**
  * HRP-436: the Admin sidebar section (Dictionaries, Invitations, Import,
  * Roles, AI settings) was admin-only; since HRP-831 the tenant's matrix
- * decides, and by default only Invitations opens below the admin role - to
- * `hr` and `manager`, on their scope. Whoever a section is closed to must
+ * decides, and by default only Invitations (to `hr` and `manager`, on their
+ * scope) and Dictionaries (to `hr`, HRP-827) open below the admin role.
+ * Whoever a section is closed to must
  * not see its entry, and a direct link must be denied with a toast +
  * redirect to /dashboard rather than rendering an empty page.
  */
@@ -322,7 +323,7 @@ test.describe("Coverage access", () => {
     const headers = { Authorization: `Bearer ${admin.accessToken}` };
     const created = await page.request.post(`${API_BASE}/work/containers`, {
       headers,
-      data: { type: "process", title: `Access review ${Date.now()}` },
+      data: { type: "process", description: "E2E fixture", title: `Access review ${Date.now()}` },
     });
     if (!created.ok()) throw new Error(`container failed: ${await created.text()}`);
     const opened = await page.request.put(
@@ -636,7 +637,22 @@ test.describe("Section access matrix (HRP-820)", () => {
       await expect(saved).toBeVisible();
     };
 
-    // The default: `view` - the tree reads, nothing writes.
+    // The default since HRP-827: `none` - the page bounces, the tree every
+    // picker reads does not.
+    await setAuthTokens(page, employeeAccess, employeeRefresh);
+    await page.goto("/competences");
+    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
+    await expectPermissionToast(page);
+    const tree = await request.get(`${API_BASE}/competence-tree`, { headers: employeeAuth });
+    expect(tree.status()).toBe(200);
+    const write = await request.post(`${API_BASE}/competence-groups`, {
+      headers: employeeAuth,
+      data: { title: "From the matrix" },
+    });
+    expect(write.status()).toBe(403);
+
+    // `view` - the tree reads, nothing writes.
+    await setEmployeeLevel("view");
     await setAuthTokens(page, employeeAccess, employeeRefresh);
     await page.goto("/competences");
     await expect(page.getByTestId("competences-tree")).toBeVisible({ timeout: 15000 });
@@ -649,20 +665,6 @@ test.describe("Section access matrix (HRP-820)", () => {
     await page.goto("/competences");
     await expect(page.getByTestId("competences-btn-add-group")).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid^="compgen-btn-"]')).toHaveCount(0);
-
-    // Take it away: the page bounces, the tree every picker reads does not.
-    await setEmployeeLevel("none");
-    await setAuthTokens(page, employeeAccess, employeeRefresh);
-    await page.goto("/competences");
-    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
-    await expectPermissionToast(page);
-    const tree = await request.get(`${API_BASE}/competence-tree`, { headers: employeeAuth });
-    expect(tree.status()).toBe(200);
-    const write = await request.post(`${API_BASE}/competence-groups`, {
-      headers: employeeAuth,
-      data: { title: "From the matrix" },
-    });
-    expect(write.status()).toBe(403);
   });
 
   test("the org chart follows the matrix: manage opens authoring, the pickers outlive none (HRP-828)", async ({

@@ -245,10 +245,14 @@ class TestSessions:
         assert exc.value.status_code == 409
 
     async def test_needs_a_description(self, db, tenant, user, primitives):
-        c = await _container(db, tenant, user, description="   ")
-        with pytest.raises(HTTPException) as exc:
-            await service.create_session(db, tenant.id, user.id, c.id)
-        assert exc.value.status_code == 422
+        # The API refuses a blank one (HRP-1055); a row from before may lack it.
+        c = await _container(db, tenant, user)
+        for legacy in (None, "   "):
+            c.description = legacy
+            await db.commit()
+            with pytest.raises(HTTPException) as exc:
+                await service.create_session(db, tenant.id, user.id, c.id)
+            assert exc.value.status_code == 422
 
     async def test_the_read_keeps_the_price_to_itself(
         self, db, tenant, user, primitives

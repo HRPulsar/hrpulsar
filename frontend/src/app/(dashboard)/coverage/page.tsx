@@ -59,7 +59,7 @@ export default function CoveragePage() {
   const [items, setItems] = useState<WorkContainer[] | null>(null);
   const [failed, setFailed] = useState(false);
   // HRP-859 REDO: the filters of every other list (/assessments). The list is
-  // loaded whole, so they filter here and the counts stay the full ones.
+  // loaded whole, so they filter here; the counts follow them (HRP-1056).
   // ponytail: whole = the first 200 the API gives; server-side filters if a
   // company ever keeps more.
   const [search, setSearch] = useState("");
@@ -104,11 +104,11 @@ export default function CoveragePage() {
             {/* Also says what a process and a project are (HRP-859 REDO). */}
             <Hint text={tSections("coverage.hint")} data-testid="coverage-hint-title" />
           </div>
-          {items && items.length > 0 && (
+          {shown && items && items.length > 0 && (
             <p className="text-sm text-muted-foreground" data-testid="coverage-count">
               {t("listCount", {
-                processes: items.filter((c) => c.type === "process").length,
-                projects: items.filter((c) => c.type === "initiative").length,
+                processes: shown.filter((c) => c.type === "process").length,
+                projects: shown.filter((c) => c.type === "initiative").length,
               })}
             </p>
           )}

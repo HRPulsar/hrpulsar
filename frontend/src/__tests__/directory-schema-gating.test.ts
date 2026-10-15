@@ -72,8 +72,8 @@ describe("employee directory schema", () => {
   // HRP-633: /positions/{id}/employees and /specializations/{id}/employees
   // answer the trimmed directory row to a rank-and-file caller, so every
   // screen fed by one of them has to decide its column set. Omitting
-  // `hrColumns` silently keeps the seven-column layout and renders four
-  // permanently empty cells for exactly those callers.
+  // `hrColumns` silently keeps the seven-column layout and renders the
+  // HR-only cells permanently empty for exactly those callers.
   it("screens fed by a directory-capable employees route gate their columns", () => {
     const src = resolve(__dirname, "..");
     const FEEDS =

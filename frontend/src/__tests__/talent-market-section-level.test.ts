@@ -35,3 +35,23 @@ describe("the talent market follows the section level (HRP-824)", () => {
     expect(bridge).toContain('canViewSection("talent-market")');
   });
 });
+
+// HRP-639 (QA 12.10): the Create card form offered every division of the
+// tenant to a manager the API then refused. The picker reads the same
+// scope the API checks (`/divisions/scope`, `assert_division_in_scope`)
+// and keeps a card's current division listed even outside it.
+describe("the card's Division picker offers the caller's scope (HRP-639)", () => {
+  it("reads /divisions/scope and filters the options by it", () => {
+    expect(listPage).toContain('api.get<{ id: string }[]>("/divisions/scope")');
+    // A failed scope load is a load error, not an admin's picker silently
+    // shrunk to None.
+    expect(listPage).not.toContain('"/divisions/scope").catch(');
+    expect(listPage).toContain("setScopeIds(new Set(scopeData.map((d) => d.id)));");
+    expect(listPage).toMatch(
+      /flatDivisions\s*\.filter\(\(d\) => scopeIds\.has\(d\.id\) \|\| d\.id === form\.division_id\)\s*\.map\(\(d\) => \(\s*<SelectItem/,
+    );
+    // The unfiltered list stays behind the trigger's label, so a current
+    // division outside the scope still reads by name.
+    expect(listPage).toContain("const d = flatDivisions.find((d) => d.id === form.division_id);");
+  });
+});
