@@ -29,7 +29,7 @@ A filterable directory of everyone in the workspace.
 - Columns: name and email, division, position, specialization and grade, status
 - Multi-select filters for divisions, statuses, positions, specializations, grades, and issues. Selections persist in the URL, so a filtered view can be bookmarked or shared
 - An Issues column names what is wrong with each person — no active account, incomplete profile, overdue or stalled assessment, competence gap with no development plan, overdue plan, no assessment in the last six months — and the Issues filter narrows the list to one of them
-- Search runs on the server and matches first name, last name, full name, and email across all pages
+- Search runs on the server and matches first name, last name, full name, email and job title across all pages
 - Managers see only the divisions they manage in the filter; admins and HR see the full tree
 - An edit dialog changes name, position, division, and status in one step, with the usual scope guards
 
@@ -686,7 +686,7 @@ Per-workspace configuration that applies to every AI call.
 
 - Full dark mode: light, dark, or system preference, persisted across sessions
 - Responsive layout tested on phone, tablet, and desktop sizes
-- Global search on Cmd+K / Ctrl+K across employees, assessments, plans, and exams
+- Global search on Cmd+K / Ctrl+K across employees (by name, email or job title), assessments, vacancies and candidates; it searches everything you can see, not one loaded page, and a division manager finds colleagues outside their own divisions
 - Every section reachable from the sidebar carries a question mark next to its page heading explaining what the section is for and what belongs in it
 - Interface languages: English and German ship with the product; the deployment configures the offered languages, the onboarding wizard records the workspace default, and every member can pick a personal language in their profile or the header language switcher; the wizard also sets the AI content language separately
 - Backend error messages follow the interface language too, and every error carries a stable machine-readable code; adding a community language is a translation-catalog pull request — see the contributing guide

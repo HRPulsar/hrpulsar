@@ -276,8 +276,8 @@ async def list_positions(
     count_query = select(func.count(Position.id)).where(Position.tenant_id == tenant_id)
 
     if search:
-        query = query.where(Position.title.ilike(f"%{search}%"))
-        count_query = count_query.where(Position.title.ilike(f"%{search}%"))
+        query = query.where(Position.title.icontains(search, autoescape=True))
+        count_query = count_query.where(Position.title.icontains(search, autoescape=True))
     if is_active is not None:
         query = query.where(Position.is_active == is_active)
         count_query = count_query.where(Position.is_active == is_active)

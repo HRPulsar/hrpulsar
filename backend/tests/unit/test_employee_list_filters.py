@@ -18,6 +18,7 @@ from app.modules.company.models import Division
 from app.modules.dictionary.models import DictionaryItem
 from app.modules.employee import issues, service
 from app.modules.employee.models import Employee
+from app.modules.position import service as position_service
 from app.modules.position.models import Position
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -432,6 +433,16 @@ class TestListEmployeesSearch:
         items, _ = await service.list_employees(db, tenant.id, q=fragment)
         assert target.id in {e["id"] for e in items}
 
+    async def test_q_matches_position_title(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        """HRP-1067: the global search finds a colleague by job title, and
+        it now asks the server instead of filtering one loaded page."""
+        ds = filter_dataset
+        items, total = await service.list_employees(db, tenant.id, q="be SENIOR")
+        assert {e["id"] for e in items} == {ds["employees"]["e3"].id}
+        assert total == 1
+
     async def test_q_no_match_returns_empty(
         self, db: AsyncSession, tenant, filter_dataset
     ):
@@ -481,6 +492,39 @@ class TestListEmployeesSearch:
         assert total_empty == total_none == 4
         assert {e["id"] for e in items_empty} == {e["id"] for e in items_none}
         assert {e["id"] for e in items_ws} == {e["id"] for e in items_none}
+
+    async def test_q_wildcards_match_literally(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        """HRP-1077: ``%`` and ``_`` in q are characters, not LIKE wildcards."""
+        target = filter_dataset["employees"]["e4"]
+        target.position_title = "Lead_QA 50%"
+        await db.commit()
+        for q in ("%", "_", "50%", "d_q"):
+            items, total = await service.list_employees(db, tenant.id, q=q)
+            assert {e["id"] for e in items} == {target.id}, q
+            assert total == 1, q
+        # A wildcard ``_`` would stand for the space in "FE Junior".
+        _, total = await service.list_employees(db, tenant.id, q="fe_junior")
+        assert total == 0
+
+
+class TestPositionSearchWildcards:
+    async def test_search_wildcards_match_literally(
+        self, db: AsyncSession, tenant, filter_dataset
+    ):
+        """HRP-1077: the positions list, same rule on ``icontains``."""
+        literal = await _mk_position(db, tenant.id, title="QA_Lead 100%")
+        for search in ("%", "_", "a_l"):
+            items, total = await position_service.list_positions(
+                db, tenant.id, search=search
+            )
+            assert [p["id"] for p in items] == [literal.id], search
+            assert total == 1, search
+        _, total = await position_service.list_positions(
+            db, tenant.id, search="fe_junior"
+        )
+        assert total == 0
 
 
 class TestListEmployeesIssueFilter:

@@ -352,7 +352,7 @@ async def list_agents(
     if pack_id:
         stmt = stmt.where(AIAgent.pack_id == pack_id)
     if search:
-        stmt = stmt.where(AIAgent.name.ilike(f"%{search}%"))
+        stmt = stmt.where(AIAgent.name.icontains(search, autoescape=True))
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar_one()

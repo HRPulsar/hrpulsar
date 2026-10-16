@@ -101,3 +101,36 @@ async def test_the_filter_accepts_every_seeded_status(
 
     seeded = set((await db.execute(select(AssessmentStatus.code))).scalars())
     assert seeded <= set(get_args(AssessmentStatusCode))
+
+
+@pytest.mark.asyncio
+async def test_q_narrows_by_title_rows_and_total(
+    db: AsyncSession, tenant, assessment_statuses, assessment_types
+):
+    """HRP-1067: the global search asks the server for the titles it types
+    instead of filtering one loaded page of 100."""
+    emp = await _employee(db, tenant)
+    for title in ("Q3 review: backend", "Q3 Review: frontend", "Onboarding check"):
+        db.add(
+            Assessment(
+                tenant_id=tenant.id,
+                title=title,
+                employee_id=emp.id,
+                type_id=assessment_types["self"].id,
+                status_id=assessment_statuses["sent"].id,
+                initiator_id=emp.user_id,
+            )
+        )
+    await db.commit()
+
+    items, total = await service.list_assessments(db, tenant.id, limit=1, q="q3 REVIEW")
+    assert total == 2
+    assert len(items) == 1 and "review" in items[0]["title"].lower()
+    _, total = await service.list_assessments(db, tenant.id, q="  ")
+    assert total == 3
+
+
+@pytest.mark.asyncio
+async def test_route_accepts_the_search_the_global_search_sends(auth_client):
+    response = await auth_client.get("/api/assessments?q=review&limit=5")
+    assert response.status_code == 200, response.text

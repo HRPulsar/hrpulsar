@@ -498,7 +498,7 @@
     "deleteEmployee": "Mitarbeiter löschen",
     "deleteConfirm": "Möchten Sie {name} wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
     "thisEmployee": "diesen Mitarbeiter",
-    "searchPlaceholder": "Nach Name oder E-Mail suchen...",
+    "searchPlaceholder": "Nach Name, E-Mail oder Position suchen...",
     "filterDivisions": "Abteilungen",
     "filterStatuses": "Status",
     "filterPositions": "Positionen",

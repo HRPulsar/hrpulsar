@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.5.3] - 2026-10-16
+
+### Fixed
+- Search: `%` and `_` typed into a search box match those characters instead of acting as wildcards (HRP-1077)
+- Search: global search finds every employee, assessment, vacancy and candidate the user can see instead of only the first page of each, and a manager finds colleagues outside their own subtree (HRP-1067)
+- Employees: the search on the Employees page also matches the job title (HRP-1067)
+- Recruitment: saving a candidate card with an email another active candidate already has says the address is taken instead of failing with a server error (HRP-1078)
+
 ## [2.5.2] - 2026-10-15
 
 ### Fixed

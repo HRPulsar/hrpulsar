@@ -642,6 +642,42 @@ class TestCandidateCard:
         # ETag stamp moves with updated_at.
         assert updated["etag"] != etag
 
+    async def test_patch_candidate_email_taken_by_another_returns_409(
+        self, db: AsyncSession, tenant, user
+    ):
+        vacancy = await _make_vacancy(db, tenant.id, user.id)
+        taken = await service.add_candidate_to_vacancy_manual(
+            db, tenant.id, user.id, vacancy["id"], _manual_payload(
+                full_name="Taken", email="taken@example.com"
+            )
+        )
+        other = await service.add_candidate_to_vacancy_manual(
+            db, tenant.id, user.id, vacancy["id"], _manual_payload(
+                full_name="Other", email="other@example.com"
+            )
+        )
+
+        # Was an IntegrityError 500 from the partial unique index.
+        with pytest.raises(AppError) as exc:
+            await service.patch_candidate(
+                db,
+                tenant.id,
+                other["id"],
+                CandidateCanonicalPatch(email="TAKEN@example.com"),
+            )
+        assert exc.value.status_code == 409
+        assert exc.value.code == "candidate_email_conflict"
+        assert exc.value.detail_extra == {"existing_candidate_id": str(taken["id"])}
+
+        # Re-saving the candidate's own address (any case) is not a conflict.
+        updated = await service.patch_candidate(
+            db,
+            tenant.id,
+            other["id"],
+            CandidateCanonicalPatch(email="OTHER@example.com"),
+        )
+        assert updated["email"] == "OTHER@example.com"
+
     async def test_archive_then_recreate_same_email(
         self, db: AsyncSession, tenant, user
     ):

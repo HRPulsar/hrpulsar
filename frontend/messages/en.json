@@ -498,7 +498,7 @@
     "deleteEmployee": "Delete employee",
     "deleteConfirm": "Are you sure you want to delete {name}? This action cannot be undone.",
     "thisEmployee": "this employee",
-    "searchPlaceholder": "Search by name or email...",
+    "searchPlaceholder": "Search by name, email or job title...",
     "filterDivisions": "Divisions",
     "filterStatuses": "Statuses",
     "filterPositions": "Positions",

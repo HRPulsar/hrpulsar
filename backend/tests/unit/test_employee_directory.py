@@ -430,6 +430,46 @@ async def test_manager_sees_people_of_a_division_outside_the_subtree(
 
 
 @pytest.mark.asyncio
+async def test_manager_search_by_job_title_reaches_outside_the_subtree(
+    client: AsyncClient, db: AsyncSession, persona: DemoPersona
+):
+    """HRP-1067: the global search asks tenant-wide with ``q`` - an active
+    colleague outside the subtree is found by job title as a directory row;
+    one who left is neither listed nor counted."""
+    headers, visible = await _manager_headers(db, persona)
+    outsiders = (
+        (
+            await db.execute(
+                select(Employee)
+                .where(
+                    Employee.tenant_id == persona.tenant_id,
+                    Employee.id.not_in(visible),
+                    Employee.status == "active",
+                )
+                .limit(2)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(outsiders) == 2
+    found, gone = outsiders
+    for emp in outsiders:
+        emp.position_title = "Zeppelin Pilot"
+    gone.status = "terminated"
+    await db.commit()
+
+    resp = await client.get(
+        "/api/employees?q=zeppelin&limit=5&tenant_wide=true", headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert [r["id"] for r in resp.json()["items"]] == [str(found.id)]
+    assert resp.json()["total"] == 1
+    row = resp.json()["items"][0]
+    assert "hire_date" not in row and row["position_title"] == "Zeppelin Pilot"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "query", ["role=employee", "unassigned_only=true", "issue=assessment_stale"]
 )

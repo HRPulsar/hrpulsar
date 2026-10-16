@@ -12,7 +12,7 @@ import uuid
 from typing import Any
 
 from fastapi import status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1694,7 +1694,8 @@ async def _resolve_skill_level(
             and_(
                 (SkillLevel.tenant_id == tenant_id) | SkillLevel.tenant_id.is_(None),
                 SkillLevel.is_active.is_(True),
-                (SkillLevel.i18n_key == key.lower()) | (SkillLevel.title.ilike(key)),
+                (SkillLevel.i18n_key == key.lower())
+                | (func.lower(SkillLevel.title) == func.lower(key)),
             )
         )
         .limit(1)

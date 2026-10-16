@@ -795,9 +795,15 @@ async def list_assessments(
     participant_user_id: uuid.UUID | None = None,
     restrict_to_active: bool = False,
     status_codes: Sequence[str] | None = None,
+    q: str | None = None,
 ) -> tuple[list[dict], int]:
     base = select(Assessment).where(Assessment.tenant_id == tenant_id)
     count_q = select(func.count(Assessment.id)).where(Assessment.tenant_id == tenant_id)
+    # HRP-1067: the global search asks for the title it types.
+    if q and q.strip():
+        by_title = Assessment.title.icontains(q.strip(), autoescape=True)
+        base = base.where(by_title)
+        count_q = count_q.where(by_title)
     if status_codes:
         by_status = Assessment.status_id.in_(
             select(AssessmentStatus.id).where(AssessmentStatus.code.in_(status_codes))

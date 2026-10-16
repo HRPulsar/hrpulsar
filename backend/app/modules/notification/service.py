@@ -409,10 +409,9 @@ async def list_email_logs(
         query = query.where(EmailLog.status == status_filter)
         count_query = count_query.where(EmailLog.status == status_filter)
     if recipient_filter:
-        query = query.where(EmailLog.recipient.ilike(f"%{recipient_filter}%"))
-        count_query = count_query.where(
-            EmailLog.recipient.ilike(f"%{recipient_filter}%")
-        )
+        by_recipient = EmailLog.recipient.icontains(recipient_filter, autoescape=True)
+        query = query.where(by_recipient)
+        count_query = count_query.where(by_recipient)
 
     total = (await db.execute(count_query)).scalar() or 0
     result = await db.execute(

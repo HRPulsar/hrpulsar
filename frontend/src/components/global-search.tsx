@@ -14,6 +14,9 @@ import { vacancyStatusBadgeLabel } from "@/lib/vacancy-status";
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 
+// Rows asked for per type; the dropdown shows each type's best few.
+const PER_TYPE = 5;
+
 interface SearchResult {
   type: "employee" | "assessment" | "vacancy" | "candidate";
   id: string;
@@ -34,92 +37,76 @@ export function GlobalSearch() {
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A slow answer to an earlier query must not overwrite a newer one.
+  const latestRef = useRef(0);
 
-  const search = useCallback(async (q: string) => {
+  const search = useCallback(async (raw: string) => {
+    const request = ++latestRef.current;
+    // Every list searches the same trimmed text; blank is no query at all.
+    const q = raw.trim();
     if (q.length < 2) {
       setResults([]);
+      setLoading(false);
       return;
     }
     setLoading(true);
     try {
+      // HRP-1067: the server searches the whole list - filtering one loaded
+      // page missed everyone past it. `tenant_wide` lets a manager find
+      // colleagues outside their subtree, as on the Employees page.
+      const term = `q=${encodeURIComponent(q)}&limit=${PER_TYPE}`;
       const [empData, asmtData, vacData, candData] = await Promise.all([
-        api.get<EmployeeList>("/employees?limit=50"),
-        api.get<AssessmentList>("/assessments?limit=100").catch(() => ({ items: [] })),
-        api.get<VacancyList>("/recruitment/vacancies?limit=50").catch(() => ({ items: [] })),
-        api.get<CandidateList>("/recruitment/candidates?limit=50").catch(() => ({ items: [] })),
+        api.get<EmployeeList>(`/employees?${term}&tenant_wide=true`),
+        api.get<AssessmentList>(`/assessments?${term}`).catch(() => ({ items: [] })),
+        api.get<VacancyList>(`/recruitment/vacancies?${term}`).catch(() => ({ items: [] })),
+        api.get<CandidateList>(`/recruitment/candidates?${term}`).catch(() => ({ items: [] })),
       ]);
+      if (request !== latestRef.current) return;
 
-      const lq = q.toLowerCase();
-      const empResults: SearchResult[] = empData.items
-        .filter(
-          (e) =>
-            (e.user_name || "").toLowerCase().includes(lq) ||
-            (e.user_email || "").toLowerCase().includes(lq) ||
-            (e.position_title || "").toLowerCase().includes(lq),
-        )
-        .slice(0, 5)
-        .map((e) => ({
-          type: "employee",
-          id: e.id,
-          title: e.user_name || e.user_email || t("employee"),
-          subtitle: e.position_title || "",
-          href: `/employees/${e.id}`,
-        }));
+      const empResults: SearchResult[] = empData.items.map((e) => ({
+        type: "employee",
+        id: e.id,
+        title: e.user_name || e.user_email || t("employee"),
+        subtitle: e.position_title || "",
+        href: `/employees/${e.id}`,
+      }));
 
-      const asmtResults: SearchResult[] = asmtData.items
-        .filter((a) => (a.title || "").toLowerCase().includes(lq))
-        .slice(0, 5)
-        .map((a) => ({
-          type: "assessment",
-          id: a.id,
-          title: a.title || t("untitled"),
-          subtitle: `${assessmentTypeTitle(tRef, a)} — ${assessmentStatusTitle(tRef, a)}`,
-          href: `/assessments/${a.id}`,
-        }));
+      const asmtResults: SearchResult[] = asmtData.items.map((a) => ({
+        type: "assessment",
+        id: a.id,
+        title: a.title || t("untitled"),
+        subtitle: `${assessmentTypeTitle(tRef, a)} — ${assessmentStatusTitle(tRef, a)}`,
+        href: `/assessments/${a.id}`,
+      }));
 
-      const vacResults: SearchResult[] = (vacData.items || [])
-        .filter((v) => v.title.toLowerCase().includes(lq))
-        .slice(0, 5)
-        .map((v) => ({
-          type: "vacancy" as const,
-          id: v.id,
-          title: v.title,
-          subtitle: `${v.specialization_title || ""} ${gradeTitleLabel(tRef, v.grade_title)} — ${vacancyStatusBadgeLabel(tRec, v.status)}`.trim(),
-          href: `/recruitment/requisitions/${v.id}`,
-        }));
+      const vacResults: SearchResult[] = (vacData.items || []).map((v) => ({
+        type: "vacancy" as const,
+        id: v.id,
+        title: v.title,
+        subtitle: `${v.specialization_title || ""} ${gradeTitleLabel(tRef, v.grade_title)} — ${vacancyStatusBadgeLabel(tRec, v.status)}`.trim(),
+        href: `/recruitment/requisitions/${v.id}`,
+      }));
 
-      const candResults: SearchResult[] = (candData.items || [])
-        .filter((c) => {
-          // HRP-181 REDO: ``person`` is null for externally-sourced
-          // candidates — fall back to the denormalised canonical columns.
-          const name = (
-            c.full_name ||
-            (c.person ? `${c.person.first_name} ${c.person.last_name}` : "")
-          ).toLowerCase();
-          const email = (c.email ?? c.person?.email ?? "").toLowerCase();
-          return name.includes(lq) || email.includes(lq);
-        })
-        .slice(0, 5)
-        .map((c) => {
-          const name = (
-            c.full_name ||
-            (c.person ? `${c.person.first_name} ${c.person.last_name}` : "")
-          ).trim();
-          return {
-            type: "candidate" as const,
-            id: c.id,
-            title: name || t("unnamed"),
-            subtitle: c.email || c.person?.email || c.source || "",
-            href: `/recruitment/candidates/${c.id}`,
-          };
-        });
+      const candResults: SearchResult[] = (candData.items || []).map((c) => {
+        const name = (
+          c.full_name ||
+          (c.person ? `${c.person.first_name} ${c.person.last_name}` : "")
+        ).trim();
+        return {
+          type: "candidate" as const,
+          id: c.id,
+          title: name || t("unnamed"),
+          subtitle: c.email || c.person?.email || c.source || "",
+          href: `/recruitment/candidates/${c.id}`,
+        };
+      });
 
       setResults([...empResults, ...asmtResults, ...vacResults, ...candResults]);
       setSelectedIdx(0);
     } catch {
-      setResults([]);
+      if (request === latestRef.current) setResults([]);
     } finally {
-      setLoading(false);
+      if (request === latestRef.current) setLoading(false);
     }
   }, [t, tRef, tRec]);
 
@@ -196,7 +183,7 @@ export function GlobalSearch() {
         </kbd>
       </div>
 
-      {open && query.length >= 2 && (
+      {open && query.trim().length >= 2 && (
         <>
           {/* Backdrop */}
           <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setQuery(""); }} />

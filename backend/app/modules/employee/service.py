@@ -627,17 +627,21 @@ async def list_employees(
 
     # HRP-120: search by employee's user first/last name or email. Without a
     # server-side predicate the UI used to filter the current page only, so
-    # entries on other pages stayed invisible.
+    # entries on other pages stayed invisible. HRP-1067: and by job title,
+    # which the global search matched when it still filtered client-side.
+    # The directory shows the title, so it answers no hidden question.
+    # HRP-1077: autoescape keeps ``%`` and ``_`` in q literal.
     if q and q.strip():
-        needle = f"%{q.strip().lower()}%"
+        needle = q.strip().lower()
         full_name = func.lower(User.first_name + " " + User.last_name)
         reverse_name = func.lower(User.last_name + " " + User.first_name)
         search_predicate = or_(
-            full_name.like(needle),
-            reverse_name.like(needle),
-            func.lower(User.first_name).like(needle),
-            func.lower(User.last_name).like(needle),
-            func.lower(User.email).like(needle),
+            full_name.contains(needle, autoescape=True),
+            reverse_name.contains(needle, autoescape=True),
+            func.lower(User.first_name).contains(needle, autoescape=True),
+            func.lower(User.last_name).contains(needle, autoescape=True),
+            func.lower(User.email).contains(needle, autoescape=True),
+            func.lower(Employee.position_title).contains(needle, autoescape=True),
         )
         # Defense-in-depth: enforce tenant equality on the User join even
         # though Employee.tenant_id is already constrained — keeps the

@@ -296,13 +296,12 @@ async def list_candidates(
         count_query = count_query.where(in_scope)
 
     if search:
-        like = f"%{search}%"
         search_filter = or_(
-            Person.first_name.ilike(like),
-            Person.last_name.ilike(like),
-            Person.email.ilike(like),
-            Candidate.full_name.ilike(like),
-            Candidate.email.ilike(like),
+            Person.first_name.icontains(search, autoescape=True),
+            Person.last_name.icontains(search, autoescape=True),
+            Person.email.icontains(search, autoescape=True),
+            Candidate.full_name.icontains(search, autoescape=True),
+            Candidate.email.icontains(search, autoescape=True),
         )
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)
@@ -2276,6 +2275,20 @@ async def patch_candidate(
             raise AppError(
                 "candidate_full_name_required",
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+    # Same 409 the manual-add path answers; without it the edit hit
+    # ``ux_candidates_tenant_email_active`` at commit as a 500. Checked
+    # before the setattr loop so the SELECT's autoflush can't fire it.
+    if updates.get("email"):
+        existing = await find_active_candidate_by_email(
+            db, tenant_id, updates["email"]
+        )
+        if existing is not None and existing.id != candidate.id:
+            raise AppError(
+                "candidate_email_conflict",
+                status.HTTP_409_CONFLICT,
+                detail_extra={"existing_candidate_id": str(existing.id)},
             )
 
     for field, value in updates.items():

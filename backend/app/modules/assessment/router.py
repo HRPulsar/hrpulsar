@@ -129,6 +129,7 @@ async def list_assessments(
     # HRP-907: the dashboard's Active assessments block reads ``total`` per
     # status — a page of 100 rows capped every count at 100.
     status: list[AssessmentStatusCode] | None = Query(None),
+    q: str | None = Query(default=None, max_length=255),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -146,6 +147,7 @@ async def list_assessments(
         participant_user_id=current_user.id,
         restrict_to_active=respondent,
         status_codes=status,
+        q=q,
     )
     return {"items": items, "total": total}
 

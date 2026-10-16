@@ -267,7 +267,7 @@ def _snap_skill_level(value: str, offered: list[str]) -> str:
     """Snap a model-echoed skill level back to the exact offered title.
 
     HRP-541: ``skill_level`` is a join key. ``_resolve_skill_level`` looks
-    the row up by ``i18n_key`` or ``title ILIKE`` — so case alone is
+    the row up by ``i18n_key`` or ``lower(title)`` — so case alone is
     survivable, but padding or stray whitespace is not, and
     ``_apply_indicators_only`` skips an unresolved level with a bare
     ``continue``: the indicator disappears with no error anywhere. Snapping
@@ -290,7 +290,7 @@ def _snap_skill_level(value: str, offered: list[str]) -> str:
         if level.casefold() == folded:
             return level
     # No match: hand back the trimmed value rather than the raw one. The
-    # apply-time lookup is `title ILIKE`, which stray whitespace defeats,
+    # apply-time lookup is `lower(title)`, which stray whitespace defeats,
     # so trimming is strictly better than passing the padding through.
     return candidate
 

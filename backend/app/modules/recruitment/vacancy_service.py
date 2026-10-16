@@ -1143,8 +1143,8 @@ async def list_vacancies(
         query = query.where(Vacancy.status == status)
         count_query = count_query.where(Vacancy.status == status)
     if search:
-        query = query.where(Vacancy.title.ilike(f"%{search}%"))
-        count_query = count_query.where(Vacancy.title.ilike(f"%{search}%"))
+        query = query.where(Vacancy.title.icontains(search, autoescape=True))
+        count_query = count_query.where(Vacancy.title.icontains(search, autoescape=True))
 
     total = (await db.execute(count_query)).scalar() or 0
     result = await db.execute(
@@ -1187,7 +1187,7 @@ async def count_archived_vacancies(
     if status:
         query = query.where(Vacancy.status == status)
     if search:
-        query = query.where(Vacancy.title.ilike(f"%{search}%"))
+        query = query.where(Vacancy.title.icontains(search, autoescape=True))
     return (await db.execute(query)).scalar() or 0
 
 
