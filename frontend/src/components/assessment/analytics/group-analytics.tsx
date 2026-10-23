@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import { useTranslations } from "next-intl";
 
+import { EmployeeName } from "@/components/employees/employee-name";
 import { AverageMatchGauge } from "@/components/assessment/analytics/average-match-gauge";
 import { CompetenceHighlightCard } from "@/components/assessment/analytics/competence-highlight-card";
 import { CompetenceResultsTree } from "@/components/assessment/analytics/competence-results-tree";
@@ -350,7 +351,11 @@ export function GroupAnalytics({ groupId }: { groupId: string }) {
                       data-testid={`group-analytics-employees-row-${employee.employee_id}`}
                     >
                       <td className="px-3 py-2">
-                        <div className="font-medium">{employee.full_name}</div>
+                        <div className="font-medium">
+                          <EmployeeName employeeId={employee.employee_id} linkClassName="hover:underline">
+                            {employee.full_name}
+                          </EmployeeName>
+                        </div>
                         {employee.position_title && (
                           <div className="text-xs text-muted-foreground">
                             {employee.position_title}

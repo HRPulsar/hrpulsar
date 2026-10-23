@@ -46,7 +46,11 @@ from app.modules.notification.models import (
 )
 from app.modules.notification.service import render_db_template
 from app.modules.recruitment.models import CandidateVacancy, Interview
-from app.modules.recruitment.scope import fenced_off_vacancy, fenced_off_vacancy_sync
+from app.modules.recruitment.scope import (
+    UNRESTRICTED_ROLE_CODES,
+    fenced_off_vacancy,
+    fenced_off_vacancy_sync,
+)
 
 log = logging.getLogger(__name__)
 
@@ -105,8 +109,18 @@ def _hiring_roles(overrides: dict[tuple[str, str], Level], hidden: set[str]) -> 
     gone, AI task failures that need attention): the ones the tenant's
     matrix gives ``manage`` on recruitment (HRP-830) - admin, hr and
     recruiter by default, the list this used to be - so a role the tenant
-    closes the section for stops receiving candidate names."""
-    return [r for r in ROLE_CODES if role_level(_RECRUITMENT, r, overrides, hidden) == "manage"]
+    closes the section for stops receiving candidate names.
+
+    HRP-830 REDO: and only roles that see the whole workspace
+    (``UNRESTRICTED_ROLE_CODES``). A manager or hiring manager at ``manage``
+    runs hiring on their own vacancies only; a fan-out names a candidate on
+    any vacancy and links to a page they could not open."""
+    return [
+        r
+        for r in ROLE_CODES
+        if r in UNRESTRICTED_ROLE_CODES
+        and role_level(_RECRUITMENT, r, overrides, hidden) == "manage"
+    ]
 
 
 def _coerce_uuid(value: Any) -> uuid.UUID | None:

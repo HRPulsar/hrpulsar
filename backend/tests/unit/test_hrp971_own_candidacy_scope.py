@@ -4,8 +4,9 @@ A deputy head applying for their head's seat reached the vacancy through
 their managed subtree and with it everything hanging off it: their own
 AI verdict and round sheets, their rivals' resumes and scores, and - as a
 ``manager`` running rounds - a round to score a rival or themselves. The
-fence takes the whole vacancy below the admin level and ``manage``, for
-good, whatever else reaches it.
+fence takes the whole vacancy below the admin level and the recruiter
+(HRP-830 REDO: ``manage`` alone no longer lifts it), for good, whatever
+else reaches it.
 """
 
 from __future__ import annotations
@@ -155,11 +156,11 @@ async def test_the_head_and_whoever_runs_hiring_keep_the_vacancy(auth_client, cl
         r = await client.get(f"/api/recruitment/vacancies/{seat['seat'].id}", headers=h)
         assert r.status_code == 200, r.text
     assert (await auth_client.get(f"/api/recruitment/vacancies/{seat['seat'].id}")).status_code == 200
-    # ``manage`` is unfenced like the admin level: raised to it, the deputy
-    # runs hiring for the workspace, the seat included.
+    # HRP-830 REDO: ``manage`` alone no longer unfences - raised to it, the
+    # deputy runs hiring on their divisions, still not on the seat they want.
     await _save(auth_client, levels={"recruitment": {"manager": "manage"}})
     r = await client.get(f"/api/recruitment/vacancies/{seat['seat'].id}", headers=_headers(seat["deputy"]))
-    assert r.status_code == 200, r.text
+    assert r.status_code == 403, r.text
 
 
 async def test_mail_about_the_seat_skips_the_candidate(db, seat):
@@ -295,6 +296,24 @@ async def test_the_twin_of_a_fenced_vacancy_is_fenced_without_a_reaction(client,
     detail = await client.get(f"/api/talent-market/{card.id}", headers=h)
     assert [c["is_me"] for c in detail.json()["candidates"]] == [True]
     assert (await client.post(f"/api/talent-market/{card.id}/recompute", headers=h)).status_code == 403
+
+
+async def test_the_twin_stays_fenced_for_a_head_raised_to_manage(auth_client, client, db, tenant, seat):
+    # HRP-830 REDO review: ``manage`` on recruitment no longer unfences the
+    # vacancy, so its twin card must not open either - read and list alike.
+    from app.modules.talent_market.scope import competes_on_card
+
+    card, _ = await _seat_card(db, tenant, seat, deputy_reacted=False)
+    await db.execute(update(Vacancy).where(Vacancy.id == seat["seat"].id).values(talent_card_id=card.id))
+    await db.commit()
+    await _save(auth_client, levels={"recruitment": {"manager": "manage"}})
+    h = _headers(seat["deputy"])
+    assert _refused(await client.get(f"/api/recruitment/vacancies/{seat['seat'].id}", headers=h), SCOPE)
+    detail = await client.get(f"/api/talent-market/{card.id}", headers=h)
+    assert [c["is_me"] for c in detail.json()["candidates"]] == [True]
+    assert (await client.post(f"/api/talent-market/{card.id}/recompute", headers=h)).status_code == 403
+    assert await competes_on_card(db, seat["deputy"], card.id)
+    assert not await competes_on_card(db, await _user(db, tenant, "recruiter"), card.id)
 
 
 async def test_a_reaction_to_the_twin_card_fences_the_vacancy_before_any_candidacy(client, db, tenant, seat):

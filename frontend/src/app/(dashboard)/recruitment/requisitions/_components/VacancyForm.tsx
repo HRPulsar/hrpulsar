@@ -15,6 +15,12 @@ import {
 } from "@/components/ui/select";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { HiringManagerSelect } from "@/components/recruitment/hiring-manager-select";
+import {
+  type DivisionOption,
+  loadVacancyDivisions,
+  placeableDivisions,
+} from "@/components/recruitment/vacancy-divisions";
+import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import { useSalaryAutofill } from "@/hooks/use-salary-autofill";
 import { parseSalaryInput, validateSalaryRange } from "@/lib/vacancy-salary";
@@ -111,11 +117,6 @@ interface PositionOption {
   grades?: { id: string; title?: string | null }[];
 }
 
-interface DivisionOption {
-  id: string;
-  name?: string;
-}
-
 export function VacancyForm({
   values,
   onChange,
@@ -152,6 +153,10 @@ export function VacancyForm({
 
   const [positions, setPositions] = useState<PositionOption[]>([]);
   const [divisions, setDivisions] = useState<DivisionOption[]>([]);
+  const [allowedDivisions, setAllowedDivisions] = useState<Set<string> | null>(
+    null,
+  );
+  const { seesAllHiring } = usePermissions();
 
   useEffect(() => {
     let cancelled = false;
@@ -169,21 +174,10 @@ export function VacancyForm({
     })();
     (async () => {
       try {
-        const flatten = (list: unknown[]): DivisionOption[] => {
-          const out: DivisionOption[] = [];
-          for (const node of list) {
-            if (!node || typeof node !== "object") continue;
-            const n = node as { id?: string; name?: string; children?: unknown[] };
-            if (n.id) out.push({ id: n.id, name: n.name });
-            if (n.children && Array.isArray(n.children)) {
-              out.push(...flatten(n.children));
-            }
-          }
-          return out;
-        };
-        const data = await api.get<unknown[]>("/divisions");
+        const loaded = await loadVacancyDivisions(seesAllHiring);
         if (cancelled) return;
-        setDivisions(flatten(Array.isArray(data) ? data : []));
+        setDivisions(loaded.divisions);
+        setAllowedDivisions(loaded.allowed);
       } catch {
         // ignore
       }
@@ -191,7 +185,7 @@ export function VacancyForm({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [seesAllHiring]);
 
   // HRP-320: only Active positions land in the picker per spec.
   const activePositions = useMemo(
@@ -235,7 +229,12 @@ export function VacancyForm({
     value: p.id,
     label: p.title || p.id,
   }));
-  const divisionOptions = divisions.map((d) => ({
+  // HRP-830 REDO: a manager places the vacancy in their own subtree.
+  const divisionOptions = placeableDivisions(
+    divisions,
+    allowedDivisions,
+    values.division_id,
+  ).map((d) => ({
     value: d.id,
     label: d.name || d.id,
   }));

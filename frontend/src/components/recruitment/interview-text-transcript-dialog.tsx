@@ -74,7 +74,10 @@ export function InterviewTextTranscriptDialog({
       >
         <DialogHeader>
           <DialogTitle>{t("interviewPasteText")}</DialogTitle>
-          <DialogDescription>{t("textTranscriptDescription")}</DialogDescription>
+          {/* HRP-1085: the same label hint as the upload zone. */}
+          <DialogDescription>
+            {t("textTranscriptPasteLead")} {t("interviewTranscriptLabelsHint")}
+          </DialogDescription>
         </DialogHeader>
         {!consentSigned && (
           <ConsentRequiredHint

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -811,9 +812,9 @@ export default function PDPDetailPage() {
               <p className="text-muted-foreground">{tc("employee")}</p>
               <p className="font-medium" data-testid="development-detail-employee">
                 {pdp.employee_name ? (
-                  <Link href={`/employees/${pdp.employee_id}`} className="hover:underline">
+                  <EmployeeName employeeId={pdp.employee_id} linkClassName="hover:underline">
                     {pdp.employee_name}
-                  </Link>
+                  </EmployeeName>
                 ) : (
                   "—"
                 )}
@@ -925,7 +926,13 @@ export default function PDPDetailPage() {
             <div>
               <p className="text-muted-foreground">{t("reviewer")}</p>
               <p className="font-medium" data-testid="development-detail-reviewer">
-                {pdp.reviewer_name || "—"}
+                {pdp.reviewer_name ? (
+                  <EmployeeName employeeId={pdp.reviewer_employee_id} linkClassName="hover:underline">
+                    {pdp.reviewer_name}
+                  </EmployeeName>
+                ) : (
+                  "—"
+                )}
               </p>
             </div>
             <div>

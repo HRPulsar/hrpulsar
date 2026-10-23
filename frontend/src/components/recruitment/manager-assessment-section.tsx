@@ -129,6 +129,10 @@ interface RoundAggregate {
   average: number | null;
   average_weight: number | null;
   divergence_threshold: number;
+  /** HRP-1075: the server's `round_completion` - the same rule the
+   *  `complete` action enforces, over every evaluator's sheet. */
+  can_complete: boolean;
+  unscored_critical_ids: string[];
   competences: {
     competence_id: string;
     average: number;
@@ -243,11 +247,6 @@ export function ManagerAssessmentSection({
     onScoresChangedRef.current = onScoresChanged;
   }, [onScoresChanged]);
   const [sheet, setSheet] = useState<AssessmentSheet | null>(null);
-  // HRP-629 REDO (QA 09.10): internal colleagues' sheets on the round. A
-  // viewer with no sheet of their own (a manager at `view` who is not an
-  // evaluator, an admin watching) reads them below, read-only. The server
-  // only returns them while the viewer has nothing left to anchor (HRP-373).
-  const [otherSheets, setOtherSheets] = useState<AssessmentSheet[]>([]);
   const [scaleLevels, setScaleLevels] = useState<ScaleLevel[]>([]);
   const [profileCompetences, setProfileCompetences] = useState<
     ProfileCompetence[]
@@ -266,9 +265,6 @@ export function ManagerAssessmentSection({
   const [loadingRounds, setLoadingRounds] = useState(false);
   const { user } = useAuth();
   const t = useTranslations("recruitment");
-  // HRP-830: rounds, their evaluators, scores and invites are `manage` on
-  // recruitment or the manager role; everyone else reads the round.
-  const { canRunHiringRounds } = usePermissions();
   // HRP-629: below `manage` the manager reads the rounds and fills in only
   // their own sheet - the one they hold as an evaluator on the round. Making,
   // closing and staffing rounds and inviting outsiders is `manage`. The UI
@@ -385,14 +381,14 @@ export function ManagerAssessmentSection({
     activeRound !== null &&
     activeRound.type !== "pre_interview" &&
     !roundClosed;
-  // HRP-629 / HRP-630 REDO (QA 12.10): who reads the round's averages -
-  // mirrors `reads_round_aggregate` in recruitment/routers/common.py. Whoever
-  // runs rounds, the round's own evaluators, and every reader of a closed
-  // round (its scores are final).
-  const readsAggregate =
-    canRunHiringRounds ||
-    roundClosed ||
-    Boolean(activeRound?.evaluators.some((e) => e.user_id === user?.id));
+  const isEvaluator = Boolean(
+    activeRound?.evaluators.some((e) => e.user_id === user?.id),
+  );
+  // HRP-1081: whoever is not scoring this round - not on it, or it is
+  // closed - reads it as a whole: one sheet, no answers marked, each
+  // competence's round average naming every scorer. An evaluator of a live
+  // round sees their own scores only (HRP-373).
+  const readsWholeRound = !sheet && (roundClosed || !isEvaluator);
 
   // ── Load rounds for the active CV ────────────────────────────────────
   const loadRounds = useCallback(
@@ -554,22 +550,11 @@ export function ManagerAssessmentSection({
             a.evaluator_type === "user" &&
             (user ? a.evaluator_user_id === user.id : false),
         );
-        // HRP-629 REDO: keep the colleagues' internal sheets — with no sheet
-        // of one's own they render read-only instead of an empty tab.
-        // External sheets stay behind the invite's "View submission".
-        setOtherSheets(
-          list.filter(
-            (a) => a.evaluator_type === "user" && a !== mine,
-          ),
-        );
         // With no sheet for the current evaluator yet, `null` surfaces the
         // "Start scoring" placeholder (creation = adding self as evaluator).
         setSheet(mine ?? null);
       } catch {
-        if (activeRoundIdRef.current === roundId) {
-          setSheet(null);
-          setOtherSheets([]);
-        }
+        if (activeRoundIdRef.current === roundId) setSheet(null);
       }
     },
     [user],
@@ -578,15 +563,10 @@ export function ManagerAssessmentSection({
   // HRP-374: the round header average spans every evaluator, so it can only
   // come from the server — a local sheet knows nothing about colleagues or
   // submitted external evaluators.
+  // HRP-1081: every reader of the round reads it - a read, so a vacancy
+  // frozen by its status still shows it (HRP-836).
   const loadAggregate = useCallback(async (roundId: string) => {
     let agg: RoundAggregate | null = null;
-    // Who reads it is `readsAggregate` (a boolean, so it does not re-key the
-    // sheet effect below on every round reload) - a read, so a vacancy
-    // frozen by its status still shows it (HRP-836).
-    if (!readsAggregate) {
-      if (activeRoundIdRef.current === roundId) setAggregate(null);
-      return;
-    }
     try {
       agg = await api.get<RoundAggregate>(
         `/v1/assessment-rounds/${roundId}/aggregate`,
@@ -595,7 +575,7 @@ export function ManagerAssessmentSection({
       agg = null;
     }
     if (activeRoundIdRef.current === roundId) setAggregate(agg);
-  }, [readsAggregate]);
+  }, []);
 
   // Deliberately keyed on the round alone: `rounds` changes identity on
   // every reload and on every optimistic invite write, and re-running the
@@ -606,7 +586,6 @@ export function ManagerAssessmentSection({
       // HRP-550: no round means no sheet. Returning early left the last
       // round's form (and its aggregate) rendered under the new vacancy.
       setSheet(null);
-      setOtherSheets([]);
       setAggregate(null);
       return;
     }
@@ -629,15 +608,6 @@ export function ManagerAssessmentSection({
     }
     return out;
   }, [aggregate]);
-  // HRP-629 / HRP-630 REDO: a reader who does not evaluate the round sees its
-  // averages, not who gave which score - the avatars already say who took part.
-  const namelessAggregates = useMemo(() => {
-    const out: Record<string, CompetenceAggregate> = {};
-    for (const [id, a] of Object.entries(aggregatesByCompetence)) {
-      out[id] = { ...a, scorers: [] };
-    }
-    return out;
-  }, [aggregatesByCompetence]);
 
   async function createRound(type: RoundType) {
     if (!activeCvId) return;
@@ -891,33 +861,36 @@ export function ManagerAssessmentSection({
 
   // HRP-1022: with no sheet of the caller's own on the round - only
   // external evaluators scored it - progress is what their submitted sheets
-  // put into the round aggregate. The aggregate is read with the round's
-  // writes, so whoever cannot run rounds gets no such row (it would read 0/N).
-  const submittedExternal =
-    canRunHiringRounds &&
-    invites.some((i) => i.status === "submitted" || Boolean(i.submitted_at));
+  // put into the round aggregate.
+  const submittedExternal = invites.some(
+    (i) => i.status === "submitted" || Boolean(i.submitted_at),
+  );
+  // HRP-1081: an evaluator of a live round counts their own sheet; a closed
+  // round and a reader of the whole round count every evaluator's scores.
   const isScored = (compId: string) =>
-    sheet
+    sheet && !roundClosed
       ? sheet.competence_scores.some(
           (c) => c.competence_id === compId && c.score_value !== null,
         )
       : Boolean(aggregatesByCompetence[compId]);
-  // HRP-629 / HRP-630 REDO (QA 12.10): a closed round's numbers are final,
-  // so a reader with no sheet of their own gets its data row as well.
   const showsRoundData =
-    Boolean(sheet) || submittedExternal || (roundClosed && aggregate !== null);
+    Boolean(sheet) ||
+    submittedExternal ||
+    (readsWholeRound &&
+      aggregate !== null &&
+      (roundClosed || aggregate.competences.length > 0));
   const completedCount = showsRoundData
     ? profileCompetences.filter((comp) => isScored(comp.id)).length
     : 0;
   const totalCount = profileCompetences.length;
 
-  // HRP-348 REDO: `Mark as complete` unlocks only once every competence
-  // with the Critical chip has an overall score (manual or computed).
-  const unscoredCritical = profileCompetences.filter(
-    (comp) => comp.criticality === "critical" && !isScored(comp.id),
+  // HRP-348 REDO / HRP-1075: `Mark as complete` unlocks once every Critical
+  // competence is scored by any evaluator, internal or external - the
+  // server's rule, so the caller's own half-filled sheet never locks it.
+  const unscoredCritical = profileCompetences.filter((comp) =>
+    aggregate?.unscored_critical_ids.includes(comp.id),
   );
-  const canComplete =
-    completedCount > 0 && unscoredCritical.length === 0;
+  const canComplete = aggregate?.can_complete ?? false;
   const completeHint = !canComplete
     ? unscoredCritical.length > 0
       ? t("managerAssessmentCompleteHintCritical", {
@@ -1059,6 +1032,9 @@ export function ManagerAssessmentSection({
                     onAdded={(s) => {
                       setSheet(s);
                       if (activeCvId) void loadRounds(activeCvId);
+                      // The caller is an evaluator now: their averages
+                      // narrow to their own (HRP-373).
+                      if (activeRoundId) void loadAggregate(activeRoundId);
                     }}
                   />
                 )}
@@ -1218,58 +1194,24 @@ export function ManagerAssessmentSection({
               </div>
             ) : null}
 
-            {/* HRP-629 REDO: no sheet of one's own on this round — the
-                evaluators' sheets render read-only instead of an empty tab,
-                for a live round and a closed one alike. Writes stay behind
-                `manage`; the server withholds these rows from an evaluator
-                who has not submitted yet (HRP-373). QA 12.10: no evaluator
-                name over a sheet (the avatars above name the panel), and a
-                closed round's sheets carry each competence's round average. */}
-            {!sheet && otherSheets.length > 0 && (
-              <div className="space-y-4" data-testid="assessment-readonly-sheets">
-                {/* The closed-round badge normally rides the progress row —
-                    show it here when that row is absent (no averages). */}
-                {roundClosed && !showsRoundData && (
-                  <Badge
-                    variant="outline"
-                    className={
-                      activeRound?.status === "archived"
-                        ? "bg-muted text-muted-foreground"
-                        : "bg-emerald-50 text-emerald-700"
-                    }
-                    data-testid="assessment-round-status-badge"
-                  >
-                    {activeRound?.status === "archived"
-                      ? t("managerAssessmentRoundArchivedBadge")
-                      : t("managerAssessmentRoundCompletedBadge")}
-                  </Badge>
-                )}
-                {otherSheets.map((s) => (
-                  <div
-                    key={s.id}
-                    // Nameless now, so a rule tells one sheet from the next.
-                    className="space-y-2 border-t pt-4 first:border-t-0 first:pt-0"
-                    data-testid={`assessment-readonly-sheet-${s.id}`}
-                  >
-                    <CompetenceScoreList
-                      competences={profileCompetences}
-                      scaleLevels={scaleLevels}
-                      competenceScores={s.competence_scores}
-                      indicatorScores={s.indicator_scores}
-                      disabled
-                      emptyHint={t("managerAssessmentEmptyHint")}
-                      aggregates={roundClosed ? namelessAggregates : undefined}
-                      onCompetenceScore={() => undefined}
-                      onCompetenceComment={() => undefined}
-                      onIndicatorScore={() => undefined}
-                    />
-                    {s.final_notes && (
-                      <div className="rounded-md border bg-muted/20 p-3 text-xs whitespace-pre-wrap">
-                        {s.final_notes}
-                      </div>
-                    )}
-                  </div>
-                ))}
+            {/* HRP-1081: no sheet of one's own to score - the round reads
+                once, whatever the number of evaluators: no answer marked,
+                each competence carrying its round average and who gave
+                which score. Writes stay behind `manage`. */}
+            {readsWholeRound && showsRoundData && (
+              <div data-testid="assessment-readonly-sheets">
+                <CompetenceScoreList
+                  competences={profileCompetences}
+                  scaleLevels={scaleLevels}
+                  competenceScores={[]}
+                  indicatorScores={[]}
+                  disabled
+                  emptyHint={t("managerAssessmentEmptyHint")}
+                  aggregates={aggregatesByCompetence}
+                  onCompetenceScore={() => undefined}
+                  onCompetenceComment={() => undefined}
+                  onIndicatorScore={() => undefined}
+                />
               </div>
             )}
 

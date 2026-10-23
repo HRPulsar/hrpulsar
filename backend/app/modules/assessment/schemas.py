@@ -836,10 +836,13 @@ class PDPDetail(PDPRead):
     is_owner: bool = False
     # HRP-130: true when the current viewer is the resolved reviewer for
     # this plan — either the explicit ``reviewer_id`` or the employee's
-    # division manager (the same fallback used for ``reviewer_name``). The
+    # line manager (the same fallback used for ``reviewer_name``). The
     # UI uses this directly instead of comparing ``reviewer_id`` itself,
     # which would miss the implicit-manager case.
     is_reviewer: bool = False
+    # HRP-829 REDO: the resolved reviewer's card - their name links to it
+    # where the viewer may open it; none for a reviewer with no card.
+    reviewer_employee_id: uuid.UUID | None = None
 
 
 class PDPItemCreate(BaseModel):

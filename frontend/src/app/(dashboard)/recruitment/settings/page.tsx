@@ -163,7 +163,11 @@ export default function RecruitmentSettingsHubPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xs text-muted-foreground">
-          {t("settingsWhatElseBody")}
+          {/* HRP-1045 REDO: the GDPR pointer is for whoever reads GDPR
+              requests (admin, HR); everyone else gets the funnel note. */}
+          {access.readsTenantSettings
+            ? t("settingsWhatElseBody")
+            : t("settingsWhatElseBodyFunnel")}
         </CardContent>
       </Card>
     </div>

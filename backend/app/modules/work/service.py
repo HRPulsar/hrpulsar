@@ -448,6 +448,7 @@ async def owner_summaries(
             User.is_active,
             Employee.status,
             func.coalesce(Position.title, Employee.position_title),
+            Employee.id,
         )
         .outerjoin(
             Employee,
@@ -457,7 +458,7 @@ async def owner_summaries(
         .where(User.id.in_(list(user_ids)), User.tenant_id == tenant_id)
     )
     out: dict[uuid.UUID, dict[str, Any]] = {}
-    for uid, first, last, email, is_active, status, title in rows.tuples().all():
+    for uid, first, last, email, is_active, status, title, emp_id in rows.tuples():
         status = status or "active"
         if not is_active and status == "active":
             status = "inactive"
@@ -467,6 +468,8 @@ async def owner_summaries(
             status = "active"
         out[uid] = {
             "user_id": uid,
+            # HRP-829 REDO: the name links to the card where it opens.
+            "employee_id": emp_id,
             "name": f"{first} {last}".strip() or email,
             "position_title": title,
             "status": status,

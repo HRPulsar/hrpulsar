@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/context/auth-context";
@@ -133,6 +134,18 @@ function flattenCompetences(groups: CompetenceGroupTree[]): Competence[] {
     if (g.children.length > 0) result.push(...flattenCompetences(g.children));
   }
   return result;
+}
+
+/** The questionnaire groups indicators by competence in first-seen order —
+ * the order the sheet shows them in (HRP-317 looks for the first skipped one
+ * in this same order). */
+function groupByCompetence<T extends { competence: string }>(items: T[]): [string, T[]][] {
+  const grouped = new Map<string, T[]>();
+  for (const item of items) {
+    if (!grouped.has(item.competence)) grouped.set(item.competence, []);
+    grouped.get(item.competence)!.push(item);
+  }
+  return Array.from(grouped.entries());
 }
 
 export default function AssessmentDetailPage() {
@@ -575,8 +588,19 @@ export default function AssessmentDetailPage() {
       .filter((ind) => !evalAnswers[ind.id]?.answer_option_id)
       .map((ind) => ind.id);
     if (missing.length > 0) {
-      setEvalMissing(new Set(missing));
+      const missingSet = new Set(missing);
+      setEvalMissing(missingSet);
       toast.error(t("errorAnswerAll"));
+      // HRP-317: a sheet can run to dozens of indicators — take the person
+      // to the first one they skipped instead of leaving them to hunt for it.
+      const first = groupByCompetence(evalIndicators)
+        .flatMap(([, inds]) => inds)
+        .find((ind) => missingSet.has(ind.id));
+      const card = first && document.getElementById(`eval-indicator-${first.id}`);
+      if (card) {
+        card.scrollIntoView({ block: "center", behavior: "smooth" });
+        card.focus({ preventScroll: true });
+      }
       return;
     }
     setEvalMissing(new Set());
@@ -986,9 +1010,13 @@ export default function AssessmentDetailPage() {
               <p className="text-muted-foreground">{tc("employee")}</p>
               {employee ? (
                 <>
-                  <Link href={`/employees/${employee.id}`} className="font-medium text-primary hover:underline">
+                  <EmployeeName
+                    employeeId={employee.id}
+                    className="font-medium"
+                    linkClassName="text-primary hover:underline"
+                  >
                     {employee.user_name || employee.user_email}
-                  </Link>
+                  </EmployeeName>
                   {/* HRP-333: position + non-active status chip under the
                       name (shared EmployeeSummaryLine, name via link). */}
                   <EmployeeSummaryLine
@@ -1319,19 +1347,16 @@ export default function AssessmentDetailPage() {
                       <TableCell className="text-sm">
                         <div className="flex flex-col gap-0.5">
                           <div className="flex items-center gap-2">
-                            {p.can_view_profile && p.employee_id ? (
-                              <Link
-                                href={`/employees/${p.employee_id}`}
-                                className="hover:underline"
-                                data-testid={`assessment-participant-${p.id}-link`}
-                              >
-                                {p.user_name || p.user_id?.slice(0, 8) || "—"}
-                              </Link>
-                            ) : (
-                              <span data-testid={`assessment-participant-${p.id}-name`}>
-                                {p.user_name || p.user_id?.slice(0, 8) || "—"}
-                              </span>
-                            )}
+                            {/* HRP-829 REDO: the card rule, not the HR
+                                read scope of `can_view_profile`. */}
+                            <EmployeeName
+                              employeeId={p.employee_id}
+                              linkClassName="hover:underline"
+                              testId={`assessment-participant-${p.id}-link`}
+                              textTestId={`assessment-participant-${p.id}-name`}
+                            >
+                              {p.user_name || p.user_id?.slice(0, 8) || "—"}
+                            </EmployeeName>
                             {isEvaluatee && (
                               <Badge variant="outline" className="border-amber-300 text-amber-700" data-testid={`assessment-participant-${p.id}-evaluatee`}>
                                 <Star className="mr-1 h-3 w-3" />
@@ -1682,7 +1707,11 @@ export default function AssessmentDetailPage() {
                       <TableBody>
                         {cpaComparison.comparisons.map((c) => (
                           <TableRow key={c.employee_id}>
-                            <TableCell className="font-medium">{c.employee_name || c.employee_id.slice(0, 8)}</TableCell>
+                            <TableCell className="font-medium">
+                              <EmployeeName employeeId={c.employee_id} linkClassName="hover:underline">
+                                {c.employee_name || c.employee_id.slice(0, 8)}
+                              </EmployeeName>
+                            </TableCell>
                             <TableCell>{c.round_1_score.toFixed(2)}</TableCell>
                             <TableCell>{c.round_2_score.toFixed(2)}</TableCell>
                             <TableCell>
@@ -1875,12 +1904,7 @@ export default function AssessmentDetailPage() {
                 </p>
               ) : null}
               {(() => {
-                const grouped = new Map<string, typeof evalIndicators>();
-                for (const ind of evalIndicators) {
-                  if (!grouped.has(ind.competence)) grouped.set(ind.competence, []);
-                  grouped.get(ind.competence)!.push(ind);
-                }
-                return Array.from(grouped.entries()).map(([compName, inds]) => (
+                return groupByCompetence(evalIndicators).map(([compName, inds]) => (
                   <div key={compName} className="space-y-3">
                     <p className="text-sm font-semibold">{compName}</p>
                     <div className="space-y-3">
@@ -1890,8 +1914,11 @@ export default function AssessmentDetailPage() {
                         return (
                           <div
                             key={ind.id}
+                            id={`eval-indicator-${ind.id}`}
+                            tabIndex={-1}
+                            aria-invalid={isMissing || undefined}
                             data-testid={`assessment-eval-indicator-${ind.id}`}
-                            className={`rounded-md border p-3 ${
+                            className={`scroll-mt-4 rounded-md border p-3 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
                               isMissing ? "border-destructive bg-destructive/5" : ""
                             }`}
                           >

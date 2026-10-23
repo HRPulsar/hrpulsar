@@ -7,8 +7,11 @@ here, and since this ticket it no longer writes another's education and
 courses either (Maxim, 24.09). A new record and a transfer land in the
 caller's subtree, and one's own pay is not one's own to read or set. Deleting
 someone, granting a role and the set-password link stay the admin role's.
-The list and the card every other section reads answer whatever the matrix
-says.
+The list every other section reads answers whatever the matrix says.
+
+REDO QA 14.10: the roles below ``manager`` go no further than ``view``
+here, and the card opens by one rule (``readable_card_ids``) - the one every employee
+name link in the UI asks ``GET /employees/card-access`` about.
 """
 
 import inspect
@@ -128,16 +131,20 @@ async def test_anyone_keeps_their_own_education_at_view(client, db, tenant, org)
 
 
 async def test_a_raised_role_runs_only_its_subtree(auth_client, client, db, tenant, org):
-    recruiter = await _user(db, tenant, "recruiter")
-    head = await _card(db, tenant, recruiter, org["theirs"])
+    # REDO QA 14.10: nothing below ``manager`` goes past ``view`` here (the
+    # role ceiling), so the raise runs on the manager column - lowered by
+    # the tenant, then handed back.
+    other = await _user(db, tenant, "manager")
+    head = await _card(db, tenant, other, org["theirs"])
     org["theirs"].manager_id = head.id
     await db.commit()
-    h = _headers(recruiter)
+    h = _headers(other)
     colleague, report = org["colleague"].id, org["report"].id
+    await _save(auth_client, levels={"employees": {"manager": "view"}})
 
     assert _refused(await client.put(f"/api/employees/{colleague}", json={"status": "on_leave"}, headers=h))
     assert (await client.get("/api/employees?limit=200", headers=h)).json()["items"][0].get("hire_date") is None
-    await _save(auth_client, levels={"employees": {"recruiter": "manage"}})
+    await _save(auth_client, levels={"employees": {"manager": "manage"}})
 
     assert (await client.put(f"/api/employees/{colleague}", json={"status": "on_leave"}, headers=h)).status_code == 200
     assert (await client.post(f"/api/employees/{colleague}/education", json=EDUCATION, headers=h)).status_code == 201
@@ -219,11 +226,16 @@ async def test_closing_the_section_keeps_the_shared_reads(auth_client, client, d
 
     assert "employees" not in (await client.get("/api/auth/me", headers=h)).json()["sections"]
     # The section's own reads close, one's own record included...
-    for path in (f"/api/employees/{own.id}/education", f"/api/employees/{own.id}/events"):
+    for path in (f"/api/employees/{own.id}/education", f"/api/employees/{own.id}/events", f"/api/employees/card-access?ids={own.id}"):
         assert _refused(await client.get(path, headers=h)), path
     assert _refused(await client.post(f"/api/employees/{own.id}/education", json=EDUCATION, headers=h))
+    # ...the card too (REDO QA 14.10): every name is text, so no card opens
+    # by its URL either - answered as an unknown id, one's own included...
+    for target in (org["colleague"].id, own.id):
+        r = await client.get(f"/api/employees/{target}", headers=h)
+        assert r.status_code == 404 and r.json()["code"] == "employee_not_found", r.text
     # ...the people pickers every other section is built on do not.
-    for path in ("/api/employees", f"/api/employees/{org['colleague'].id}", "/api/employees/me"):
+    for path in ("/api/employees", "/api/employees/me"):
         r = await client.get(path, headers=h)
         assert r.status_code == 200, (path, r.text)
 
@@ -359,3 +371,67 @@ async def test_a_pay_row_outside_the_scope_says_nothing_about_its_dates(auth_cli
     bad = {"end_date": "2000-01-01"}
     r = await client.put(f"/api/employees/{org['colleague'].id}/compensation/{item.json()['id']}", json=bad, headers=_headers(org["mgr_user"]))
     assert _refused(r, FENCE)
+
+
+async def test_a_name_links_where_the_card_opens(client, db, tenant, org):
+    """REDO QA 14.10 - the card and every employee name link are one rule:
+    the admin level opens every card; a division head every card in their
+    subtree and anyone else's while active or on leave; the other roles
+    their own and anyone active or on leave. ``card-access`` answers
+    exactly the ids whose card answers 200."""
+    async def gone(division, status):
+        emp = await _card(db, tenant, await _user(db, tenant, "employee"), division)
+        emp.status = status
+        await db.commit()
+        return emp.id
+
+    report_gone = await gone(org["mine"], "terminated")
+    away = await gone(org["theirs"], "on_leave")
+    left = await gone(org["theirs"], "terminated")
+    idle = await gone(org["theirs"], "inactive")
+    report, colleague, mgr = org["report"].id, org["colleague"].id, org["mgr"].id
+    stranger = uuid.uuid4()
+    everyone = [report, report_gone, colleague, away, left, idle, mgr]
+
+    viewers = {"admin": await _user(db, tenant, "admin"), "hr": org["hr_user"], "manager": org["mgr_user"]}
+    for role in ("recruiter", "hiring_manager", "employee"):
+        viewers[role] = await _user(db, tenant, role)
+    active_ones = {report, colleague, away, mgr}
+    expected = {
+        "admin": set(everyone),
+        "hr": set(everyone),
+        "manager": active_ones | {report_gone},
+        "recruiter": active_ones,
+        "hiring_manager": active_ones,
+        "employee": active_ones,
+    }
+    query = "&".join(f"ids={i}" for i in [*everyone, stranger])
+    for role, user in viewers.items():
+        h = _headers(user)
+        r = await client.get(f"/api/employees/card-access?{query}", headers=h)
+        assert r.status_code == 200, r.text
+        assert set(map(uuid.UUID, r.json())) == expected[role], role
+        for target in everyone:
+            card = await client.get(f"/api/employees/{target}", headers=h)
+            assert (card.status_code == 200) == (target in expected[role]), (role, target, card.text)
+            if card.status_code != 200:
+                assert card.status_code == 404 and card.json()["code"] == "employee_not_found"
+
+
+async def test_card_access_takes_a_page_of_ids(client, org):
+    h = _headers(org["mgr_user"])
+    assert (await client.get("/api/employees/card-access", headers=h)).json() == []
+    many = "&".join(f"ids={uuid.uuid4()}" for _ in range(201))
+    assert (await client.get(f"/api/employees/card-access?{many}", headers=h)).status_code == 422
+
+
+def test_the_ui_asks_the_card_access_route_the_router_serves():
+    # The URL the name links call is the one the router registers.
+    from pathlib import Path
+
+    paths = {r.path for r in app.routes if isinstance(r, APIRoute)}
+    assert "/api/employees/card-access" in paths
+    ui = Path(__file__).parents[3] / "frontend/src/components/employees/employee-name.tsx"
+    if not ui.exists():
+        pytest.skip("frontend tree not present")
+    assert "/employees/card-access?" in ui.read_text()

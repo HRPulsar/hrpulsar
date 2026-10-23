@@ -18,10 +18,10 @@ Draft → Sent transition (``service.py::_assert_transitions`` checks
 ``competences`` so the explicit ``competence_keys`` list resolves
 directly to AssessmentCompetence rows.
 
-For 180/360 cycles the chosen ``employee_index`` MUST belong to a
-sub-division (not a division_head), otherwise ``Division.manager_id``
-points at the assessee themselves and the demo loses its manager-
-participant.
+For 180/360 cycles the chosen ``employee_index`` must have an assigned
+head somewhere up the division chain other than themselves (their line
+manager, ``company.line_manager.resolve_line_manager``); the seed fails
+loud otherwise, since the demo would lose its manager-participant.
 
 ``result_overrides`` is consumed for done and on_review assessments
 — each entry is ``(competence_key, avg_score_0_4, percent_0_100)`` and
@@ -334,9 +334,8 @@ ASSESSMENTS: list[dict] = [
     },
     {
         # Kate Highmore (idx 19) is a Senior PM under Sara Lindberg (idx 18 =
-        # division_head Product). 180° needs a Division Manager who isn't
-        # the assessee themselves — Sara would self-resolve and the cycle
-        # would land without a manager-participant.
+        # division_head Product). 180° needs a line manager other than the
+        # assessee — Kate's is Sara.
         # HRP-713: done, not in progress — the promotion candidate needs
         # real numbers to be red *on somebody else's vacancy*. Strong on
         # her own ladder and on sales discovery (a PM who runs customer

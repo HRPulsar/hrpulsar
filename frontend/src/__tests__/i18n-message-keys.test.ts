@@ -154,6 +154,8 @@ const MESSAGE_KEY_MAPS: Record<string, string> = {
   "src/components/competence-generation/ActiveSessionConflictDialog.tsx::SCOPE_LABEL_KEYS": "common",
   "src/components/competence-generation/ActiveSessionConflictDialog.tsx::STATUS_LABEL_KEYS": "common",
   "src/components/competence-generation/ErrorScreen.tsx::MESSAGE_KEYS": "competences",
+  "src/components/employees/employee-record-labels.ts::DEGREE_KEYS": "employees",
+  "src/components/employees/employee-record-labels.ts::COMPENSATION_TYPE_KEYS": "employees",
   "src/components/employees/employee-status.ts::STATUS_KEYS": "employees",
   "src/components/header.tsx::SEGMENT_KEYS": "sidebar",
   "src/components/positions/PositionStatusBadge.tsx::STATUS_LABEL_KEY": "company",

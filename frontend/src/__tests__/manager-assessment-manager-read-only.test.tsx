@@ -89,6 +89,8 @@ vi.mock("@/lib/api", () => ({
           average: 4,
           average_weight: null,
           divergence_threshold: 1,
+          can_complete: true,
+          unscored_critical_ids: [],
           competences: [
             {
               competence_id: "c-1",
@@ -129,14 +131,17 @@ vi.mock("@/components/recruitment/evaluation-sheet-form", async (orig) => ({
   CompetenceScoreList: ({
     disabled,
     aggregates,
+    competenceScores,
     onCompetenceScore,
   }: {
     disabled: boolean;
     aggregates?: Record<string, { average: number; scorers: unknown[] }>;
+    competenceScores: unknown[];
     onCompetenceScore: (id: string, value: number) => void;
   }) => (
     <button
       data-testid="score-stub"
+      data-answers={competenceScores.length}
       data-round-average={aggregates?.["c-1"]?.average}
       data-scorers={aggregates?.["c-1"]?.scorers.length}
       disabled={disabled}
@@ -241,12 +246,11 @@ describe("Manager assessments for a manager below manage (HRP-629)", () => {
   });
 
   // HRP-629 REDO (QA 09.10): not being on the round's evaluator list no
-  // longer means an empty tab — the colleagues' sheets render read-only.
-  it("shows the evaluators' sheets read-only on a round they do not evaluate", async () => {
+  // longer means an empty tab — the round's sheet renders read-only.
+  it("shows the round's sheet read-only on a round they do not evaluate", async () => {
     await render(["manager"], "view");
     await openTab(OTHER.id);
-    const readonly = anyById("assessment-readonly-sheet-");
-    expect(readonly).not.toBeNull();
+    expect(byId("assessment-readonly-sheets")).not.toBeNull();
     const score = byId("score-stub");
     expect(score).not.toBeNull();
     expect(score!.disabled).toBe(true);
@@ -260,7 +264,7 @@ describe("Manager assessments for a manager below manage (HRP-629)", () => {
     try {
       await render(["manager"], "view");
       await openTab(OTHER.id);
-      expect(anyById("assessment-readonly-sheet-")).not.toBeNull();
+      expect(byId("assessment-readonly-sheets")).not.toBeNull();
       expect(byId("score-stub")!.disabled).toBe(true);
       expect(byId("assessment-round-status-badge")).not.toBeNull();
       for (const id of WRITES) expect(anyById(id), id).toBeNull();
@@ -311,49 +315,49 @@ describe("Manager assessments for a manager below manage (HRP-629)", () => {
     }
   });
 
-  // HRP-629 / HRP-630 REDO (QA 12.10): the same for the manager and the
-  // hiring manager at view who is not on the round - no evaluator name over
-  // a sheet; a live round shows the sheets alone, a completed or archived
-  // one its data row and each competence's round average as well.
-  for (const role of ["manager", "hiring_manager"]) {
-    it(`${role} not on a live round: sheets without a name or averages`, async () => {
-      vi.mocked(api.get).mockClear();
-      await render([role], "view");
-      await openTab(OTHER.id);
-      const readonly = anyById("assessment-readonly-sheet-");
-      expect(readonly).not.toBeNull();
-      expect(container.querySelector('[data-testid="assessment-readonly-sheets"]')!.textContent).not.toContain(
-        "u-recruiter",
-      );
-      expect(byId("assessment-progress-counter")).toBeNull();
-      expect(byId("score-stub")!.dataset.roundAverage).toBeUndefined();
-      if (role === "hiring_manager")
-        // A live round's averages are not theirs to read (reads_round_aggregate).
-        expect(vi.mocked(api.get).mock.calls.map(([u]) => u)).not.toContain(
-          `/v1/assessment-rounds/${OTHER.id}/aggregate`,
-        );
-    });
+  // HRP-1081 case 3: an evaluator on a completed round keeps their own
+  // answers on the sheet, and "N / M assessed" counts every evaluator's.
+  it("counts every evaluator's scores for an evaluator on a closed round", async () => {
+    MINE.status = "complete";
+    try {
+      await render(["manager"], "view");
+      await openTab(MINE.id);
+      expect(container.querySelectorAll('[data-testid="score-stub"]')).toHaveLength(1);
+      // The own sheet scored nothing; the colleague scored the competence.
+      expect(byId("assessment-progress-counter")!.textContent).toContain("1 / 1");
+      expect(byId("score-stub")!.dataset.scorers).toBe("1");
+    } finally {
+      MINE.status = "in_progress";
+    }
+  });
 
+  // HRP-1081: the manager and the hiring manager at view who are not on the
+  // round read it once, whatever its status and the number of evaluators:
+  // no answer marked, each competence's round average naming every scorer,
+  // the data row over all evaluators' scores.
+  for (const role of ["manager", "hiring_manager"]) {
     for (const [status, badge] of [
+      ["in_progress", null],
       ["complete", "Completed"],
       ["archived", "Archived"],
     ] as const) {
-      it(`${role} not on the ${status} round: data row and round averages, no name`, async () => {
+      it(`${role} not on the ${status} round: one sheet with named round averages`, async () => {
         OTHER.status = status;
         try {
           await render([role], "view");
           await openTab(OTHER.id);
+          expect(container.querySelectorAll('[data-testid="score-stub"]')).toHaveLength(1);
+          const stub = byId("score-stub")!;
+          expect(stub.disabled).toBe(true);
+          // No evaluator's answers marked on it.
+          expect(stub.dataset.answers).toBe("0");
+          expect(stub.dataset.roundAverage).toBe("4");
+          expect(stub.dataset.scorers).toBe("1");
           expect(byId("assessment-progress-counter")!.textContent).toContain("1 / 1");
           expect(byId("assessment-round-average-score")!.textContent).toContain("4.0");
-          expect(byId("assessment-round-status-badge")!.textContent).toContain(badge);
-          expect(container.querySelectorAll('[data-testid="assessment-round-status-badge"]')).toHaveLength(1);
-          expect(byId("score-stub")!.dataset.roundAverage).toBe("4");
-          // The average's tooltip names no evaluator either.
-          expect(byId("score-stub")!.dataset.scorers).toBe("0");
-          expect(byId("score-stub")!.disabled).toBe(true);
-          expect(container.querySelector('[data-testid="assessment-readonly-sheets"]')!.textContent).not.toContain(
-            "u-recruiter",
-          );
+          const badges = container.querySelectorAll('[data-testid="assessment-round-status-badge"]');
+          expect(badges).toHaveLength(badge ? 1 : 0);
+          if (badge) expect(badges[0]!.textContent).toContain(badge);
           for (const id of WRITES) expect(anyById(id), id).toBeNull();
         } finally {
           OTHER.status = "in_progress";

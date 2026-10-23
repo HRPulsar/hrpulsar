@@ -42,6 +42,7 @@ from app.modules.talent_market.models import (
 )
 from app.modules.talent_market.scope import (
     TalentScope,
+    appointed_filter,
     assert_employee_card_visible,
     employee_read_filter,
     resolve_talent_scope,
@@ -82,6 +83,7 @@ async def search_cards(
     assignee_employee_id: uuid.UUID | None = None,
     candidate_only: bool = False,
     viewer_employee_id: uuid.UUID | None = None,
+    tab: str | None = None,
 ) -> tuple[list[dict], int]:
     """``scope`` narrows the board to what the caller may read and stamps
     ``can_manage`` on every row (HRP-639); ``None`` means no restriction
@@ -93,7 +95,13 @@ async def search_cards(
     count_q = select(func.count(TalentCard.id)).where(TalentCard.tenant_id == tenant_id)
 
     scope_clause: sa.ColumnElement[bool] | None = None
-    if candidate_only:
+    if tab == "mine":
+        # HRP-824 (QA 13.10): "I'm a candidate" - the cards one's own name is
+        # on, read as a rank-and-file employee reads them, whatever the level.
+        scope_clause = employee_read_filter(assignee_employee_id)
+    elif tab == "appointed":
+        scope_clause = appointed_filter(assignee_employee_id)
+    elif candidate_only:
         # HRP-209 / HRP-765: pure-Employee viewers only see cards they're
         # a candidate on. The rule lives in ``scope.employee_read_filter``
         # so the detail route asks the same question of one row.

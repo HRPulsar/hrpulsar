@@ -122,10 +122,12 @@ export function usePermissions() {
       sections.recruitment === "manage" ||
       (isManager && Boolean(sections.recruitment)),
     /**
-     * HRP-830: sees the whole hiring surface and the full AI payload -
-     * mirrors an unrestricted `RecruitmentScope` (admin-level or `manage`).
+     * HRP-830 REDO (QA 14.10): sees the whole hiring surface - mirrors an
+     * unrestricted `RecruitmentScope` (`UNRESTRICTED_ROLE_CODES`: the admin
+     * level and the recruiter). A manager or hiring manager at `manage`
+     * runs hiring on their own vacancies only.
      */
-    seesAllHiring: holdsAdminLevel(roles) || sections.recruitment === "manage",
+    seesAllHiring: holdsAdminLevel(roles) || isRecruiter,
     /** HRP-831: starts an import - `manage` on the import section. */
     canImport: sections.import === "manage",
     /**

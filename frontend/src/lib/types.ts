@@ -24,6 +24,8 @@ export interface User {
   language?: string | null;
   /** Tenant-default interface locale, echoed by /auth/me. */
   tenant_default_locale?: string | null;
+  /** HRP-1066: the company region, ISO 3166-1 alpha-2; null = not set. */
+  tenant_region?: string | null;
   /** HRP-637: tenant switch deciding whether a rank-and-file caller gets
    *  grade / specialization on positions. Mirrors `directory_show_grades`. */
   tenant_directory_show_grades?: boolean;
@@ -126,6 +128,9 @@ export interface Division {
   tenant_id: string;
   created_at: string;
   children: Division[];
+  /** HRP-942: on `GET /divisions` only - the division and its subtree,
+   *  active and on leave. */
+  employee_count?: number;
   pending_role_downgrade?: PendingRoleDowngrade[];
   role_upgrades?: RoleUpgrade[];
 }
@@ -883,7 +888,8 @@ export interface AssessmentParticipant {
   // HRP-333: EmployeeSummaryLine inputs (null for external reviewers).
   position_title?: string | null;
   employee_status?: string | null;
-  /** HRP-85: viewer is permitted to open /employees/{employee_id}. */
+  /** HRP-85: the participant is in the viewer's HR read scope. Not the name
+   *  link - that is the card rule (EmployeeName, HRP-829 REDO). */
   can_view_profile: boolean;
   role: string;
   is_completed: boolean;
@@ -1082,6 +1088,8 @@ export interface PDPDetail extends PDP {
   author_id: string;
   reviewer_id: string | null;
   reviewer_name: string | null;
+  /** HRP-829 REDO: the reviewer's card, null without one. */
+  reviewer_employee_id?: string | null;
   assessment_id: string | null;
   items: PDPItem[];
   comments: PDPComment[];
@@ -1138,7 +1146,8 @@ export interface TalentCandidate {
   id: string;
   employee_id: string;
   employee_name: string | null;
-  /** HRP-149: viewer is permitted to open /employees/{employee_id}. */
+  /** HRP-149: the candidate is in the viewer's HR read scope (plan badge,
+   *  drawer). Not the name link - that is the card rule (EmployeeName, HRP-829 REDO). */
   can_view_profile: boolean;
   status: string;
   match_score: number | null;
@@ -1283,23 +1292,11 @@ export interface BillingPackage {
   price: number;
 }
 
-export interface BillingLegalEntity {
-  name?: string;
-  inn?: string;
-  bank_details?: string;
-  vat_mode?: string;
-  vat_rate?: number;
-}
-
 export interface BillingProfile {
   currency: string;
   locale: string;
   payment_provider: "manual_invoice" | "stripe" | "yookassa" | "none";
-  legal_entity: BillingLegalEntity | null;
   packages: BillingPackage[];
-  // HRP-608: true when this site renders invoice PDFs — gates the
-  // buyer-requisites UI.
-  invoice_generation?: boolean;
 }
 
 export interface PurchaseCheckoutResult {
@@ -1310,7 +1307,6 @@ export interface PurchaseCheckoutResult {
   credits?: number;
   amount?: number;
   currency?: string;
-  legal_entity?: BillingLegalEntity | null;
   checkout_url?: string;
   // Set on sites with invoice generation (HRP-608); the PDF renders in
   // the background and lands in the invoices list.
@@ -1320,17 +1316,33 @@ export interface PurchaseCheckoutResult {
   reused?: boolean;
 }
 
-// Buyer-side legal requisites for invoice generation (HRP-608).
+// Buyer-side legal requisites for invoice generation (HRP-608). Since
+// HRP-1084 the scheme-specific ones (inn/kpp, vat_id) live in `fields`.
 export interface BillingRequisites {
   legal_name: string;
-  inn: string;
-  kpp: string | null;
   legal_address: string;
+  country: string | null;
+  fields: Record<string, string | null>;
+}
+
+// One buyer field the installation asks for (`/billing/invoice-config`).
+export interface InvoiceBuyerField {
+  key: string;
+  required: boolean;
+  pattern: string | null;
+  multiline: boolean;
+}
+
+export interface InvoiceConfig {
+  scheme: string | null;
+  generation_enabled: boolean;
+  buyer_fields: InvoiceBuyerField[];
 }
 
 export interface TenantInvoice {
   id: string;
-  invoice_number: string;
+  // null until the operator's seller numbers it or a PDF is attached (HRP-1084).
+  invoice_number: string | null;
   package_id: string;
   credits: number;
   amount: number;

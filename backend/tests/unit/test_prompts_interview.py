@@ -94,3 +94,31 @@ def test_prompt_handles_none_segments():
     )
     assert "<user_input>" in prompt
     assert "</user_input>" in prompt
+
+
+def test_resume_only_prompt_writes_the_strong_resume_note_in_the_content_language():
+    """HRP-1086: the strong-resume note used to be a fixed English quote the
+    model copied verbatim into a ru tenant's verdict. The prompt now names
+    its meaning only, and every free-text field follows the "Analysis
+    language" line - the AI content language, not the interface locale."""
+    from app.modules.recruitment.prompts_interview import (
+        RESUME_ONLY_ANALYSIS_SYSTEM_PROMPT,
+        build_resume_only_analysis_prompt,
+    )
+
+    assert "Strong candidate based on resume" not in RESUME_ONLY_ANALYSIS_SYSTEM_PROMPT
+    rules = RESUME_ONLY_ANALYSIS_SYSTEM_PROMPT.split("ANALYSIS RULES:")[1]
+    assert "interview is required to confirm it, written in the analysis language" in (
+        " ".join(rules.split())
+    )
+    assert "in the 'Analysis language' given in the prompt" in rules
+    for field in ("verdict_summary", "key_strength", "key_risk", "reasoning"):
+        assert field in rules.split("10. ")[1]
+
+    prompt = build_resume_only_analysis_prompt(
+        vacancy_title="Backend Engineer",
+        analysis_language="ru",
+        profile_competences=[],
+        parsed_resume={},
+    )
+    assert "Analysis language: ru\n" in prompt.partition("<user_input>")[0]

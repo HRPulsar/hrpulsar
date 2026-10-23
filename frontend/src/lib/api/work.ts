@@ -44,6 +44,8 @@ export interface AccessLogEntry {
  * person; `active` = still with the company (on leave counts). */
 export interface ContainerOwner {
   user_id: string;
+  /** HRP-829 REDO: the card the name links to; null without a card. */
+  employee_id?: string | null;
   name: string;
   position_title: string | null;
   status: string;

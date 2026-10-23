@@ -53,7 +53,7 @@ from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.recruitment.models import Vacancy
-from app.modules.recruitment.scope import own_candidacy
+from app.modules.recruitment.scope import UNRESTRICTED_ROLE_CODES, own_candidacy
 from app.modules.talent_market.models import TalentCandidate, TalentCard
 
 #: HRP-630: below the admin level these roles read every card at any level
@@ -207,6 +207,24 @@ def employee_read_filter(employee_id: uuid.UUID | None) -> ColumnElement[bool]:
     )
 
 
+def appointed_filter(employee_id: uuid.UUID | None) -> ColumnElement[bool]:
+    """HRP-824 (QA 13.10): the "I'm appointed" tab - the cards the employee
+    is appointed on, whatever their status but Cancelled."""
+    if employee_id is None:
+        return sa.false()
+    return sa.and_(
+        TalentCard.status != "cancelled",
+        TalentCard.id.in_(
+            select(TalentCandidate.card_id)
+            .where(
+                TalentCandidate.employee_id == employee_id,
+                TalentCandidate.status == "appointed",
+            )
+            .scalar_subquery()
+        ),
+    )
+
+
 async def assert_employee_card_visible(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -269,7 +287,7 @@ async def resolve_talent_scope(db: AsyncSession, current_user: User) -> TalentSc
         # already.
         competing_card_ids=(
             await _competing_card_ids(
-                db, current_user, employee_id, twins=levels["recruitment"] != "manage"
+                db, current_user, employee_id, twins=_fenced_from_twins(current_user)
             )
             if manages or division_ids or reads_all
             else frozenset()
@@ -285,21 +303,27 @@ async def competes_on_card(db: AsyncSession, user: User, card_id: uuid.UUID) -> 
     if any(r.code in ADMIN_ROLE_CODES for r in user.roles):
         return False
     emp = await get_current_employee(db, user)
-    levels = await matrix_levels(db, user)
     return card_id in await _competing_card_ids(
         db,
         user,
         emp.id if emp is not None else None,
-        twins=levels["recruitment"] != "manage",
+        twins=_fenced_from_twins(user),
     )
+
+
+def _fenced_from_twins(user: User) -> bool:
+    """HRP-971 / HRP-830 REDO: the recruitment fence reaches a vacancy's
+    talent-market twin for exactly whom it reaches the vacancy - everyone
+    outside ``UNRESTRICTED_ROLE_CODES``, a manager at ``manage`` included."""
+    return not any(r.code in UNRESTRICTED_ROLE_CODES for r in user.roles)
 
 
 async def _competing_card_ids(
     db: AsyncSession, user: User, employee_id: uuid.UUID | None, *, twins: bool
 ) -> frozenset[uuid.UUID]:
     """HRP-971: the cards the caller reacted to and, with ``twins`` - the
-    recruitment fence applies to them, i.e. below ``manage`` there - the
-    twins of the vacancies they are a candidate on."""
+    recruitment fence applies to them (``_fenced_from_twins``) - the twins
+    of the vacancies they are a candidate on."""
     ids: set[uuid.UUID] = set()
     if employee_id is not None:
         ids.update(

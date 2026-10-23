@@ -17,6 +17,9 @@ const get = vi.fn();
 
 vi.mock("@/lib/api", () => ({ api: { get } }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+// HRP-829 REDO: employee results need the employees section open.
+const auth = { user: { id: "u-1", roles: ["employee"], sections: { employees: "view" } as Record<string, string> } };
+vi.mock("@/context/auth-context", () => ({ useAuth: () => auth }));
 
 const { GlobalSearch } = await import("@/components/global-search");
 
@@ -25,6 +28,7 @@ let root: Root;
 
 beforeEach(() => {
   get.mockReset();
+  auth.user.sections = { employees: "view" };
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -114,4 +118,18 @@ it("keeps the newer query's results when an older answer arrives late", async ()
   });
   expect(container.textContent).toContain("Bob New");
   expect(container.textContent).not.toContain("Al Old");
+});
+
+it("finds no employees where no employee card opens (HRP-829 REDO)", async () => {
+  auth.user.sections = {};
+  get.mockImplementation((url: string) =>
+    Promise.resolve(url.startsWith("/employees") ? employee("Bob Hidden") : empty),
+  );
+  await render();
+  await type("bob");
+  await settle();
+  const urls = get.mock.calls.map(([url]) => url as string);
+  expect(urls.some((url) => url.startsWith("/employees"))).toBe(false);
+  expect(urls).toContain("/assessments?q=bob&limit=5");
+  expect(container.textContent).not.toContain("Bob Hidden");
 });

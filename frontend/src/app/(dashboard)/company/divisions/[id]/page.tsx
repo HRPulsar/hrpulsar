@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { api } from "@/lib/api";
 import { fetchAllPages } from "@/lib/api/paginate";
 import { flattenTree } from "@/lib/utils";
@@ -475,13 +476,33 @@ export default function DivisionDetailPage() {
             <div>
               <p className="text-muted-foreground">{t("manager")}</p>
               <p className="font-medium">
-                {division.manager_name || t("notAssigned")}
+                {division.manager_name ? (
+                  <EmployeeName
+                    employeeId={division.manager_id}
+                    linkClassName="hover:underline"
+                    testId="division-detail-manager"
+                  >
+                    {division.manager_name}
+                  </EmployeeName>
+                ) : (
+                  t("notAssigned")
+                )}
               </p>
             </div>
             <div>
               <p className="text-muted-foreground">{t("deputyManager")}</p>
               <p className="font-medium">
-                {division.deputy_manager_name || t("notAssigned")}
+                {division.deputy_manager_name ? (
+                  <EmployeeName
+                    employeeId={division.deputy_manager_id}
+                    linkClassName="hover:underline"
+                    testId="division-detail-deputy"
+                  >
+                    {division.deputy_manager_name}
+                  </EmployeeName>
+                ) : (
+                  t("notAssigned")
+                )}
               </p>
             </div>
             <div>

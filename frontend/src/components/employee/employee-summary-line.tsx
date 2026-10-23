@@ -15,6 +15,7 @@ import * as React from "react";
 import { useTranslations } from "next-intl";
 
 import { Badge } from "@/components/ui/badge";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { employeeStatusLabel } from "@/components/employees/employee-status";
 import { cn } from "@/lib/utils";
 import { BADGE_COLOR } from "@/lib/badge-tones";
@@ -28,6 +29,12 @@ export interface EmployeeSummaryShape {
 
 interface EmployeeSummaryLineProps {
   employee: EmployeeSummaryShape;
+  /**
+   * HRP-829 REDO: the employee row behind the name - given, the name links
+   * to the card where the viewer may open it (`EmployeeName`). Left out
+   * (an external reviewer, a parent that links the name itself), text.
+   */
+  employeeId?: string | null;
   /**
    * When the parent already renders the name itself (e.g. a link), set
    * `hideName` and only the position + status chip will render. The
@@ -67,6 +74,7 @@ export function deriveEmployeeSummary(emp: EmployeeSummaryShape): {
 
 export function EmployeeSummaryLine({
   employee,
+  employeeId,
   hideName,
   className,
   nameClassName,
@@ -91,12 +99,14 @@ export function EmployeeSummaryLine({
     >
       {!hideName && (
         <div className="flex items-center gap-2">
-          <span
-            data-testid={testId ? `${testId}-name` : undefined}
+          <EmployeeName
+            employeeId={employeeId}
+            testId={testId ? `${testId}-name` : undefined}
             className={cn("truncate text-sm font-medium", nameClassName)}
+            linkClassName="hover:underline"
           >
             {name || "—"}
-          </span>
+          </EmployeeName>
           {showStatus && (
             <Badge
               data-testid={testId ? `${testId}-status` : undefined}

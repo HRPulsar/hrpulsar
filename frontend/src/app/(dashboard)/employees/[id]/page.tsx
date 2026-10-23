@@ -42,6 +42,13 @@ import {
 } from "@/components/employees/employee-competence-tree";
 import { employeeStatusLabel } from "@/components/employees/employee-status";
 import { EmployeeCompetenceBreakdown } from "@/components/employees/employee-competence-breakdown";
+import {
+  COMPENSATION_TYPES,
+  compensationTypeLabel,
+  degreeChoices,
+  degreeLabel,
+} from "@/components/employees/employee-record-labels";
+import { matchPercentColor } from "@/components/assessment/match-percent-chip";
 import { CompetenceTreePicker } from "@/components/competence/competence-tree-picker";
 import type {
   Assessment,
@@ -135,16 +142,6 @@ interface DevDynamics {
   plans_completed: number;
   competences_improved: number;
 }
-
-const degreeOptions = [
-  "Secondary",
-  "Vocational",
-  "Bachelor",
-  "Master",
-  "PhD",
-  "Doctorate",
-  "Other",
-];
 
 /** Loose shape of the next-intl translator so plain helpers below can take
  * it as an argument instead of being turned into components. */
@@ -1668,7 +1665,7 @@ export default function EmployeeDetailPage() {
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-medium">
                               {t("degreeInField", {
-                                degree: item.degree,
+                                degree: degreeLabel(t, item.degree),
                                 field: item.field_of_study,
                               })}
                             </span>
@@ -1854,7 +1851,7 @@ export default function EmployeeDetailPage() {
                             <div className="flex-1">
                               <div className="flex items-center gap-2">
                                 <Badge variant="secondary" className={typeColors[item.type] || ""}>
-                                  {item.type}
+                                  {compensationTypeLabel(t, item.type)}
                                 </Badge>
                                 <span className="text-base font-semibold">
                                   {(item.amount / 100).toLocaleString(locale, {
@@ -2117,12 +2114,12 @@ export default function EmployeeDetailPage() {
                 {competenceOverview && competenceOverview.other.length > 0 ? (
                   <div className="space-y-1.5">
                     {competenceOverview.other.map((row) => {
+                      // HRP-1105: the shared scale, judged against the row's
+                      // bar - 75 is yellow here as everywhere else.
                       const tone =
-                        row.percent !== null && row.percent >= 75
-                          ? BADGE_COLOR.green
-                          : row.percent !== null && row.percent >= 50
-                            ? BADGE_COLOR.yellow
-                            : BADGE_COLOR.red;
+                        row.percent === null
+                          ? ""
+                          : BADGE_COLOR[matchPercentColor(row.percent, row.passing_score)];
                       return (
                         <div
                           key={row.competence_id}
@@ -2152,6 +2149,7 @@ export default function EmployeeDetailPage() {
                               competenceId={row.competence_id}
                               competenceTitle={row.competence_title}
                               breakdown={row.level_breakdown}
+                              bar={row.passing_score}
                               testIdPrefix="employee-competences-other-row"
                             />
                           </div>
@@ -2580,12 +2578,16 @@ export default function EmployeeDetailPage() {
                   }
                 >
                   <SelectTrigger className="w-full" data-testid="employee-edu-degree">
-                    <SelectValue placeholder={t("selectDegree")} />
+                    <SelectValue placeholder={t("selectDegree")}>
+                      {degreeChoices(t, currentUser?.tenant_region, eduForm.degree).find(
+                        (c) => c.value === eduForm.degree,
+                      )?.label}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {degreeOptions.map((d) => (
-                      <SelectItem key={d} value={d}>
-                        {d}
+                    {degreeChoices(t, currentUser?.tenant_region, eduForm.degree).map((c) => (
+                      <SelectItem key={c.value} value={c.value}>
+                        {c.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -2673,21 +2675,15 @@ export default function EmployeeDetailPage() {
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue>
-                      {compForm.type === "salary"
-                        ? t("compTypeSalary")
-                        : compForm.type === "bonus"
-                          ? t("compTypeBonus")
-                          : compForm.type === "allowance"
-                            ? t("compTypeAllowance")
-                            : ""}
+                      {compForm.type ? compensationTypeLabel(t, compForm.type) : ""}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="salary">{t("compTypeSalary")}</SelectItem>
-                    <SelectItem value="bonus">{t("compTypeBonus")}</SelectItem>
-                    <SelectItem value="allowance">
-                      {t("compTypeAllowance")}
-                    </SelectItem>
+                    {COMPENSATION_TYPES.map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {compensationTypeLabel(t, type)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

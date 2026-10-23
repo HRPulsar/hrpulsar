@@ -1237,6 +1237,8 @@ async def my_loop(
                 "href": f"/assessments/{pending_surveys[0]}",
             }
         )
+    # HRP-825: the three plan findings are the caller's own open plans - the
+    # list's "To do" tab, not the section's full list.
     returned = [p for p in open_pdps if p.status == "returned"]
     if returned:
         findings.append(
@@ -1244,7 +1246,7 @@ async def my_loop(
                 "code": "pdp_returned",
                 "severity": "warn",
                 "count": len(returned),
-                "href": "/development",
+                "href": "/development?tab=todo",
             }
         )
     overdue = [
@@ -1256,7 +1258,7 @@ async def my_loop(
                 "code": "pdp_overdue",
                 "severity": "alert",
                 "count": len(overdue),
-                "href": "/development",
+                "href": "/development?tab=todo",
             }
         )
     else:
@@ -1271,7 +1273,7 @@ async def my_loop(
                     "code": "pdp_deadline_soon",
                     "severity": "warn",
                     "count": len(soon),
-                    "href": "/development",
+                    "href": "/development?tab=todo",
                 }
             )
     if gap_items and not open_pdps:

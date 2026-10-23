@@ -11,6 +11,8 @@ from tests.unit.test_work_containers import _user_with_role
 EMPLOYEES = sections.SECTIONS_BY_CODE["employees"]
 COMPANY = sections.SECTIONS_BY_CODE["company"]
 INVITATIONS = sections.SECTIONS_BY_CODE["invitations"]
+IMPORT = sections.SECTIONS_BY_CODE["import"]
+ROLES = sections.SECTIONS_BY_CODE["roles"]
 COVERAGE = sections.SECTIONS_BY_CODE["coverage"]
 URL = "/api/settings/section-access"
 
@@ -18,9 +20,33 @@ URL = "/api/settings/section-access"
 def test_override_applies_both_ways():
     # HRP-831 translated the last section and HRP-832 dropped the clamp that
     # narrowed an untranslated one: a raise counts as much as a cut.
-    assert role_level(INVITATIONS, "recruiter", {("invitations", "recruiter"): "manage"}, set()) == "manage"
+    assert role_level(IMPORT, "recruiter", {("import", "recruiter"): "manage"}, set()) == "manage"
     assert role_level(INVITATIONS, "manager", {("invitations", "manager"): "view"}, set()) == "view"
     assert role_level(INVITATIONS, "manager", {}, set()) == "manage"
+
+
+def test_a_role_never_goes_above_its_ceiling():
+    # HRP-831 (QA 15.10): the roles below ``manager`` invite nobody, and
+    # writing roles is the admin's alone - whatever a row says.
+    for role in ("recruiter", "hiring_manager", "employee"):
+        assert role_level(INVITATIONS, role, {("invitations", role): "manage"}, set()) == "none"
+    for role in ("hr", "manager", "recruiter", "hiring_manager", "employee"):
+        assert role_level(ROLES, role, {("roles", role): "manage"}, set()) == "view"
+        assert role_level(ROLES, role, {("roles", role): "view"}, set()) == "view"
+    assert role_level(ROLES, "admin", {}, set()) == "manage"
+    # HRP-830: the Employee role never reaches hiring.
+    recruitment = sections.SECTIONS_BY_CODE["recruitment"]
+    assert role_level(recruitment, "employee", {("recruitment", "employee"): "view"}, set()) == "none"
+    assert role_level(recruitment, "hiring_manager", {("recruitment", "hiring_manager"): "manage"}, set()) == "manage"
+    assert effective_levels(["employee", "manager"], {("roles", "manager"): "manage"}, set())["roles"] == "view"
+
+
+def test_every_default_sits_under_its_ceiling():
+    # A default above the ceiling would be a cell the screen cannot show.
+    for s in sections.SECTIONS:
+        for role, cap in s.ceilings.items():
+            assert role in sections.ROLE_CODES, (s.code, role)
+            assert sections.LEVEL_ORDER[s.defaults[role]] <= sections.LEVEL_ORDER[cap], (s.code, role)
 
 
 def test_hidden_is_none_for_everyone_unless_never_hidden():
@@ -78,7 +104,7 @@ def test_a_self_guarded_section_leaves_its_writes_to_its_routes():
 async def test_widening_reaches_me_and_require_section(auth_client, client, db, tenant):
     matrix = (await auth_client.get(URL)).json()
     for s in matrix["sections"]:
-        if s["code"] == "invitations":
+        if s["code"] == "import":
             s["levels"]["recruiter"] = "manage"
     r = await auth_client.put(
         URL,
@@ -93,10 +119,10 @@ async def test_widening_reaches_me_and_require_section(auth_client, client, db, 
 
     recruiter, token = await _user_with_role(db, tenant, "recruiter")
     me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
-    assert me.json()["sections"]["invitations"] == "manage"
+    assert me.json()["sections"]["import"] == "manage"
 
     for level in ("view", "manage"):
-        assert await require_section("invitations", level)(db=db, current_user=recruiter) is recruiter
+        assert await require_section("import", level)(db=db, current_user=recruiter) is recruiter
     with pytest.raises(AppError) as exc:
         await require_section("roles", "view")(db=db, current_user=recruiter)
     assert exc.value.status_code == 403

@@ -90,6 +90,16 @@ test.describe("Exam taking (HRP-328)", () => {
     const row = page.getByTestId(`exams-row-${exam.id}`);
     await expect(row).toBeVisible({ timeout: 10000 });
 
+    // HRP-823 (QA 13.10): the employee lands on My exams, with no mass
+    // exams tab; To do counts the one still to take, and a link - the
+    // assignment e-mail's - opens it directly.
+    await expect(page.getByTestId("exams-tab-mine")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("exams-tab-all")).toHaveCount(0);
+    await expect(page.getByTestId("exams-tab-todo")).toHaveText(/\(1\)/);
+    await page.goto("/exams?tab=todo");
+    await expect(page.getByTestId("exams-tab-todo")).toHaveAttribute("aria-selected", "true");
+    await expect(row).toBeVisible({ timeout: 10000 });
+
     await page.getByTestId(`exams-row-${exam.id}-take`).click();
     const sheet = page.getByTestId("exam-take-sheet");
     await expect(sheet).toBeVisible();
@@ -124,6 +134,11 @@ test.describe("Exam taking (HRP-328)", () => {
     await expect(submitBtn).toBeEnabled();
     await submitBtn.click();
     await expect(sheet).not.toBeVisible({ timeout: 10000 });
+
+    // Done: it leaves To do, and My exams keeps it with the score.
+    await expect(page.getByTestId("exams-tab-todo")).toHaveText(/\(0\)/, { timeout: 10000 });
+    await expect(row).toHaveCount(0);
+    await page.getByTestId("exams-tab-mine").click();
 
     // The list shows the score and Completed status.
     await expect(row).toContainText("Completed", { timeout: 10000 });

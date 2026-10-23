@@ -52,6 +52,11 @@ class Tenant(BaseModel):
     # NULL → deployment DEFAULT_LOCALE. Per-user User.language overrides it.
     default_locale: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
+    # HRP-1066: the company's country, ISO 3166-1 alpha-2 upper case, one of
+    # ``REGIONS`` (company/schemas.py). It picks regional reference sets
+    # (education levels); data residency is not driven by it. NULL = not set.
+    region: Mapped[str | None] = mapped_column(String(2), nullable=True)
+
     # R4b: Recruitment branding overrides (accent, watermark, palette JSON)
     recruitment_branding: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 

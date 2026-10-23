@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { AlertTriangle } from "lucide-react";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { Badge } from "@/components/ui/badge";
 import { employeeStatusLabel } from "@/components/employees/employee-status";
 import {
@@ -74,7 +75,6 @@ const DIRECTORY_GRID_TEMPLATE =
 
 export interface EmployeeListRowProps {
   employee: EmployeeListItem;
-  href?: string;
   testIdPrefix?: string;
   /**
    * HRP-623: render the HR-only columns (status, hire date). Off for
@@ -87,11 +87,6 @@ export interface EmployeeListRowProps {
 export interface EmployeeListProps {
   employees: EmployeeListItem[];
   testIdPrefix?: string;
-  /**
-   * Forwarded to the underlying row's `href`. Falls back to
-   * `/employees/{id}` when omitted.
-   */
-  rowHref?: (employee: EmployeeListItem) => string;
   /**
    * Hide column headers — used by the legacy non-table renderings that
    * embed rows inside a sheet without their own visual table.
@@ -264,7 +259,6 @@ function EmployeeListHeader({
  */
 export function EmployeeListRow({
   employee,
-  href,
   testIdPrefix = "employee-list-row",
   hrColumns = true,
 }: EmployeeListRowProps) {
@@ -274,7 +268,6 @@ export function EmployeeListRow({
     employee.user_name?.trim() ||
     employee.user_email ||
     employee.id;
-  const link = href ?? `/employees/${employee.id}`;
   const hireDate = formatHireDate(employee.hire_date);
   const divisionHref = employee.division_id
     ? `/company/divisions/${employee.division_id}`
@@ -316,11 +309,13 @@ export function EmployeeListRow({
             <span className="sr-only">{employee.alert.label}</span>
           </span>
         ) : null}
-        <Link
-          href={link}
-          data-testid={`${testIdPrefix}-${employee.id}-name`}
+        {/* HRP-829 REDO: a link only where the card opens. */}
+        <EmployeeName
+          employeeId={employee.id}
+          testId={`${testIdPrefix}-${employee.id}-name`}
           data-shared-testid={`employee-list-row-${employee.id}-link`}
-          className="block truncate text-sm font-medium hover:underline"
+          className="block truncate text-sm font-medium"
+          linkClassName="hover:underline"
         >
           {/* Mirror the canonical link testid via a hidden sibling so the
               naming convention from HRP-175 ("employee-list-row-{id}-link")
@@ -331,7 +326,7 @@ export function EmployeeListRow({
             className="hidden"
           />
           {displayName}
-        </Link>
+        </EmployeeName>
       </div>
       <div className="min-w-0" role="cell">
         <CellText
@@ -428,7 +423,6 @@ export function EmployeeListRow({
 export function EmployeeList({
   employees,
   testIdPrefix = "employee-list-row",
-  rowHref,
   hideHeader = false,
   hrColumns = true,
   className,
@@ -453,7 +447,6 @@ export function EmployeeList({
           <EmployeeListRow
             key={emp.id}
             employee={emp}
-            href={rowHref?.(emp)}
             testIdPrefix={testIdPrefix}
             hrColumns={hrColumns}
           />

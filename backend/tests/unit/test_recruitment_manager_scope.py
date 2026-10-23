@@ -191,9 +191,11 @@ class TestManagerHiringScope:
         )
         assert resp.status_code == 200
 
-    async def test_creator_keeps_a_vacancy_with_no_division(
+    async def test_authorship_alone_no_longer_reaches_a_vacancy(
         self, db: AsyncSession, client: AsyncClient, tenant, hiring
     ):
+        # HRP-830 REDO (QA 14.10): a manager's vacancies are their subtree's,
+        # a hiring manager's those naming them - creating one is not enough.
         orphan = Vacancy(
             tenant_id=tenant.id,
             title=f"Orphan {uuid.uuid4().hex[:4]}",
@@ -206,7 +208,8 @@ class TestManagerHiringScope:
             f"/api/recruitment/vacancies/{orphan.id}",
             headers=_headers(hiring["mgr_user"]),
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 403
+        assert "outside_recruitment_scope" in resp.text
 
     async def test_hiring_manager_is_scoped_like_a_manager(
         self, db: AsyncSession, client: AsyncClient, tenant, hiring

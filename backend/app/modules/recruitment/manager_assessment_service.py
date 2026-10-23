@@ -39,6 +39,7 @@ from app.modules.recruitment import audit_service
 from app.modules.recruitment.common import (
     candidate_display_name,
     ensure_vacancy_unlocked,
+    normalize_competence_id,
 )
 from app.modules.recruitment.manager_assessment_models import (
     AssessmentCompetenceScore,
@@ -764,6 +765,9 @@ async def apply_round_action(
             raise AppError("round_archived_read_only", status.HTTP_409_CONFLICT)
         if rd.status == "complete":
             raise AppError("round_already_complete", status.HTTP_409_CONFLICT)
+        # HRP-1075: the same rule that lights the button (round_completion).
+        if not (await round_completion(db, tenant_id, rd))["can_complete"]:
+            raise AppError("round_not_completable", status.HTTP_409_CONFLICT)
         rd.status = "complete"
         rd.completed_at = datetime.now(UTC)
         if user_id is not None:
@@ -1660,6 +1664,53 @@ async def recompute_manager_score(
     await db.commit()
 
 
+async def round_completion(
+    db: AsyncSession, tenant_id: uuid.UUID, rd: AssessmentRound
+) -> dict[str, Any]:
+    """HRP-1075: may ``Mark as complete`` close the round - one rule for the
+    button (read off :func:`round_aggregate`) and the ``complete`` action.
+
+    At least one profile competence is scored, and every Critical one by at
+    least one counted sheet: an internal evaluator's (a draft too) or a
+    submitted external one. Whose sheet does not matter - the caller's own
+    half-filled sheet never takes the button away from what colleagues
+    already scored. Computed over every sheet, past the HRP-373 anchoring
+    gate: it says which Critical competences nobody scored, never a score.
+    """
+    competences = await list_vacancy_profile_competences(
+        db, tenant_id, await _round_vacancy_id(db, rd)
+    )
+    scored = set(
+        (
+            await db.execute(
+                select(AssessmentCompetenceScore.competence_id)
+                .join(
+                    RecruitmentAssessment,
+                    RecruitmentAssessment.id == AssessmentCompetenceScore.assessment_id,
+                )
+                .where(
+                    RecruitmentAssessment.round_id == rd.id,
+                    RecruitmentAssessment.tenant_id == tenant_id,
+                    AssessmentCompetenceScore.score_value.is_not(None),
+                    _COUNTABLE_SHEET,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    ids = [(normalize_competence_id(c["id"] or c["name"]), c) for c in competences]
+    unscored_critical = [
+        str(cid)
+        for cid, c in ids
+        if c["criticality"] == "critical" and cid not in scored
+    ]
+    return {
+        "can_complete": any(cid in scored for cid, _ in ids) and not unscored_critical,
+        "unscored_critical_ids": unscored_critical,
+    }
+
+
 async def round_aggregate(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1752,6 +1803,7 @@ async def round_aggregate(
         )
     overall = await _round_average(db, rd.id, only_assessment_ids=visible_ids)
     return {
+        **await round_completion(db, tenant_id, rd),
         "round_id": rd.id,
         "average": overall,
         "average_weight": (
@@ -2841,6 +2893,7 @@ __all__ = [
     "submit_assessment",
     "recompute_manager_score",
     "round_aggregate",
+    "round_completion",
     "create_invites",
     "list_manager_invites",
     "revoke_invite",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { MassExam } from "@/lib/types";
@@ -26,6 +26,7 @@ import {
 import { Hint } from "@/components/ui/hint";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { usePermissions } from "@/hooks/use-permissions";
+import { SectionTabs, useSectionTab, useTodoCount } from "@/components/section-tabs";
 import { toast } from "sonner";
 import Link from "next/link";
 import { ChevronRight, MoreHorizontal, PenLine, Plus, Search, X } from "lucide-react";
@@ -65,18 +66,33 @@ interface EmployeeExamRow {
 
 export default function ExamsPage() {
   // HRP-823: which half of the section this is comes from the tenant's
-  // matrix, not from the role list. `manage` runs the mass exams; every
-  // lower level - `none` included, since the page is outside the section
-  // gate - lands on one's own exams, which an assignment e-mail links to
-  // directly.
+  // matrix, not from the role list. `manage` adds the mass exams' tab; every
+  // level - `none` included, since the page is outside the section gate -
+  // gets one's own exams and the ones still to take (QA 13.10), which an
+  // assignment e-mail links to directly.
+  const tTabs = useTranslations("sectionTabs");
   const { canManageSection } = usePermissions();
-  if (canManageSection("exams")) {
-    return <ManagerExamsView />;
+  const manage = canManageSection("exams");
+  const tab = useSectionTab(manage ? ["all", "mine", "todo"] : ["mine", "todo"]);
+  const todo = useTodoCount("/exams/todo-count", tab);
+  const tabs = (
+    <SectionTabs
+      testIdPrefix="exams"
+      active={tab}
+      tabs={[
+        ...(manage ? [{ id: "all", label: tTabs("examsAll") }] : []),
+        { id: "mine", label: tTabs("examsMine") },
+        { id: "todo", label: todo.label },
+      ]}
+    />
+  );
+  if (tab === "all") {
+    return <ManagerExamsView tabs={tabs} />;
   }
-  return <EmployeeExamsView />;
+  return <EmployeeExamsView key={tab} tab={tab} tabs={tabs} onChanged={todo.reload} />;
 }
 
-function ManagerExamsView() {
+function ManagerExamsView({ tabs }: { tabs: ReactNode }) {
   const t = useTranslations("exams");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
@@ -192,6 +208,8 @@ function ManagerExamsView() {
           {t("createExam")}
         </Button>
       </div>
+
+      {tabs}
 
       {/* HRP-227: title search + multi-status filter — parity with Development. */}
       <div className="flex flex-wrap items-center gap-3">
@@ -380,7 +398,15 @@ function ManagerExamsView() {
   );
 }
 
-function EmployeeExamsView() {
+function EmployeeExamsView({
+  tab,
+  tabs,
+  onChanged,
+}: {
+  tab: string;
+  tabs: ReactNode;
+  onChanged: () => void;
+}) {
   const t = useTranslations("exams");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
@@ -400,7 +426,7 @@ function EmployeeExamsView() {
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
     try {
-      const rows = await api.get<EmployeeExamRow[]>("/exams");
+      const rows = await api.get<EmployeeExamRow[]>(`/exams?tab=${tab}`);
       if (seq === loadSeq.current) {
         setExams(rows);
         setLoadError(false);
@@ -413,7 +439,7 @@ function EmployeeExamsView() {
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
-  }, [t]);
+  }, [t, tab]);
 
   useEffect(() => {
     void load();
@@ -434,6 +460,8 @@ function EmployeeExamsView() {
           {t("examsCount", { count: exams.length })}
         </p>
       </div>
+
+      {tabs}
 
       {loadError ? (
         <LoadErrorState
@@ -524,7 +552,10 @@ function EmployeeExamsView() {
         examId={takeExamId}
         open={takeOpen}
         onOpenChange={setTakeOpen}
-        onFinished={() => void load()}
+        onFinished={() => {
+          void load();
+          onChanged();
+        }}
       />
       <ExamReviewSheet
         examId={reviewExamId}

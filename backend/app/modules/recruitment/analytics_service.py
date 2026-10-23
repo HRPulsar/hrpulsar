@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from statistics import median
 
 from fastapi import status
-from sqlalchemy import or_, select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
@@ -264,7 +264,12 @@ def _safe_uuid(value: str) -> uuid.UUID | None:
         return None
 
 
-async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+async def recruitment_summary(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    scope_filter: ColumnElement[bool] | None = None,
+) -> dict:
     """Cross-vacancy view for HR.
 
     * Top vacancies by velocity — fewest avg days from create → first
@@ -274,11 +279,11 @@ async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
       vacancy owner (proxy for "are evaluations consistent?").
     """
 
-    vacancies = (
-        (await db.execute(select(Vacancy).where(Vacancy.tenant_id == tenant_id)))
-        .scalars()
-        .all()
-    )
+    stmt = select(Vacancy).where(Vacancy.tenant_id == tenant_id)
+    if scope_filter is not None:
+        # HRP-830 REDO: a scoped caller's own vacancies (``list_scope_filter``).
+        stmt = stmt.where(scope_filter)
+    vacancies = (await db.execute(stmt)).scalars().all()
     if not vacancies:
         return {
             "top_velocity": [],
@@ -295,6 +300,7 @@ async def recruitment_summary(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
             await db.execute(
                 select(CandidateVacancy).where(
                     CandidateVacancy.tenant_id == tenant_id,
+                    CandidateVacancy.vacancy_id.in_([v.id for v in vacancies]),
                 )
             )
         )

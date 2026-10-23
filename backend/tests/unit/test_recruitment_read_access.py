@@ -158,10 +158,10 @@ AUTH_DEPENDENCIES = frozenset(
     {
         "get_current_user",
         "runs_hiring",
+        "runs_all_hiring",
         "evaluates",
         "runs_rounds",
         "reads_hiring_settings",
-        "reads_round_aggregate",
     }
 )
 
@@ -328,11 +328,12 @@ def _declared_guards(node) -> set[str]:
 # Dependencies a scoped caller gets through (HRP-830): ``view`` on the
 # section (bare ``get_current_user`` behind the gate), and the two roles
 # that keep a piece at ``view`` - ``hiring_manager`` evaluates,
-# ``manager`` runs hiring rounds. ``runs_hiring`` is ``manage``, which sees
-# the whole workspace, and ``require_role("admin"[, "hr"])`` is admin-level:
+# ``manager`` runs hiring rounds. ``runs_hiring`` is ``manage`` and checks
+# every key in its path itself (HRP-830 REDO, ``PATH_SCOPE_KEYS``), and
+# ``require_role("admin"[, "hr"])`` is admin-level:
 # a route only those reach needs no guard - and stating it this way rather
 # than as an allowlist means widening such a route re-arms the check.
-SCOPED_REACH = frozenset({"get_current_user", "evaluates", "runs_rounds", "reads_round_aggregate"})
+SCOPED_REACH = frozenset({"get_current_user", "evaluates", "runs_rounds"})
 
 
 def _reached_by_scoped_callers(node) -> bool:

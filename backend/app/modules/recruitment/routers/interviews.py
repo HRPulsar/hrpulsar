@@ -49,6 +49,7 @@ from app.modules.recruitment.schemas import (
 )
 from app.modules.recruitment.scope import (
     RecruitmentScope,
+    candidate_vacancy_query_scope,
     candidate_vacancy_scope,
     cv_scope,
     interview_scope,
@@ -69,6 +70,9 @@ async def list_interviewers(
     candidate_vacancy_id: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
+    # HRP-830 REDO review: the list minus the fenced users of a candidacy
+    # tells who applied to it, so the candidacy has to be in scope.
+    _query_scope: None = Depends(candidate_vacancy_query_scope),
 ):
     """HRP-386: tenant users offered in the Interviewer(s) multi-select;
     for a candidacy, without those the fence keeps off it (HRP-971)."""
@@ -109,7 +113,7 @@ async def list_cv_interviews(
         db,
         current_user.tenant_id,
         cv_id,
-        role=service.resolve_user_role(current_user, full=scope.unrestricted),
+        role=service.resolve_user_role(current_user, full=scope.full_payload),
         include_archived=include_archived,
     )
 
@@ -126,7 +130,7 @@ async def get_interview(
         db,
         current_user.tenant_id,
         interview_id,
-        role=service.resolve_user_role(current_user, full=scope.unrestricted),
+        role=service.resolve_user_role(current_user, full=scope.full_payload),
     )
 
 
@@ -362,7 +366,7 @@ async def get_interview_media_url(
     scope: RecruitmentScope = Depends(recruitment_scope),
 ):
     """Presigned GET URL for the interview's media file (audio preferred)."""
-    role = service.resolve_user_role(current_user, full=scope.unrestricted)
+    role = service.resolve_user_role(current_user, full=scope.full_payload)
     allow_evaluator = await _tenant_allows_invited_evaluator_playback(
         db, current_user.tenant_id
     )
@@ -372,6 +376,22 @@ async def get_interview_media_url(
         interview_id,
         role=role,
         allow_invited_evaluator_playback=allow_evaluator,
+    )
+
+
+@router.get(
+    "/recruitment/interviews/{interview_id}/media-download-url",
+)
+async def get_interview_media_download_url(
+    interview_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(runs_hiring),
+):
+    """HRP-980: a fresh link that saves the recording under its file name.
+    Whoever runs hiring on the interview's vacancy downloads it; the rest
+    of its readers only play it back."""
+    return await service.get_interview_media_url(
+        db, current_user.tenant_id, interview_id, download=True
     )
 
 
@@ -392,7 +412,7 @@ async def get_interview_file_signed_url(
     same connection without scrambling the existing client.
     """
 
-    role = service.resolve_user_role(current_user, full=scope.unrestricted)
+    role = service.resolve_user_role(current_user, full=scope.full_payload)
     allow_evaluator = await _tenant_allows_invited_evaluator_playback(
         db, current_user.tenant_id
     )

@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import status
 from sqlalchemy import ColumnElement, and_, case, delete, func, or_, select
@@ -565,18 +565,18 @@ async def _auto_assign_manager(
     assessment_id: uuid.UUID,
     employee_id: uuid.UUID,
 ) -> None:
-    """GF6: If the employee belongs to a division with a manager, auto-add as reviewer."""
-    from app.modules.company.models import Division
+    """GF6: add the employee's line manager as the ``manager`` participant.
+
+    HRP-1049: a head of their own division gets the head above them; with
+    nobody assigned up to the root there is no manager participant.
+    """
+    from app.modules.company.line_manager import resolve_line_manager
     from app.modules.employee.models import Employee
 
     emp = await db.get(Employee, employee_id)
-    if not emp or not emp.division_id:
+    if not emp:
         return
-    div = await db.get(Division, emp.division_id)
-    if not div or not div.manager_id or div.manager_id == emp.id:
-        return
-    # Get manager's user_id
-    manager = await db.get(Employee, div.manager_id)
+    manager = await resolve_line_manager(db, emp)
     if not manager:
         return
     # Check not already a participant
@@ -718,7 +718,7 @@ async def create_assessment(
     # Always add the assessed employee as a self-participant
     await _auto_assign_self(db, a.id, data.employee_id)
 
-    # GF6: For 180/360, auto-assign division manager as reviewer
+    # GF6: For 180/360, auto-assign the line manager as reviewer
     if atype.code in ("180", "360"):
         await _auto_assign_manager(db, tenant_id, a.id, data.employee_id)
 
@@ -3562,17 +3562,41 @@ async def list_assessments_grouped(
     search: str | None = None,
     type_codes: list[str] | None = None,
     status_codes: list[str] | None = None,
+    tab: Literal["mine", "todo"] | None = None,
 ) -> tuple[list[dict], int]:
+    """``tab`` (HRP-826, QA 13.10) narrows to the caller's own side of the
+    section, ``participant_user_id`` being the caller: ``mine`` - past
+    Draft, where they take part as Self; ``todo`` - neither Draft, Done nor
+    Cancelled, where they take part in any role and their questionnaire is
+    not completed. A tab lists assessments one by one, mass ones included:
+    the group card would open everyone else's rows in it."""
     from collections import defaultdict
 
     # HRP-113: was a per-function `_apply_scope` closure; same predicate as
     # `list_assessments` so it now lives in `apply_assessment_scope`.
     def _apply_scope(query):
-        return apply_assessment_scope(
+        query = apply_assessment_scope(
             query,
             visible_employee_ids=visible_employee_ids,
             participant_user_id=participant_user_id,
             restrict_to_active=restrict_to_active,
+        )
+        if tab is None:
+            return query
+        mine = select(AssessmentParticipant.assessment_id).where(
+            AssessmentParticipant.user_id == participant_user_id
+        )
+        if tab == "mine":
+            mine = mine.where(AssessmentParticipant.role == "self")
+            closed: tuple[str, ...] = ("draft",)
+        else:
+            mine = mine.where(AssessmentParticipant.is_completed.is_(False))
+            closed = ("draft", "done", "cancelled")
+        return query.where(
+            Assessment.id.in_(mine),
+            Assessment.status_id.in_(
+                select(AssessmentStatus.id).where(AssessmentStatus.code.not_in(closed))
+            ),
         )
 
     is_scoped = visible_employee_ids is not None or restrict_to_active
@@ -3581,7 +3605,7 @@ async def list_assessments_grouped(
     group_result = await db.execute(
         select(AssessmentGroup).where(AssessmentGroup.tenant_id == tenant_id)
     )
-    groups = group_result.scalars().all()
+    groups = group_result.scalars().all() if tab is None else []
     group_ids = [g.id for g in groups]
 
     # Fetch ALL grouped assessments in a single query (avoids N+1)
@@ -3676,8 +3700,10 @@ async def list_assessments_grouped(
             selectinload(Assessment.status),
             selectinload(Assessment.employee),
         )
-        .where(Assessment.tenant_id == tenant_id, Assessment.group_id.is_(None))
+        .where(Assessment.tenant_id == tenant_id)
     )
+    if tab is None:
+        standalone_query = standalone_query.where(Assessment.group_id.is_(None))
     standalone_query = _apply_scope(standalone_query)
     standalone_result = await db.execute(standalone_query)
     standalone = standalone_result.scalars().all()

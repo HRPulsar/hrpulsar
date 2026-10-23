@@ -116,6 +116,9 @@ class UserRead(BaseModel):
     # already loaded there) so the SPA resolves the locale without an extra
     # company-profile request.
     tenant_default_locale: str | None = None
+    # HRP-1066: the company region (ISO 3166-1 alpha-2), here for the same
+    # reason - the employee card picks the education levels by it.
+    tenant_region: str | None = None
     # HRP-637: the tenant's grade-visibility switch, carried here for the
     # same reason as the locale above — the tenant row is already loaded,
     # and the SPA has to know whether the positions catalogue will arrive

@@ -13,6 +13,7 @@ from app.modules.recruitment import (
 from app.modules.recruitment import (
     manager_assessment_service as service,
 )
+from app.modules.recruitment.common import normalize_competence_id
 from app.modules.recruitment.manager_assessment_schemas import (
     CompetenceScoreIn,
     IndicatorScoreIn,
@@ -60,6 +61,26 @@ DEFAULT_PROFILE_COMPETENCES = [
         "indicators": [],
     },
 ]
+
+
+# HRP-1075: completing a round asks for every Critical competence scored.
+CRITICAL_COMPETENCE_ID = normalize_competence_id("communication")
+
+
+async def _score_critical(db: AsyncSession, tenant, user, round_id, level: int = 3):
+    """Score the default profile's Critical competence on the user's own sheet."""
+    sheet = await service.get_or_create_assessment(
+        db, tenant.id, round_id, evaluator_user_id=user.id
+    )
+    await service.set_competence_score(
+        db,
+        tenant.id,
+        user.id,
+        sheet.id,
+        CRITICAL_COMPETENCE_ID,
+        CompetenceScoreIn(score_value=level),
+    )
+    return sheet
 
 
 async def _make_profile(
@@ -721,6 +742,7 @@ class TestIndicators:
 class TestAggregation:
     async def test_last_complete_round_wins(self, db: AsyncSession, tenant, user):
         vacancy = await _make_vacancy(db, tenant)
+        await _make_profile(db, tenant, vacancy)
         cv = await _make_candidate_vacancy(db, tenant, vacancy)
         scale = await service.create_scale(db, tenant.id, user.id, _scale_payload())
         await service.set_vacancy_scale(
@@ -738,7 +760,7 @@ class TestAggregation:
             tenant.id,
             user.id,
             a1.id,
-            uuid.uuid4(),
+            CRITICAL_COMPETENCE_ID,
             CompetenceScoreIn(score_value=4),
         )
         await service.update_round_status(
@@ -756,7 +778,7 @@ class TestAggregation:
             tenant.id,
             user.id,
             a2.id,
-            uuid.uuid4(),
+            CRITICAL_COMPETENCE_ID,
             CompetenceScoreIn(score_value=2),
         )
         await service.update_round_status(

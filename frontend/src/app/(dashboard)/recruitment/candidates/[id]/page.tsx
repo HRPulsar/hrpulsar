@@ -180,12 +180,13 @@ export default function CandidateDetailPage() {
     [card?.vacancy_applications, hasResume, t],
   );
 
-  // Mirrors backend resolve_user_role: whoever sees all of hiring
-  // (admin-level or `manage`, HRP-830) reads the full payload before the
-  // hiring_manager slice (see recruitment/common.py).
+  // Mirrors backend resolve_user_role: whoever sees all of hiring or runs
+  // it (`RecruitmentScope.full_payload`, HRP-830) reads the full payload
+  // before the hiring_manager slice (see recruitment/common.py).
   const { canManageSection, seesAllHiring } = usePermissions();
   const isHiringManager =
-    (user?.roles ?? []).includes("hiring_manager") && !seesAllHiring;
+    (user?.roles ?? []).includes("hiring_manager") &&
+    !(seesAllHiring || canManageSection("recruitment"));
 
   useEffect(() => {
     // Only hiring managers can be affected by the flag — skip the round

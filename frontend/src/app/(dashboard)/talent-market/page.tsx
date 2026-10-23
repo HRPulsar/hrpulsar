@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { flattenTree } from "@/lib/utils";
@@ -27,6 +27,7 @@ import { Hint } from "@/components/ui/hint";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { usePermissions } from "@/hooks/use-permissions";
+import { SectionTabs, useSectionTab } from "@/components/section-tabs";
 import { toast } from "sonner";
 import Link from "next/link";
 import { ChevronRight, MoreHorizontal, Plus, Search, Send, Trash2, X } from "lucide-react";
@@ -169,6 +170,32 @@ const emptyForm = {
 };
 
 export default function TalentMarketPage() {
+  // HRP-824 (QA 13.10): `manage` adds the board's own tab; every level gets
+  // the cards one's own name is on and the ones one is appointed on.
+  const tTabs = useTranslations("sectionTabs");
+  const { canManageSection } = usePermissions();
+  const manage = canManageSection("talent-market");
+  const tab = useSectionTab(manage ? ["all", "mine", "appointed"] : ["mine", "appointed"]);
+  return (
+    <TalentMarketList
+      key={tab}
+      tab={tab}
+      tabs={
+        <SectionTabs
+          testIdPrefix="talent-market"
+          active={tab}
+          tabs={[
+            ...(manage ? [{ id: "all", label: tTabs("talentMarketAll") }] : []),
+            { id: "mine", label: tTabs("talentMarketMine") },
+            { id: "appointed", label: tTabs("talentMarketAppointed") },
+          ]}
+        />
+      }
+    />
+  );
+}
+
+function TalentMarketList({ tab, tabs }: { tab: string; tabs: ReactNode }) {
   const t = useTranslations("talentMarket");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
@@ -216,7 +243,10 @@ export default function TalentMarketPage() {
   async function load() {
     try {
       const [searchData, divData, scopeData] = await Promise.all([
-        api.post<{ items: TalentCard[]; total: number }>("/talent-market/search", { limit: 50 }),
+        api.post<{ items: TalentCard[]; total: number }>(
+          tab === "all" ? "/talent-market/search" : `/talent-market/search?tab=${tab}`,
+          { limit: 50 },
+        ),
         api.get<Division[]>("/divisions"),
         api.get<{ id: string }[]>("/divisions/scope"),
       ]);
@@ -232,6 +262,9 @@ export default function TalentMarketPage() {
     }
   }
 
+  // Mount only: the list is keyed by its tab (HRP-823…826), so `tab` never
+  // changes under a mounted `load`.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
 
   const flatDivisions = flattenTree(divisions);
@@ -419,6 +452,8 @@ export default function TalentMarketPage() {
           </Button>
         )}
       </div>
+
+      {tabs}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-48">

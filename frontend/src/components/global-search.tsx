@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import type { AssessmentList, CandidateList, EmployeeList, VacancyList } from "@/lib/types";
 import {
@@ -37,6 +38,10 @@ export function GlobalSearch() {
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // HRP-829 REDO: every employee result opens a card, and with the section
+  // closed no card opens - so no employee results at all. At view / manage
+  // every row the list answers is a card the caller may open.
+  const searchEmployees = usePermissions().canViewSection("employees");
   // A slow answer to an earlier query must not overwrite a newer one.
   const latestRef = useRef(0);
 
@@ -56,7 +61,9 @@ export function GlobalSearch() {
       // colleagues outside their subtree, as on the Employees page.
       const term = `q=${encodeURIComponent(q)}&limit=${PER_TYPE}`;
       const [empData, asmtData, vacData, candData] = await Promise.all([
-        api.get<EmployeeList>(`/employees?${term}&tenant_wide=true`),
+        searchEmployees
+          ? api.get<EmployeeList>(`/employees?${term}&tenant_wide=true`)
+          : Promise.resolve<Pick<EmployeeList, "items">>({ items: [] }),
         api.get<AssessmentList>(`/assessments?${term}`).catch(() => ({ items: [] })),
         api.get<VacancyList>(`/recruitment/vacancies?${term}`).catch(() => ({ items: [] })),
         api.get<CandidateList>(`/recruitment/candidates?${term}`).catch(() => ({ items: [] })),
@@ -108,7 +115,7 @@ export function GlobalSearch() {
     } finally {
       if (request === latestRef.current) setLoading(false);
     }
-  }, [t, tRef, tRec]);
+  }, [t, tRef, tRec, searchEmployees]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);

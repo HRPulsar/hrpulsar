@@ -70,8 +70,10 @@ interface ImportRow {
   email: string | null;
   existing_candidate_id: string | null;
   existing_candidate_full_name: string | null;
-  // "create" → new candidate, "link" → attach existing one to vacancy
-  action: "create" | "link";
+  // "create" → new candidate, "link" → attach existing one to vacancy,
+  // "skip" → a duplicate outside the caller's scope (HRP-830 REDO): not
+  // imported, a recruiter or HR attaches that person.
+  action: "create" | "link" | "skip";
 }
 
 const POLL_INTERVAL_MS = 2500;
@@ -268,7 +270,11 @@ function UploadTab({ vacancyId, onDone, onCancel }: UploadTabProps) {
               existing_candidate_id: dup?.existing_candidate_id ?? null,
               existing_candidate_full_name:
                 dup?.existing_candidate_full_name ?? null,
-              action: dup?.existing_candidate_id ? "link" : "create",
+              action: dup?.duplicate_elsewhere
+                ? "skip"
+                : dup?.existing_candidate_id
+                  ? "link"
+                  : "create",
             };
           });
         setImportRows(rows);
@@ -340,12 +346,13 @@ function UploadTab({ vacancyId, onDone, onCancel }: UploadTabProps) {
   );
 
   const startImport = useCallback(async () => {
-    if (importRows.length === 0) {
+    const toImport = importRows.filter((r) => r.action !== "skip");
+    if (toImport.length === 0) {
       onDone();
       return;
     }
     setImporting(true);
-    const payload: BatchFinalizeFile[] = importRows.map((r) => ({
+    const payload: BatchFinalizeFile[] = toImport.map((r) => ({
       file_id: r.file_id,
       link_candidate_id:
         r.action === "link" && r.existing_candidate_id
@@ -675,7 +682,7 @@ function SummaryStep({
                   {r.email || t("addCandidateNoEmailParsed")}
                 </p>
               </div>
-              {r.existing_candidate_id && (
+              {(r.existing_candidate_id || r.action === "skip") && (
                 <span
                   className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800"
                   data-testid={`vacancy-candidate-duplicate-warning-${r.file_id}`}
@@ -684,6 +691,14 @@ function SummaryStep({
                 </span>
               )}
             </div>
+            {r.action === "skip" && (
+              <p
+                className="mt-2 text-xs text-muted-foreground"
+                data-testid={`vacancy-candidate-duplicate-elsewhere-${r.file_id}`}
+              >
+                {t("addCandidateDuplicateElsewhere")}
+              </p>
+            )}
             {r.existing_candidate_id && (
               <div className="mt-2 flex flex-col gap-1 text-xs">
                 <label className="flex items-center gap-2">

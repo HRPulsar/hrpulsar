@@ -220,8 +220,9 @@ export async function uploadInterviewMedia(
       {
         upload_id: init.upload_id,
         parts,
-        // Text transcripts skip the chain — there is nothing to transcribe.
-        auto_process: autoProcess && kind !== "text_transcript",
+        // HRP-1031: a text transcript skips only the transcribe hop of the
+        // chain; with the box ticked the backend still runs the analysis.
+        auto_process: autoProcess,
       },
     );
   } catch (err) {
@@ -234,4 +235,41 @@ export async function uploadInterviewMedia(
     }
     throw err;
   }
+}
+
+/** What the media block of the interview page shows (HRP-1085). */
+export type InterviewMediaBlock =
+  | "upload" // nothing yet: the upload zone and "Paste text"
+  | "transcript" // a transcript is in: pasted text, or a pdf/txt still linking
+  | "loading" // a recording whose link is on its way
+  | "unavailable" // the link could not be issued
+  | "media"; // the player, or the transcript file viewer
+
+/**
+ * HRP-1085: pasted text is a transcript like an uploaded pdf/txt, only
+ * without a file, so it ends the upload stage too (and locks the Type).
+ * A transcript never waits on "Fetching recording link…": the text is
+ * already on the page, the file link only adds the viewer.
+ */
+export function interviewMediaBlock(
+  interview: Pick<
+    Interview,
+    | "type"
+    | "audio_file_id"
+    | "video_file_id"
+    | "transcript_file_id"
+    | "transcription_status"
+  >,
+  hasMediaLink: boolean,
+  mediaLinkFailed: boolean,
+): InterviewMediaBlock {
+  const recording = Boolean(interview.audio_file_id || interview.video_file_id);
+  const pasted =
+    interview.type === "text_transcript" &&
+    !interview.transcript_file_id &&
+    interview.transcription_status === "completed";
+  if (!recording && !interview.transcript_file_id && !pasted) return "upload";
+  if (!recording && (pasted || !hasMediaLink)) return "transcript";
+  if (hasMediaLink) return "media";
+  return mediaLinkFailed ? "unavailable" : "loading";
 }

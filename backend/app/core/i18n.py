@@ -58,6 +58,18 @@ def _lookup(catalog: dict, dotted_key: str) -> str | None:
     return node if isinstance(node, str) else None
 
 
+def catalog_list(key: str, locale: str) -> list[str]:
+    """A catalog array - a word list, not a message - for ``locale`` only.
+
+    No en fallback: callers union the lists of several languages. A locale
+    whose catalog is absent (ru on a community build) gives ``[]``.
+    """
+    node: object = _load_catalog(locale)
+    for part in key.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+    return [v for v in node if isinstance(v, str)] if isinstance(node, list) else []
+
+
 def translate(key: str, locale: str, /, **params: object) -> str:
     """Catalog lookup with graceful degradation: locale → en → the key.
 

@@ -31,19 +31,16 @@ describe("recruitment follows the section level (HRP-830)", () => {
     expect(permissions).toMatch(
       /canRunHiringRounds:\s*sections\.recruitment === "manage" \|\|\s*\(isManager && Boolean\(sections\.recruitment\)\)/,
     );
-    // An unrestricted RecruitmentScope.
-    expect(permissions).toContain(
-      'seesAllHiring: holdsAdminLevel(roles) || sections.recruitment === "manage",',
-    );
+    // An unrestricted RecruitmentScope (UNRESTRICTED_ROLE_CODES, HRP-830 REDO).
+    expect(permissions).toContain("seesAllHiring: holdsAdminLevel(roles) || isRecruiter,");
     // The role list the sidebar and the layout used is gone - the matrix
     // opens the section.
     expect(permissions).not.toContain("canRecruit");
   });
 
   it("runs hiring at manage, not by the admin/manager flag", () => {
-    for (const page of [requisitions, candidates]) {
-      expect(page).toContain('const canManage = usePermissions().canManageSection("recruitment");');
-    }
+    expect(requisitions).toContain('const canManage = usePermissions().canManageSection("recruitment");');
+    expect(candidates).toContain('const canManage = canManageSection("recruitment");');
     expect(vacancyPage).toMatch(/const canEdit =\s*canManageSection\("recruitment"\) &&/);
     expect(vacancyPage).toMatch(/\{canManageSection\("recruitment"\) && \(\s*<VacancyActionsMenu/);
     expect(table).toContain("canRemove={canManage}");
@@ -60,14 +57,16 @@ describe("recruitment follows the section level (HRP-830)", () => {
     expect(questionSets).toContain('const canEvaluate = canExport && canManageSection("recruitment");');
     expect(canvas).toContain("const canScore = Boolean(inviteToken) || canEvaluateCandidates;");
     // HRP-836: the vacancy's status freezes its rounds on top of the role.
-    expect(rounds).toContain("const { canRunHiringRounds } = usePermissions();");
+    expect(rounds).toContain(
+      "const canManageRounds = canManageRecruitment && !activeVacancy?.read_only;",
+    );
     // HRP-630: one's own sheet is filled in at any level; the rest of the
     // round is `manage`'s (HRP-629).
     expect(rounds).toContain("const canFillSheet = !activeVacancy?.read_only;");
     expect(rounds).toContain("disabled={roundClosed || !canFillSheet}");
     // Mirrors resolve_user_role: the full payload wins before the slice.
     expect(candidatePage).toContain(
-      '(user?.roles ?? []).includes("hiring_manager") && !seesAllHiring;',
+      '!(seesAllHiring || canManageSection("recruitment"));',
     );
   });
 

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
   ChevronsLeft,
   ChevronsRight,
+  Download,
   Maximize,
   Pause,
   Play,
@@ -16,6 +17,12 @@ interface InterviewPlayerProps {
   kind: "audio" | "video";
   onTime?: (sec: number) => void;
   refSetter?: (el: HTMLMediaElement | null) => void;
+  /** HRP-980: shown only to whoever may download the recording. */
+  onDownload?: () => void;
+  /** HRP-980: the playback link expires after 5 minutes. Called when the
+   * player can no longer load from it, to hand in a fresh `src`; playback
+   * picks up where it stopped. */
+  onExpired?: () => void;
 }
 
 const SPEED_STEPS = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
@@ -29,12 +36,17 @@ export function InterviewPlayer({
   kind,
   onTime,
   refSetter,
+  onDownload,
+  onExpired,
 }: InterviewPlayerProps) {
   const t = useTranslations("recruitment");
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [speed, setSpeed] = useState(1);
   const [playing, setPlaying] = useState(false);
+  // Where to pick up once a fresh link replaces an expired one.
+  const resumeAt = useRef<{ time: number; play: boolean } | null>(null);
+  const lastRenewal = useRef(0);
 
   useEffect(() => {
     if (mediaRef.current) mediaRef.current.playbackRate = speed;
@@ -103,6 +115,10 @@ export function InterviewPlayer({
         }}
         src={src}
         controls
+        // HRP-980: the browser's own Save reuses the 5-minute playback
+        // link, and an expired one downloads S3's XML error. Downloads go
+        // through the Download button, which signs a fresh link.
+        controlsList="nodownload"
         className={
           kind === "video"
             ? "h-[360px] w-full rounded-md bg-black"
@@ -110,6 +126,23 @@ export function InterviewPlayer({
         }
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
+        onError={() => {
+          const el = mediaRef.current;
+          // One renewal per 10 s: a file that is really gone must not loop.
+          if (!el || !onExpired || Date.now() - lastRenewal.current < 10_000)
+            return;
+          lastRenewal.current = Date.now();
+          resumeAt.current = { time: el.currentTime, play: !el.paused };
+          onExpired();
+        }}
+        onLoadedMetadata={() => {
+          const el = mediaRef.current;
+          const resume = resumeAt.current;
+          if (!el || !resume) return;
+          resumeAt.current = null;
+          el.currentTime = resume.time;
+          if (resume.play) void el.play().catch(() => undefined);
+        }}
         onTimeUpdate={(e) =>
           onTime?.((e.target as HTMLMediaElement).currentTime)
         }
@@ -171,6 +204,18 @@ export function InterviewPlayer({
             aria-label={t("playerFullscreenAria")}
           >
             <Maximize className="size-3.5" />
+          </Button>
+        )}
+        {onDownload && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto"
+            onClick={onDownload}
+            data-testid="recruitment-interview-player-download"
+          >
+            <Download className="size-3.5" />
+            {t("playerDownload")}
           </Button>
         )}
       </div>

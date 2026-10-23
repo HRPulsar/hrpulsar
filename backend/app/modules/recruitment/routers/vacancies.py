@@ -17,6 +17,7 @@ from fastapi.responses import Response
 from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user, require_role
@@ -24,6 +25,7 @@ from app.modules.auth.models import User
 from app.modules.recruitment import (
     service,
 )
+from app.modules.recruitment.models import Vacancy
 from app.modules.recruitment.routers.common import (
     resolve_page_params,
     runs_hiring,
@@ -49,7 +51,12 @@ from app.modules.recruitment.schemas import (
     VacancyUpdate,
 )
 from app.modules.recruitment.scope import (
+    RecruitmentScope,
+    assert_vacancy_placement,
+    candidate_reachable,
+    hidden_duplicate,
     list_scope_filter,
+    recruitment_scope,
     vacancy_query_scope,
     vacancy_scope,
 )
@@ -65,9 +72,40 @@ async def create_vacancy(
     data: VacancyCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
+    # HRP-830 REDO: a scoped caller places it inside their scope.
+    await assert_vacancy_placement(
+        db, current_user, scope, data.division_id, data.hiring_manager_id
+    )
     return await service.create_vacancy(
         db, current_user.tenant_id, current_user.id, data
+    )
+
+
+async def _assert_placement_kept(
+    db: AsyncSession,
+    current_user: User,
+    scope: RecruitmentScope,
+    vacancy_id: uuid.UUID,
+    data: VacancyUpdate,
+) -> None:
+    """HRP-830 REDO: an edit that re-homes the vacancy keeps it in scope."""
+    sent = data.model_fields_set & {"division_id", "hiring_manager_id"}
+    if scope.unrestricted or not sent:
+        return
+    current = await db.get(Vacancy, vacancy_id)
+    if current is None:
+        return  # the update answers 404
+    await assert_vacancy_placement(
+        db,
+        current_user,
+        scope,
+        data.division_id if "division_id" in sent else current.division_id,
+        data.hiring_manager_id
+        if "hiring_manager_id" in sent
+        else current.hiring_manager_id,
+        vacancy_id=vacancy_id,
     )
 
 
@@ -118,9 +156,15 @@ async def list_vacancies(
 async def list_hiring_managers(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
     """HRP-360: admin-tier users for the vacancy Hiring manager picker."""
-    return await service.list_hiring_manager_options(db, current_user.tenant_id)
+    options = await service.list_hiring_manager_options(db, current_user.tenant_id)
+    # HRP-830 REDO: with no division of their own, a scoped caller keeps a
+    # vacancy in scope by being its hiring manager - the picker offers them.
+    if not scope.unrestricted and not scope.division_ids:
+        options = [o for o in options if o["id"] == current_user.id]
+    return options
 
 
 @router.get("/recruitment/vacancies/{vacancy_id}", response_model=VacancyRead)
@@ -144,8 +188,10 @@ async def update_vacancy(
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
     if_match = request.headers.get("if-match")
+    await _assert_placement_kept(db, current_user, scope, vacancy_id, data)
     vacancy = await service.update_vacancy(
         db, current_user.tenant_id, vacancy_id, data, if_match=if_match
     )
@@ -161,6 +207,7 @@ async def patch_vacancy(
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
     """PATCH variant — same semantics as PUT but requires ``If-Match`` (HRP-177).
 
@@ -178,6 +225,7 @@ async def patch_vacancy(
             "vacancy_if_match_required",
             http_status.HTTP_428_PRECONDITION_REQUIRED,
         )
+    await _assert_placement_kept(db, current_user, scope, vacancy_id, data)
     vacancy = await service.update_vacancy(
         db, current_user.tenant_id, vacancy_id, data, if_match=if_match
     )
@@ -438,6 +486,7 @@ async def add_internal_candidate_to_vacancy(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
     _scope: None = Depends(vacancy_scope),
+    scope: RecruitmentScope = Depends(recruitment_scope),
 ):
     """HRP-711: promote someone off the internal shortlist into the pipeline.
 
@@ -445,9 +494,26 @@ async def add_internal_candidate_to_vacancy(
     pipeline is not — the same pair of roles that may add a candidate by
     hand, because that is what this is.
     """
-    return await service.add_internal_candidate_to_vacancy(
-        db, current_user.tenant_id, current_user.id, vacancy_id, employee_id
-    )
+
+    # HRP-830 REDO review: the employee's existing candidate row is reused
+    # only within the caller's reach, and a 409 naming one outside it loses
+    # the id - a recruiter or HR attaches that person.
+    async def reachable(candidate_id: uuid.UUID) -> bool:
+        return await candidate_reachable(db, current_user, scope, candidate_id)
+
+    try:
+        return await service.add_internal_candidate_to_vacancy(
+            db,
+            current_user.tenant_id,
+            current_user.id,
+            vacancy_id,
+            employee_id,
+            may_reuse=None if scope.unrestricted else reachable,
+        )
+    except AppError as exc:
+        if (hidden := await hidden_duplicate(db, current_user, scope, exc)) is not None:
+            raise hidden from exc
+        raise
 
 
 @router.post(

@@ -173,7 +173,13 @@ export default function SectionAccessPage() {
                           </span>
                         </td>
                         {data.roles.map((role) => {
-                          const locked = section.admin_locked && role === "admin";
+                          const adminLocked = section.admin_locked && role === "admin";
+                          // HRP-831: the levels above the role's ceiling are
+                          // locked; a ceiling of `none` locks the whole cell,
+                          // like the admin floor does.
+                          const ceiling = section.ceilings[role];
+                          const ceilingRank = LEVELS.indexOf(ceiling ?? "manage");
+                          const locked = adminLocked || ceilingRank === 0;
                           const roleLabel = tSidebar(SYSTEM_ROLE_KEYS[role] ?? role);
                           const floor =
                             role === BASELINE_ROLE
@@ -202,12 +208,27 @@ export default function SectionAccessPage() {
                                   data-testid={`section-access-select-${section.code}-${role}`}
                                 >
                                   {LEVELS.map((level, rank) => (
-                                    <option key={level} value={level} disabled={rank < floor}>
+                                    <option
+                                      key={level}
+                                      value={level}
+                                      disabled={rank < floor || rank > ceilingRank}
+                                    >
                                       {t(LEVEL_KEYS[level])}
                                     </option>
                                   ))}
                                 </select>
-                                {locked && <Hint text={t("sectionAccessLockedAdmin")} />}
+                                {adminLocked && <Hint text={t("sectionAccessLockedAdmin")} />}
+                                {ceiling && (
+                                  <Hint
+                                    text={t(
+                                      ceiling === "none"
+                                        ? "sectionAccessRoleCeilingNone"
+                                        : "sectionAccessRoleCeilingView",
+                                      { role: roleLabel },
+                                    )}
+                                    data-testid={`section-access-ceiling-${section.code}-${role}`}
+                                  />
+                                )}
                                 {belowFloor && !section.hidden && (
                                   <Hint
                                     text={t("sectionAccessBelowEmployee", {

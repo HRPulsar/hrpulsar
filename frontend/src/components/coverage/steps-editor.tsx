@@ -10,7 +10,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Check, GripVertical, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { Check, ChevronRight, GripVertical, Plus, Sparkles, Trash2, X } from "lucide-react";
 import {
   DndContext,
   type DragEndEvent,
@@ -498,7 +498,14 @@ function StepRow({ step, index, canEdit, primitives, labelOf, t, onChange, onDel
               little of the answer. Folded away behind a native disclosure -
               open it when a number or an owner is actually wrong. */}
           <details className="group" data-testid={`${testId}-details`}>
-            <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">
+            {/* HRP-904: the chevron says the line opens, as on the other
+                disclosures of the product. */}
+            <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <ChevronRight
+                aria-hidden="true"
+                className="size-3.5 shrink-0 transition-transform group-open:rotate-90"
+                data-testid={`${testId}-details-chevron`}
+              />
               {t("stepDetails")}
             </summary>
             <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">

@@ -10,6 +10,7 @@ assignment the e-mail already linked to.
 """
 
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, UploadFile
 from fastapi import status as http_status
@@ -333,12 +334,41 @@ async def _personal_scope(
     return {own.id} if own else set()
 
 
+# HRP-823 (QA 13.10): the two tabs every level opens on /exams - "My
+# exams" (one's own, once the mass exam left Draft) and "To do" (one's own
+# still assigned or in progress). Both answer for the caller's own employee
+# row whatever their level or read scope, so a division head sees only
+# their own there, not their subtree's.
+ExamTab = Literal["mine", "todo"]
+
+
+async def _own_exams(db: AsyncSession, current_user: User, tab: ExamTab) -> list[dict]:
+    own = await get_current_employee(db, current_user)
+    if own is None:
+        return []
+    return await service.list_my_exams(
+        db, current_user.tenant_id, employee_id=own.id, todo_only=tab == "todo"
+    )
+
+
+@router.get("/exams/todo-count")
+async def count_my_exams_to_do(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, int]:
+    """The N of the "To do (N)" tab (HRP-823)."""
+    return {"count": len(await _own_exams(db, current_user, "todo"))}
+
+
 @router.get("/exams", response_model=list[ExamRead])
 async def list_my_exams(
     employee_id: uuid.UUID | None = None,
+    tab: ExamTab | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if tab is not None:
+        return await _own_exams(db, current_user, tab)
     visible_ids = await _personal_scope(db, current_user)
     if (
         employee_id is not None

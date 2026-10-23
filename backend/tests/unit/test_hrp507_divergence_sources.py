@@ -24,7 +24,7 @@ Legacy ``HumanAssessment`` cells are still entered against the tenant
 from __future__ import annotations
 
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime
 
 import pytest
 from app.modules.recruitment import (
@@ -32,6 +32,7 @@ from app.modules.recruitment import (
     service,
     settings_service,
 )
+from app.modules.recruitment.manager_assessment_models import AssessmentRound
 from app.modules.recruitment.manager_assessment_schemas import (
     CompetenceScoreIn,
     RoundCreate,
@@ -342,9 +343,12 @@ class TestManagerSideReachesTheMatrix:
         first = await manager_assessment_service.create_round(
             db, tenant.id, user.id, cv_id, RoundCreate(type="pre_interview")
         )
-        await manager_assessment_service.update_round_status(
-            db, tenant.id, user.id, uuid.UUID(str(first["id"])), "complete"
-        )
+        # A round closed empty - only possible before HRP-1075 made the
+        # ``complete`` action ask for scores, so it is set on the row.
+        first_round = await db.get(AssessmentRound, uuid.UUID(str(first["id"])))
+        first_round.status = "complete"
+        first_round.completed_at = datetime.now(UTC)
+        await db.commit()
         # A later round that is still open does carry scores.
         await _score_via_round(db, tenant, user, cv_id, {"python-skills": 4})
 

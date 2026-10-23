@@ -12,6 +12,7 @@ import {
   Loader2,
   Sparkles,
 } from "lucide-react";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { LoadErrorState } from "@/components/load-error-state";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
@@ -533,8 +534,9 @@ function SeverityIcon({ severity }: { severity: DevLoopFinding["severity"] }) {
 }
 
 // HRP-638: the names are the shortest path to the person — the payload has
-// carried their ids all along, so each one links straight to the card and
-// the "+N more" tail opens the same filtered list the CTA does.
+// carried their ids all along, so each one links straight to the card
+// (HRP-829 REDO: where the card opens) and the "+N more" tail opens the same
+// filtered list the CTA does.
 function FindingSubline({
   finding,
   t,
@@ -549,13 +551,13 @@ function FindingSubline({
       {finding.employees.map((employee, index) => (
         <Fragment key={employee.id}>
           {index > 0 && ", "}
-          <Link
-            href={`/employees/${employee.id}`}
-            className="hover:text-foreground hover:underline"
-            data-testid={`dashboard-action-${finding.code}-employee`}
+          <EmployeeName
+            employeeId={employee.id}
+            linkClassName="hover:text-foreground hover:underline"
+            testId={`dashboard-action-${finding.code}-employee`}
           >
             {employee.name}
-          </Link>
+          </EmployeeName>
         </Fragment>
       ))}
       {rest > 0 && (
@@ -1023,6 +1025,7 @@ function MyDashboard({
   onDaysChange: (days: number) => void;
 }) {
   const t = useTranslations("dashboard");
+  const { canViewSection } = usePermissions();
   // HRP-624: reuses the header menu's label rather than minting a second key
   // for the same words.
   const tNav = useTranslations("sidebar");
@@ -1039,16 +1042,19 @@ function MyDashboard({
         testidPrefix="dashboard-my-stage"
         actions={<DynamicsPeriod days={days} onChange={onDaysChange} />}
       />
-      <div className="flex justify-end">
-        <Button
-          size="sm"
-          variant="outline"
-          render={<Link href="/employees/me" />}
-          data-testid="dashboard-link-my-profile"
-        >
-          {tNav("myProfile")}
-        </Button>
-      </div>
+      {/* HRP-829 REDO: no own card to open with the section closed. */}
+      {canViewSection("employees") && (
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant="outline"
+            render={<Link href="/employees/me" />}
+            data-testid="dashboard-link-my-profile"
+          >
+            {tNav("myProfile")}
+          </Button>
+        </div>
+      )}
       <MyActionQueue findings={loop.findings} dataVersion={loop.data_version} />
       <div className="grid gap-4 lg:grid-cols-2">
         <StrengthsCard strengths={loop.strengths} />

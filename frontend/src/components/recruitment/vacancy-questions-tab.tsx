@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BADGE_OUTLINE } from "@/lib/badge-tones";
 import { FileQuestion } from "lucide-react";
+import { questionSetName } from "@/components/recruitment/question-set-name";
 
 // HRP-504: the tab used to fan out one request per candidate against the
 // legacy candidate_questions table, which nothing has written since the
@@ -204,7 +205,7 @@ export function VacancyQuestionsTab({ vacancyId }: VacancyQuestionsTabProps) {
                     </span>
                     {c.question_set && (
                       <span className="text-xs text-muted-foreground">
-                        {c.question_set.name}
+                        {questionSetName(t, c.question_set.name)}
                       </span>
                     )}
                   </div>

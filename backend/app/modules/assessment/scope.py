@@ -247,8 +247,9 @@ async def pdp_status_scope(
     The status route is the one place a plan is legitimately driven by
     somebody outside the assessee's division: ``PDP.reviewer_id`` may
     point at any user, and the review step is exactly what they were
-    named for. The implicit reviewer — the assessee's division manager —
-    passes the subtree check anyway.
+    named for. The implicit reviewer — the assessee's line manager, the
+    head of their division or of one above it — passes the subtree check
+    anyway.
     """
     if visible is None:
         return

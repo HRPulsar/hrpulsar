@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { RequireSection } from "@/components/require-section";
 import { ApiError, api } from "@/lib/api";
@@ -1197,16 +1198,11 @@ function ExamDetailPage() {
                       <TableRow key={r.id}>
                         <TableCell className="text-sm">
                           <div className="flex flex-col gap-0.5">
-                            {r.can_view_profile ? (
-                              <Link
-                                href={`/employees/${r.employee_id}`}
-                                className="hover:underline"
-                              >
-                                {display}
-                              </Link>
-                            ) : (
-                              <span>{display}</span>
-                            )}
+                            {/* HRP-829 REDO: the card rule, not the HR
+                                read scope of `can_view_profile`. */}
+                            <EmployeeName employeeId={r.employee_id} linkClassName="hover:underline">
+                              {display}
+                            </EmployeeName>
                             {/* HRP-333: position + non-active status chip
                                 under the name (shared EmployeeSummaryLine). */}
                             <EmployeeSummaryLine

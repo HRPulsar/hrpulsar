@@ -909,11 +909,27 @@ async def enqueue_bulk_resume_only(
 
     if not candidate_vacancy_ids:
         raise AppError("no_candidates_selected", status.HTTP_400_BAD_REQUEST)
+    # HRP-830 REDO: only this vacancy's applications - the route's scope
+    # guard answers for the vacancy, not for ids in the body.
+    on_vacancy = set(
+        (
+            await db.execute(
+                select(CandidateVacancy.id).where(
+                    CandidateVacancy.vacancy_id == vacancy_id,
+                    CandidateVacancy.id.in_(candidate_vacancy_ids),
+                )
+            )
+        ).scalars()
+    )
 
     queued: list[dict] = []
     failed: list[dict] = []
     for cv_id in candidate_vacancy_ids:
         try:
+            if cv_id not in on_vacancy:
+                raise AppError(
+                    "candidate_vacancy_link_not_found", status.HTTP_404_NOT_FOUND
+                )
             # Call the unbilled inner worker — the bulk wrapper has
             # already debited N × 20 cr at the ``ee/billing.py`` layer.
             # Going through the wrapped public ``enqueue_resume_only_analysis``

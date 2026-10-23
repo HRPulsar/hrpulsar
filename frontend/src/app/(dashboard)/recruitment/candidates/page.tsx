@@ -54,7 +54,8 @@ export default function CandidateListPage() {
   // HRP-830: creating and the row actions are `manage` on recruitment -
   // `canManage` (admin/manager) showed them to a manager who got 403 and
   // hid them from the recruiter who runs hiring.
-  const canManage = usePermissions().canManageSection("recruitment");
+  const { canManageSection, seesAllHiring } = usePermissions();
+  const canManage = canManageSection("recruitment");
 
   const loadCandidates = useCallback(async () => {
     try {
@@ -128,10 +129,18 @@ export default function CandidateListPage() {
           </p>
         </div>
         {canManage && (
-          <div className="flex items-center gap-2">
+          // HRP-830 REDO: a candidate on no vacancy is outside a manager's
+          // or hiring manager's scope - they add candidates from their
+          // vacancy. Disabled buttons swallow hover, so the reason rides
+          // on the wrapper.
+          <div
+            className="flex items-center gap-2"
+            title={seesAllHiring ? undefined : t("candidateAddFromVacancyHint")}
+          >
             <Button
               size="sm"
               data-testid="recruitment-btn-add-candidate"
+              disabled={!seesAllHiring}
               onClick={() => router.push("/recruitment/candidates/new")}
             >
               <UserPlus className="mr-1 h-4 w-4" />
@@ -196,7 +205,11 @@ export default function CandidateListPage() {
             {hasFilters ? t("candidatesEmptyFiltered") : t("candidatesEmpty")}
           </p>
           {!hasFilters && canManage && (
-            <p className="mt-1 text-xs">{t("candidatesEmptyHint")}</p>
+            <p className="mt-1 text-xs">
+              {seesAllHiring
+                ? t("candidatesEmptyHint")
+                : t("candidateAddFromVacancyHint")}
+            </p>
           )}
         </div>
       ) : (

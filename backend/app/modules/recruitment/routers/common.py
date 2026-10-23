@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 
-from fastapi import Depends, status
+from fastapi import Depends, Request, status
 from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,13 +16,12 @@ from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
-from app.modules.recruitment.manager_assessment_models import (
-    AssessmentRound,
-    AssessmentRoundEvaluator,
-    RecruitmentAssessment,
+from app.modules.recruitment.manager_assessment_models import RecruitmentAssessment
+from app.modules.recruitment.scope import (
+    RecruitmentScope,
+    assert_path_in_scope,
+    recruitment_scope,
 )
-from app.modules.recruitment.manager_assessment_service import _round_is_closed
-from app.modules.recruitment.scope import round_scope
 
 
 def resolve_page_params(
@@ -62,8 +61,10 @@ recruitment_public_limiter = make_limiter(get_remote_address)
 # is self-guarded, so each write asks for itself with one of these (or
 # keeps its admin / hr role for the tenant settings and GDPR):
 #
-# * ``runs_hiring`` - ``manage``, which also sees the whole workspace.
-#   Used to be the admin/recruiter role list.
+# * ``runs_hiring`` - ``manage``, on the vacancies in the caller's scope:
+#   the whole workspace for the admin level and the recruiter, their
+#   divisions for a manager, their named vacancies for a hiring manager
+#   (HRP-830 REDO). Used to be the admin/recruiter role list.
 # * ``evaluates`` - ``manage`` or the ``hiring_manager`` role: human
 #   scores, the candidate's stage and the question PDF exports on a vacancy
 #   in scope. The role keeps it at ``view`` (Maxim, 25.09), in its own
@@ -74,7 +75,36 @@ recruitment_public_limiter = make_limiter(get_remote_address)
 #   their evaluators, scores and invites. ``manager`` sits on hiring
 #   rounds (``ELIGIBLE_EVALUATOR_ROLES``) and keeps them at ``view``.
 #   One's own sheet on a round is ``sheet_owner_checker``'s.
-runs_hiring = require_section("recruitment", "manage")
+_manages_hiring = require_section("recruitment", "manage")
+
+
+async def runs_hiring(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(_manages_hiring),
+    scope: RecruitmentScope = Depends(recruitment_scope),
+) -> User:
+    # Every hiring resource the path names, back to a vacancy in scope -
+    # the same 403 the read guards answer (``PATH_SCOPE_KEYS``).
+    await assert_path_in_scope(db, current_user, scope, request.path_params)
+    return current_user
+
+
+async def runs_all_hiring(
+    current_user: User = Depends(runs_hiring),
+    scope: RecruitmentScope = Depends(recruitment_scope),
+) -> User:
+    """``manage`` over the whole workspace: the writes that land outside
+    every vacancy - a candidate added on their own, the section's
+    onboarding and its demo data (HRP-830 REDO)."""
+    if not scope.unrestricted:
+        raise AppError(
+            "outside_recruitment_scope",
+            status.HTTP_403_FORBIDDEN,
+            detail_extra={},
+            detail_code_key="error_code",
+        )
+    return current_user
 
 
 async def runs_hiring_level(db: AsyncSession, user: User) -> bool:
@@ -119,46 +149,6 @@ async def sheet_owner_checker(
         )
     )
     if owner is None or owner != current_user.id:
-        raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
-    return current_user
-
-
-async def reads_round_aggregate(
-    round_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    # Scope first: an out-of-scope round answers the same whether it is live
-    # or closed, so the refusal does not tell its status.
-    _scope: None = Depends(round_scope),
-) -> User:
-    """HRP-629 / HRP-630 REDO (QA 12.10): who reads a round's averages.
-
-    ``runs_rounds`` at any time, as before. Below it the round's own
-    evaluators read them - behind the HRP-373 anchoring gate the service
-    applies - and every other reader of the round once it is completed or
-    archived: its scores are final, and the sheets themselves are already
-    open to them. A live round's averages stay closed to a non-evaluator.
-    The vacancy scope guard on the route still fences all of this.
-    """
-    if "manager" in {r.code for r in current_user.roles} or await runs_hiring_level(
-        db, current_user
-    ):
-        return current_user
-    rd = await db.scalar(
-        select(AssessmentRound).where(
-            AssessmentRound.id == round_id,
-            AssessmentRound.tenant_id == current_user.tenant_id,
-        )
-    )
-    if rd is not None and _round_is_closed(rd):
-        return current_user
-    on_round = await db.scalar(
-        select(AssessmentRoundEvaluator.user_id).where(
-            AssessmentRoundEvaluator.round_id == round_id,
-            AssessmentRoundEvaluator.user_id == current_user.id,
-        )
-    )
-    if on_round is None:
         raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
     return current_user
 

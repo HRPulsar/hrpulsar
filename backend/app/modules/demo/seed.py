@@ -49,6 +49,7 @@ from app.modules.assessment.models import (
 )
 from app.modules.auth.models import User
 from app.modules.auth.roles import ensure_baseline_employee_role, grant_role
+from app.modules.company.line_manager import resolve_line_manager
 from app.modules.company.models import Division, Tenant
 from app.modules.company.service import sync_role_on_assign
 from app.modules.competence.models import (
@@ -1025,11 +1026,10 @@ async def _seed_assessments_and_pdps(
 
         # Participants: the assessee is always added as self (mirrors
         # service.py::_auto_assign_self). For 180/360 we resolve the
-        # Division Manager from the employee's division chain and add
-        # them as ``manager`` (mirrors service.py::_auto_assign_manager).
-        # The check fails loud if a 180/360 spec lands on an employee
-        # who is themselves the division_head — that produces an empty
-        # scoring matrix and contradicts the cycle type.
+        # line manager (company.line_manager, the same call as
+        # service.py::_auto_assign_manager) and add them as ``manager``.
+        # The check fails loud if nobody is assigned up the chain — that
+        # produces an empty scoring matrix and contradicts the cycle type.
         everyone_answered = spec["status_code"] in {"on_review", "done"}
         self_participant = AssessmentParticipant(
             assessment_id=assessment.id,
@@ -1041,18 +1041,7 @@ async def _seed_assessments_and_pdps(
 
         manager_participant: AssessmentParticipant | None = None
         if spec["type_code"] in {"180", "360"}:
-            division = (
-                await db.get(Division, employee.division_id)
-                if employee.division_id is not None
-                else None
-            )
-            manager_employee = None
-            if (
-                division is not None
-                and division.manager_id is not None
-                and division.manager_id != employee.id
-            ):
-                manager_employee = await db.get(Employee, division.manager_id)
+            manager_employee = await resolve_line_manager(db, employee)
             if manager_employee is None:
                 raise RuntimeError(
                     f"demo seed: 180/360 spec {spec['title']!r} cannot "
@@ -2683,15 +2672,23 @@ def _build_elena_interview(
     now: datetime,
     transcript: str,
 ) -> Interview:
+    from app.modules.recruitment.media_duration import get_audio_duration_seconds
+
+    # HRP-980: as long as the recording the transcript's timecodes come
+    # from, the way an upload is probed - also when no storage takes it.
+    recording = elena_recording()
+    seconds = get_audio_duration_seconds(str(recording)) if recording else None
     return Interview(
         tenant_id=tenant_id,
         candidate_vacancy_id=cv.id,
         interviewer_id=owner_user_id,
         interview_date=now - timedelta(days=2),
-        duration_minutes=47,
-        duration_seconds=47 * 60,
+        duration_minutes=max(1, round(seconds / 60)) if seconds else None,
+        duration_seconds=round(seconds) if seconds else None,
         title=translate("Technical + system design — Elena Volkova"),
-        type="technical",
+        # HRP-980: a seeded transcript; ``_attach_seed_recording`` makes it
+        # audio when the recording lands.
+        type="text_transcript",
         status="completed",
         transcript=transcript,
         transcription_status="completed",
@@ -2702,14 +2699,28 @@ def _build_elena_interview(
     )
 
 
-# HRP-980: the one seeded interview with a recording, so a click on one of
-# its citations seeks real media to the quoted place. The demo ships a
-# transcript, not a voice: this is a silent AAC track (8 kHz mono, under
-# 100 KB) the length of the interview, so the player, the seek and the
-# transcript's follow-along highlight all work on stage.
-_ELENA_RECORDING = (
-    Path(__file__).resolve().parent / "seed_assets" / "interview-recording-elena.m4a"
-)
+def elena_recording() -> Path | None:
+    """The voiced recording of Elena's interview in the seed locale (HRP-980).
+
+    The one seeded interview with media, so a click on one of its citations
+    seeks the recording to the quoted line. Each transcript line is voiced
+    on its own and starts at its ``[HH:MM:SS]``
+    (``scripts/generate_demo_interview_audio.py``). The recordings ship
+    with the enterprise edition only, in ``ee/demo_seed/``, where the demo
+    sandbox lives: a community build has none, and the interview stays a
+    text transcript.
+    """
+    from app.modules.demo.seed_i18n import ee_asset_path, seed_locale
+
+    locale = seed_locale()
+    names = ["interview-recording-elena.mp3"]
+    if locale != "en":
+        names.insert(0, f"interview-recording-elena.{locale}.mp3")
+    for name in names:
+        path = ee_asset_path(name)
+        if path is not None and path.is_file():
+            return path
+    return None
 
 
 async def _attach_seed_recording(
@@ -2731,20 +2742,21 @@ async def _attach_seed_recording(
     from app.core.s3 import upload_file
     from app.modules.storage.models import File
 
-    try:
-        data = _ELENA_RECORDING.read_bytes()
-    except OSError:
+    recording = elena_recording()
+    if recording is None:
         return False
-    key = f"tenants/{tenant_id}/interviews/{interview.id}/recording.m4a"
-    if await asyncio.to_thread(upload_file, data, key, "audio/mp4") is None:
+    data = recording.read_bytes()
+    key = f"tenants/{tenant_id}/interviews/{interview.id}/recording.mp3"
+    if await asyncio.to_thread(upload_file, data, key, "audio/mpeg") is None:
         return False
     file_row = File(
         tenant_id=tenant_id,
-        name="recording.m4a",
-        original_name="interview-recording.m4a",
+        name="recording.mp3",
+        # The name a Download saves it under.
+        original_name=f"{interview.title}.mp3",
         path=key,
         size=len(data),
-        mime_type="audio/mp4",
+        mime_type="audio/mpeg",
         uploaded_by=owner_user_id,
         entity_type="interview",
         entity_id=interview.id,
@@ -2752,9 +2764,10 @@ async def _attach_seed_recording(
     db.add(file_row)
     await db.flush()
     interview.audio_file_id = file_row.id
+    interview.type = "audio"
     interview.file_s3_key = key
     interview.file_size_bytes = len(data)
-    interview.file_mime = "audio/mp4"
+    interview.file_mime = "audio/mpeg"
     # A file the seed generated itself; there is nothing to scan.
     interview.av_status = "skipped"
     return True
@@ -2776,7 +2789,7 @@ def _build_tomas_interview(
         duration_minutes=42,
         duration_seconds=42 * 60,
         title=translate("Recruiter screen — Tomás Becker"),
-        type="screen",
+        type="text_transcript",
         status="completed",
         transcript=transcript,
         transcription_status="completed",
@@ -2988,7 +3001,7 @@ async def _seed_spec_analysis(
         duration_seconds=duration_minutes * 60 if duration_minutes else None,
         title=spec["title_prefix"]
         + translate(f"{spec['first_name']} {spec['last_name']}"),
-        type=spec.get("interview_type", "technical"),
+        type="text_transcript",
         status="completed",
         transcript=spec["transcript"],
         transcription_status="completed",

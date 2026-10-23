@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
@@ -45,6 +45,7 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { Pagination } from "@/components/pagination";
 import { usePermissions } from "@/hooks/use-permissions";
+import { SectionTabs, useSectionTab, useTodoCount } from "@/components/section-tabs";
 import { useAuth } from "@/context/auth-context";
 import { readCreateDeepLink } from "@/lib/employee-actions";
 import {
@@ -60,6 +61,7 @@ import {
 import { MassCreateDialog } from "./mass-create-dialog";
 import { isPastDeadline, todayLocalISO } from "@/lib/deadline";
 import { formatDate } from "@/lib/date-format";
+import { hasLineManager, type DivisionChain } from "@/lib/line-manager";
 import {
   ASSESSMENT_MANUAL_FORBIDDEN_STATUSES,
   ASSESSMENT_MANUAL_FORBIDDEN_TOOLTIP_KEY,
@@ -124,6 +126,42 @@ function statusSummaryText(
 }
 
 export default function AssessmentsPage() {
+  // HRP-826 (QA 13.10): `manage` adds the section's own tab; every level
+  // gets the assessments of one's own and the questionnaires still to fill.
+  const tTabs = useTranslations("sectionTabs");
+  const { canManageSection } = usePermissions();
+  const manage = canManageSection("assessments");
+  const tab = useSectionTab(manage ? ["all", "mine", "todo"] : ["mine", "todo"]);
+  const todo = useTodoCount("/assessments-grouped/todo-count", tab);
+  return (
+    <AssessmentsList
+      key={tab}
+      tab={tab}
+      onChanged={todo.reload}
+      tabs={
+        <SectionTabs
+          testIdPrefix="assessments"
+          active={tab}
+          tabs={[
+            ...(manage ? [{ id: "all", label: tTabs("assessmentsAll") }] : []),
+            { id: "mine", label: tTabs("assessmentsMine") },
+            { id: "todo", label: todo.label },
+          ]}
+        />
+      }
+    />
+  );
+}
+
+function AssessmentsList({
+  tab,
+  tabs,
+  onChanged,
+}: {
+  tab: string;
+  tabs: ReactNode;
+  onChanged: () => void;
+}) {
   const t = useTranslations("assessments");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
@@ -139,10 +177,10 @@ export default function AssessmentsPage() {
 
   // Create dialog (mode selection + single)
   const [createOpen, setCreateOpen] = useState(false);
-  // HRP-733: division -> manager, used only to pick the default assessment
-  // type. Loaded lazily when the create dialog opens so the list page does
-  // not pay for a tree it never renders.
-  const [divisionManagers, setDivisionManagers] = useState<Map<string, string | null> | null>(null);
+  // HRP-733: division -> manager and parent, used only to pick the default
+  // assessment type. Loaded lazily when the create dialog opens so the list
+  // page does not pay for a tree it never renders.
+  const [divisionManagers, setDivisionManagers] = useState<DivisionChain | null>(null);
   // HRP-733 review: the last title this dialog generated, so a switch of
   // employee can tell its own prefill from something the user typed.
   const autoTitle = useRef("");
@@ -223,6 +261,7 @@ export default function AssessmentsPage() {
         const params = new URLSearchParams();
         params.set("skip", String((p - 1) * PAGE_SIZE));
         params.set("limit", String(PAGE_SIZE));
+        if (tab !== "all") params.set("tab", tab);
         // HRP-193: push filters to the backend so the X-Y of N counter and
         // pagination follow the filtered slice. Empty filters omit the
         // params entirely (matches the /employees endpoint contract).
@@ -240,7 +279,7 @@ export default function AssessmentsPage() {
         setLoadError(true);
       }
     },
-    [],
+    [tab],
   );
 
   async function loadEmployees() {
@@ -277,6 +316,9 @@ export default function AssessmentsPage() {
 
   useEffect(() => {
     const params = new URLSearchParams();
+    // The resolved tab, not the raw param: `?tab=all` opened at `view`
+    // shows `mine` and must say so.
+    if (searchParams.has("tab")) params.set("tab", tab);
     if (searchQuery) params.set("search", searchQuery);
     for (const value of filterTypes) params.append("type", value);
     for (const value of filterStatuses) params.append("status", value);
@@ -322,15 +364,16 @@ export default function AssessmentsPage() {
     setExpandedGroups(next);
   }
 
-  // HRP-733: 180 needs a second pair of eyes; without a division manager
-  // there is nobody to ask, so a self-assessment is the honest default.
-  // Mirrors _auto_assign_manager on the server, which skips a division
-  // whose manager is the assessee themselves.
-  async function loadDivisionManagers(): Promise<Map<string, string | null>> {
+  // HRP-733: 180 needs a second pair of eyes; without a line manager there
+  // is nobody to ask, so a self-assessment is the honest default. HRP-1049:
+  // the line manager walks up the parent chain the way _auto_assign_manager
+  // does on the server (hasLineManager).
+  async function loadDivisionManagers(): Promise<DivisionChain> {
     if (divisionManagers) return divisionManagers;
-    const flatten = (nodes: Division[]): [string, string | null][] =>
+    type Link = [string, { managerId: string | null; parentId: string | null }];
+    const flatten = (nodes: Division[]): Link[] =>
       nodes.flatMap((d) => [
-        [d.id, d.manager_id] as [string, string | null],
+        [d.id, { managerId: d.manager_id, parentId: d.parent_id }] as Link,
         ...flatten(d.children ?? []),
       ]);
     try {
@@ -343,13 +386,8 @@ export default function AssessmentsPage() {
     }
   }
 
-  function defaultTypeFor(
-    employee: Employee | undefined,
-    managers: Map<string, string | null>,
-  ): string {
-    if (!employee?.division_id) return "self";
-    const managerId = managers.get(employee.division_id);
-    return managerId && managerId !== employee.id ? "180" : "self";
+  function defaultTypeFor(employee: Employee | undefined, divisions: DivisionChain): string {
+    return employee && hasLineManager(employee.id, employee.division_id, divisions) ? "180" : "self";
   }
 
   async function onEmployeePicked(employeeId: string) {
@@ -487,6 +525,7 @@ export default function AssessmentsPage() {
         t("toastStatusChanged", { status: assessmentStatusLabel(t, newStatus) }),
       );
       setStatusOpen(false);
+      onChanged();
       await loadData(page, { search: searchQuery, types: filterTypes, statuses: filterStatuses });
       // Refresh expanded group if the assessment belongs to one
       if (statusTarget.group_id && groupChildren[statusTarget.group_id]) {
@@ -610,6 +649,7 @@ export default function AssessmentsPage() {
         );
       }
       setBulkStatusOpen(false);
+      onChanged();
       await loadData(page, { search: searchQuery, types: filterTypes, statuses: filterStatuses });
       // Refresh expanded children
       if (expandedGroups.has(bulkStatusGroupId)) {
@@ -662,6 +702,8 @@ export default function AssessmentsPage() {
           </Button>
         )}
       </div>
+
+      {tabs}
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
@@ -743,6 +785,7 @@ export default function AssessmentsPage() {
                             position and a status chip when not active. */}
                         {a.employee_name && (
                           <EmployeeSummaryLine
+                            employeeId={a.employee_id}
                             employee={{
                               user_name: a.employee_name,
                               position_title: a.employee_position_title,

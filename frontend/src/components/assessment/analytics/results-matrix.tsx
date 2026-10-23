@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowDown, ArrowUp, SquareArrowOutUpRight } from "lucide-react";
 import { useTranslations } from "next-intl";
 
+import { EmployeeName } from "@/components/employees/employee-name";
 import { MatchPercentChip } from "@/components/assessment/match-percent-chip";
 import {
   Tooltip,
@@ -128,7 +129,9 @@ export function ResultsMatrix({
                   >
                     <div className="space-y-1">
                       <div className="truncate text-xs font-medium">
-                        {employee.full_name}
+                        <EmployeeName employeeId={employee.employee_id} linkClassName="hover:underline">
+                          {employee.full_name}
+                        </EmployeeName>
                       </div>
                       {division &&
                         (truncated ? (

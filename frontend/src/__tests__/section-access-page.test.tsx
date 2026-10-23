@@ -23,6 +23,7 @@ const MATRIX: SectionAccess = {
       hidden: false,
       admin_locked: false,
       never_hidden: true,
+      ceilings: {},
       defaults: { admin: "manage", hr: "view", employee: "view" },
       levels: { admin: "manage", hr: "view", employee: "view" },
     },
@@ -31,6 +32,7 @@ const MATRIX: SectionAccess = {
       hidden: false,
       admin_locked: true,
       never_hidden: true,
+      ceilings: {},
       defaults: { admin: "manage", hr: "manage", employee: "none" },
       levels: { admin: "manage", hr: "manage", employee: "none" },
     },
@@ -39,6 +41,7 @@ const MATRIX: SectionAccess = {
       hidden: false,
       admin_locked: false,
       never_hidden: false,
+      ceilings: {},
       defaults: { admin: "manage", hr: "view", employee: "view" },
       levels: { admin: "manage", hr: "view", employee: "view" },
     },
@@ -48,8 +51,29 @@ const MATRIX: SectionAccess = {
       hidden: false,
       admin_locked: false,
       never_hidden: false,
+      ceilings: {},
       defaults: { admin: "manage", hr: "manage", employee: "none" },
       levels: { admin: "manage", hr: "none", employee: "view" },
+    },
+    {
+      // HRP-831: a role whose ceiling is `none` - the whole cell is locked.
+      code: "invitations",
+      hidden: false,
+      admin_locked: true,
+      never_hidden: true,
+      ceilings: { employee: "none" },
+      defaults: { admin: "manage", hr: "manage", employee: "none" },
+      levels: { admin: "manage", hr: "manage", employee: "none" },
+    },
+    {
+      // HRP-831: a ceiling of `view` locks `manage` only.
+      code: "roles",
+      hidden: false,
+      admin_locked: true,
+      never_hidden: true,
+      ceilings: { hr: "view", employee: "view" },
+      defaults: { admin: "manage", hr: "none", employee: "none" },
+      levels: { admin: "manage", hr: "none", employee: "none" },
     },
   ],
 };
@@ -153,12 +177,13 @@ describe("SectionAccessPage (HRP-820)", () => {
     for (const section of MATRIX.sections) {
       const floor = RANK.indexOf(section.levels.employee);
       for (const role of MATRIX.roles) {
+        const cap = RANK.indexOf(section.ceilings[role] ?? "manage");
         for (const level of RANK) {
           const below = role !== "employee" && RANK.indexOf(level) < floor;
           expect(
             optionDisabled(`section-access-select-${section.code}-${role}`, level),
             `${section.code}-${role} ${level}`,
-          ).toBe(below);
+          ).toBe(below || RANK.indexOf(level) > cap);
         }
       }
     }
@@ -185,6 +210,27 @@ describe("SectionAccessPage (HRP-820)", () => {
       employee.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(optionDisabled("section-access-select-exams-hr", "none")).toBe(false);
+  });
+
+  it("locks the levels above a role's ceiling and says why (HRP-831)", async () => {
+    await render();
+
+    const invitations = byTestId("section-access-select-invitations-employee") as HTMLSelectElement;
+    expect(invitations.disabled).toBe(true);
+    expect(
+      byTestId("section-access-ceiling-invitations-employee").getAttribute("aria-label"),
+    ).toContain("The Employee role implies no access to this section");
+
+    const roles = byTestId("section-access-select-roles-hr") as HTMLSelectElement;
+    expect(roles.disabled).toBe(false);
+    expect(optionDisabled("section-access-select-roles-hr", "view")).toBe(false);
+    expect(optionDisabled("section-access-select-roles-hr", "manage")).toBe(true);
+    expect(byTestId("section-access-ceiling-roles-hr").getAttribute("aria-label")).toContain(
+      "at most view access",
+    );
+    // No ceiling, no hint.
+    expect(container.querySelector('[data-testid="section-access-ceiling-exams-hr"]')).toBeNull();
+    expect(container.querySelector('[data-testid="section-access-ceiling-invitations-hr"]')).toBeNull();
   });
 
   it("keeps an admin_locked cell disabled", async () => {

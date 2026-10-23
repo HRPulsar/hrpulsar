@@ -795,6 +795,7 @@ async def get_me(db: AsyncSession, user_id: uuid.UUID) -> dict[str, Any]:
         payload["tenant_is_demo"] = bool(getattr(tenant, "is_demo", False))
         payload["tenant_expires_at"] = getattr(tenant, "expires_at", None)
         payload["tenant_default_locale"] = tenant.default_locale
+        payload["tenant_region"] = tenant.region
         payload["tenant_directory_show_grades"] = bool(tenant.directory_show_grades)
         # HRP-808: branding the platform admin set for this tenant. The logo
         # is only signed when the sidebar will actually show it; the name

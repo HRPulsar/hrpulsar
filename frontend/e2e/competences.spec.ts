@@ -139,6 +139,21 @@ test.describe("Competences with data", () => {
     ).toBeVisible({ timeout: 10000 });
   });
 
+  test("search narrows the tree (HRP-1082)", async ({ page }) => {
+    await page.goto("/competences");
+    await page.getByTestId("competences-input-search").fill("go prog");
+    await expect(page.getByTestId(`competences-group-${groupId}`)).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(page.getByText("Go Programming")).toBeVisible();
+
+    await page.getByTestId("competences-input-search").fill("zz-no-such-title-zz");
+    await expect(page.getByTestId("competences-search-empty")).toBeVisible();
+    await expect(page.getByTestId(`competences-group-${groupId}`)).toHaveCount(0);
+    await page.getByTestId("competences-input-search").fill("");
+    await expect(page.getByTestId("competences-search-empty")).toHaveCount(0);
+  });
+
   test("group toggle works", async ({ page }) => {
     await page.goto("/competences");
     await expect(

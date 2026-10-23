@@ -34,7 +34,7 @@ from app.modules.auth.models import Role, User, user_roles
 from app.modules.auth.roles import ensure_baseline_employee_role
 from app.modules.company.models import Tenant
 from app.modules.demo.seed import clone_seed_into_demo_tenant
-from app.modules.demo.seed_i18n import translate
+from app.modules.demo.seed_i18n import seed_locale, translate
 from app.modules.demo.turnstile import verify_turnstile_token
 from app.modules.demo.utils import DEMO_ADMIN_EMAIL_DOMAIN
 
@@ -212,6 +212,14 @@ def _demo_content_language() -> str:
     return DEFAULT_LANGUAGE
 
 
+def _demo_region() -> str | None:
+    """Company region of a fresh demo tenant (HRP-1066): a Russian demo is
+    a Russian company, so its employee cards offer the Russian education
+    levels. Follows the locale the seed renders in; other demos stay
+    without a region."""
+    return "RU" if seed_locale() == "ru" else None
+
+
 async def _grant_demo_credits(
     db: AsyncSession, *, tenant_id: uuid.UUID, user_id: uuid.UUID
 ) -> int:
@@ -372,6 +380,7 @@ async def create_demo_session(
         is_demo=True,
         expires_at=short_expires,
         last_active_at=now,
+        region=_demo_region(),
     )
     db.add(tenant)
     await db.commit()

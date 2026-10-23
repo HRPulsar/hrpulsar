@@ -784,6 +784,7 @@ async def list_my_exams(
     tenant_id: uuid.UUID,
     employee_id: uuid.UUID | None = None,
     visible_employee_ids: set[uuid.UUID] | None = None,
+    todo_only: bool = False,
 ) -> list[dict]:
     query = (
         select(Exam)
@@ -791,6 +792,9 @@ async def list_my_exams(
         .where(Exam.tenant_id == tenant_id)
         .order_by(Exam.created_at.desc())
     )
+    if todo_only:
+        # HRP-823: the "To do" tab - still to be taken.
+        query = query.where(Exam.status.in_(("assigned", "in_progress")))
     if employee_id is not None:
         query = query.where(Exam.employee_id == employee_id)
     elif visible_employee_ids is not None:

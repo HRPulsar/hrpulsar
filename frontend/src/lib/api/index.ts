@@ -422,7 +422,15 @@ async function requestBlob(
       forceLogout();
       return new Promise<never>(() => {});
     }
-    throw new ApiError(res.status, `Request failed (HTTP ${res.status})`);
+    // The error body is JSON like any other route's: keep its localized
+    // detail and code instead of a bare status line.
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(
+      res.status,
+      formatApiError(body.detail) || `Request failed (HTTP ${res.status})`,
+      body.detail,
+      body.code,
+    );
   }
   return res.blob();
 }

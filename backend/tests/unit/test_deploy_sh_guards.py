@@ -146,3 +146,39 @@ def test_slack_env_quiet_when_complete_or_listener_off(tmp_path: Path) -> None:
     exported = "".join(f"export {line}\n" for line in full.splitlines())
     assert _slack_env(tmp_path, exported) == ""
     assert _slack_env(tmp_path, "", listener_on=False) == ""
+
+
+# --- prune_old_images ----------------------------------------------------
+
+
+def test_prune_keeps_three_newest_per_app_repo_only(tmp_path: Path) -> None:
+    """Old app images go, newest three per repo stay, third-party untouched;
+    untagged leftovers of a re-pulled ``:latest`` go too."""
+    text = DEPLOY_SH.read_text()
+    m = re.search(r"^prune_old_images\(\) \{\n.*?^\}\n", text, re.M | re.S)
+    assert m
+    # ``docker images <repo>`` lists newest first; b2 carries two tags.
+    script = r"""
+log() { :; }
+dc() { printf '%s\n' reg:5000/hrp/backend:2.5.3 reg:5000/hrp/backend:2.5.3 \
+    reg:5000/hrp/marketing:latest postgres:17.6; }
+docker() {
+    case "$1" in
+        images) case "$2" in
+            reg:5000/hrp/backend) printf '%s\n' b1 b2 b2 b3 b4 b5;;
+            reg:5000/hrp/marketing) printf '%s\n' m1 m2;;
+            *) echo "unexpected repo $2" >&2; exit 9;;
+        esac;;
+        rmi|image) echo "$*" >> "$OUT";;
+    esac
+}
+""" + m.group(0) + "prune_old_images"
+    out = tmp_path / "rmi.log"
+    r = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "OUT": str(out)},
+    )
+    assert r.returncode == 0, r.stderr
+    assert out.read_text().splitlines() == ["rmi b4 b5", "image prune -f"]

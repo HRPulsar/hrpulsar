@@ -748,6 +748,9 @@ def render_assessment_peer_cancelled_email(
 # ---------------------------------------------------------------------------
 
 
+# HRP-823 / HRP-825: a letter to the person on the plan or the exam opens the
+# list tab that holds it - "To do" while it waits on them, "My ..." once it
+# is closed. A reviewer's letter keeps the bare list: the tabs are one's own.
 def render_pdp_sent_email(
     employee_name: str,
     deadline: str | None = None,
@@ -782,7 +785,7 @@ def render_pdp_sent_email(
             deadline_line=deadline_line,
         )
     button = _button(
-        frontend_url() + "/development", translate("email.pdp_sent.button", locale)
+        frontend_url() + "/development?tab=todo", translate("email.pdp_sent.button", locale)
     )
     content = (
         _heading(heading_html)
@@ -818,7 +821,7 @@ def render_pdp_returned_email(
             employee_name=escape(employee_name),
         )
     button = _button(
-        frontend_url() + "/development", translate("email.pdp_returned.button", locale)
+        frontend_url() + "/development?tab=todo", translate("email.pdp_returned.button", locale)
     )
     content = (
         _heading(heading_html)
@@ -829,8 +832,18 @@ def render_pdp_returned_email(
     return subject, _render(subject, content, locale=locale)
 
 
+def _pdp_url(pdp_id: str) -> str:
+    """HRP-1048: the reviewer is not the plan's owner, so the list tabs
+    (one's own plans) never hold it — the letter opens the plan itself."""
+    return f"{frontend_url()}/development/{pdp_id}"
+
+
 def render_pdp_review_submitted_email(
-    employee_name: str, pdp_title: str | None = None, *, locale: str = "en"
+    employee_name: str,
+    pdp_title: str | None = None,
+    *,
+    pdp_id: str,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Reviewer notification: the employee has submitted their plan for review."""
     title = (pdp_title or "").strip()
@@ -854,7 +867,7 @@ def render_pdp_review_submitted_email(
             employee_name=escape(employee_name),
         )
     button = _button(
-        frontend_url() + "/development",
+        _pdp_url(pdp_id),
         translate("email.pdp_review_submitted.button", locale),
     )
     content = (
@@ -907,7 +920,7 @@ def render_pdp_done_to_employee_email(
             else translate("email.pdp_done_to_employee.intro_untitled_noname", locale)
         )
     button = _button(
-        frontend_url() + "/development",
+        frontend_url() + "/development?tab=mine",
         translate("email.pdp_done_to_employee.button", locale),
     )
     content = (
@@ -919,7 +932,11 @@ def render_pdp_done_to_employee_email(
 
 
 def render_pdp_done_to_reviewer_email(
-    employee_name: str | None, pdp_title: str | None = None, *, locale: str = "en"
+    employee_name: str | None,
+    pdp_title: str | None = None,
+    *,
+    pdp_id: str,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Reviewer notification: their employee's plan has been completed.
 
@@ -959,7 +976,7 @@ def render_pdp_done_to_reviewer_email(
             else translate("email.pdp_done_to_reviewer.intro_untitled_noname", locale)
         )
     button = _button(
-        frontend_url() + "/development",
+        _pdp_url(pdp_id),
         translate("email.pdp_done_to_reviewer.button", locale),
     )
     content = (
@@ -1017,7 +1034,7 @@ def render_pdp_cancelled_to_employee_email(
             )
         )
     button = _button(
-        frontend_url() + "/development",
+        frontend_url() + "/development?tab=mine",
         translate("email.pdp_cancelled_to_employee.button", locale),
     )
     content = (
@@ -1029,7 +1046,11 @@ def render_pdp_cancelled_to_employee_email(
 
 
 def render_pdp_cancelled_to_reviewer_email(
-    employee_name: str | None, pdp_title: str | None = None, *, locale: str = "en"
+    employee_name: str | None,
+    pdp_title: str | None = None,
+    *,
+    pdp_id: str,
+    locale: str = "en",
 ) -> tuple[str, str]:
     """Reviewer notification: their employee's plan has been cancelled.
 
@@ -1075,7 +1096,7 @@ def render_pdp_cancelled_to_reviewer_email(
             )
         )
     button = _button(
-        frontend_url() + "/development",
+        _pdp_url(pdp_id),
         translate("email.pdp_cancelled_to_reviewer.button", locale),
     )
     content = (
@@ -1102,7 +1123,7 @@ def render_exam_assigned_email(
         else ""
     )
     button = _button(
-        frontend_url() + "/exams", translate("email.exam_assigned.button", locale)
+        frontend_url() + "/exams?tab=todo", translate("email.exam_assigned.button", locale)
     )
     content = (
         _heading(translate("email.exam_assigned.heading", locale))
@@ -1125,7 +1146,7 @@ def render_exam_results_email(
     """Return (subject, html_body) for exam results."""
     subject = translate("email.exam_results.subject", locale, exam_title=exam_title)
     button = _button(
-        frontend_url() + "/exams", translate("email.exam_results.button", locale)
+        frontend_url() + "/exams?tab=mine", translate("email.exam_results.button", locale)
     )
     content = (
         _heading(translate("email.exam_results.heading", locale))

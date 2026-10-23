@@ -2,6 +2,7 @@ import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
+from types import EllipsisType
 from typing import Any
 
 from fastapi import status
@@ -17,9 +18,11 @@ from app.core.access_scope import (
     assert_employee_write_scope,
     assert_not_self_edit_via_employees,
     directory_show_grades,
+    get_visible_employee_ids,
 )
 from app.core.errors import AppError
 from app.core.s3 import get_presigned_url
+from app.core.sections import matrix_levels
 
 # Accepted cross-module coupling (review item [35]): this service reads other
 # domains' MODELS only — identity (auth), org structure (company), positions,
@@ -253,6 +256,43 @@ async def apply_directory_scope(
         row["id"]: row for row in await directory_rows(db, tenant_id, out_of_scope)
     }
     return [trimmed.get(row["id"], row) for row in rows]
+
+
+async def readable_card_ids(
+    db: AsyncSession,
+    current_user: User,
+    ids: Sequence[uuid.UUID],
+    *,
+    visible: set[uuid.UUID] | None | EllipsisType = ...,
+) -> set[uuid.UUID]:
+    """HRP-829 REDO (QA 14.10): whose card the caller may open - the one
+    rule behind ``GET /employees/{id}`` and every employee name the UI
+    renders as a link (``GET /employees/card-access``).
+
+    - ``none`` on employees: nobody's, one's own included - the name is
+      plain text everywhere and the card answers as for an unknown id.
+    - otherwise the read scope at any status (admin-level: the workspace;
+      a division head: their own card and the managed subtree; anyone else:
+      their own card), and every other colleague while in
+      ``DIRECTORY_STATUSES`` - someone inactive or terminated outside the
+      scope is HR history, not a colleague.
+
+    Ids of another tenant or of no employee are simply not returned.
+    ``visible`` is ``get_visible_employee_ids`` output for a caller that
+    already holds it (the card route); left out, it is read here.
+    """
+    if not ids or (await matrix_levels(db, current_user))["employees"] == "none":
+        return set()
+    if isinstance(visible, EllipsisType):
+        visible = await get_visible_employee_ids(db, current_user)
+    query = select(Employee.id).where(
+        Employee.tenant_id == current_user.tenant_id, Employee.id.in_(ids)
+    )
+    if visible is not None:
+        query = query.where(
+            or_(Employee.id.in_(visible), Employee.status.in_(DIRECTORY_STATUSES))
+        )
+    return set((await db.scalars(query)).all())
 
 
 def _event_to_read(event: EmployeeEvent) -> dict:

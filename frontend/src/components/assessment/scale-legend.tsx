@@ -12,13 +12,18 @@ import { scaleOptionDescription, scaleOptionLabel } from "@/lib/reference-labels
  * Expectations — Meets the expected level", N indicators deep). Collapsed
  * by default — native `<details>`, same disclosure pattern as the
  * recruitment evaluation sheet.
+ *
+ * HRP-721 REDO: a scale none of whose options has a description gets no
+ * legend at all; once one has, an option without one says so.
  */
 export function ScaleLegend({ options }: { options: AnswerOption[] }) {
   const t = useTranslations("assessments");
   const tRef = useTranslations("reference");
 
-  const sorted = [...options].sort((a, b) => a.sort_index - b.sort_index);
-  if (sorted.length === 0) return null;
+  const rows = [...options]
+    .sort((a, b) => a.sort_index - b.sort_index)
+    .map((opt) => ({ opt, description: scaleOptionDescription(tRef, opt)?.trim() || null }));
+  if (!rows.some((r) => r.description)) return null;
 
   return (
     <details
@@ -33,7 +38,7 @@ export function ScaleLegend({ options }: { options: AnswerOption[] }) {
         {t("scaleLegendTitle")}
       </summary>
       <dl className="mt-2 space-y-1 text-sm">
-        {sorted.map((opt) => (
+        {rows.map(({ opt, description }) => (
           <div
             key={opt.id}
             className="flex flex-wrap gap-x-2"
@@ -41,7 +46,7 @@ export function ScaleLegend({ options }: { options: AnswerOption[] }) {
           >
             <dt className="font-medium">{scaleOptionLabel(tRef, opt)}</dt>
             <dd className="text-muted-foreground">
-              {scaleOptionDescription(tRef, opt)}
+              {description ?? t("scaleLegendNotSpecified")}
             </dd>
           </div>
         ))}

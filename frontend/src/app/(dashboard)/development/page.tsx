@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
@@ -45,6 +45,7 @@ import {
 import { Hint } from "@/components/ui/hint";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { usePermissions } from "@/hooks/use-permissions";
+import { SectionTabs, useSectionTab, useTodoCount } from "@/components/section-tabs";
 import { readCreateDeepLink } from "@/lib/employee-actions";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -67,6 +68,42 @@ const emptyForm = {
 };
 
 export default function DevelopmentPage() {
+  // HRP-825 (QA 13.10): `manage` adds the section's own tab; every level
+  // gets one's own plans and the ones waiting on the caller.
+  const tTabs = useTranslations("sectionTabs");
+  const { canManageSection } = usePermissions();
+  const manage = canManageSection("development");
+  const tab = useSectionTab(manage ? ["all", "mine", "todo"] : ["mine", "todo"]);
+  const todo = useTodoCount("/pdp/todo-count", tab);
+  return (
+    <DevelopmentList
+      key={tab}
+      tab={tab}
+      onChanged={todo.reload}
+      tabs={
+        <SectionTabs
+          testIdPrefix="development"
+          active={tab}
+          tabs={[
+            ...(manage ? [{ id: "all", label: tTabs("developmentAll") }] : []),
+            { id: "mine", label: tTabs("developmentMine") },
+            { id: "todo", label: todo.label },
+          ]}
+        />
+      }
+    />
+  );
+}
+
+function DevelopmentList({
+  tab,
+  tabs,
+  onChanged,
+}: {
+  tab: string;
+  tabs: ReactNode;
+  onChanged: () => void;
+}) {
   const t = useTranslations("development");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
@@ -146,7 +183,7 @@ export default function DevelopmentPage() {
   async function load() {
     try {
       const [pdpData, empData, specData] = await Promise.all([
-        api.get<PDP[]>("/pdp"),
+        api.get<PDP[]>(tab === "all" ? "/pdp" : `/pdp?tab=${tab}`),
         api.get<EmployeeList>("/employees?limit=100"),
         api.get<DictionaryItem[]>("/dictionaries/specialization").catch(() => []),
       ]);
@@ -161,12 +198,18 @@ export default function DevelopmentPage() {
     }
   }
 
+  // Mount only: the list is keyed by its tab (HRP-823…826), so `tab` never
+  // changes under a mounted `load`.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
 
   // Mirror the filters back into the URL so the view is linkable and a
   // reload keeps it. ``replace`` — filtering is not a navigation step.
   useEffect(() => {
     const params = new URLSearchParams();
+    // The resolved tab, not the raw param: `?tab=all` opened at `view`
+    // shows `mine` and must say so.
+    if (searchParams.has("tab")) params.set("tab", tab);
     if (searchQuery) params.set("q", searchQuery);
     for (const value of filterStatuses) params.append("status", value);
     for (const value of filterFlags) params.append("flag", value);
@@ -425,6 +468,7 @@ export default function DevelopmentPage() {
       await api.post(`/pdp/${statusTarget.id}/status`, { status_code: newStatus });
       toast.success(t("toastStatusUpdated"));
       setStatusOpen(false);
+      onChanged();
       await load();
     } catch (err) {
       toast.error(
@@ -495,6 +539,8 @@ export default function DevelopmentPage() {
           </Tooltip>
         )}
       </div>
+
+      {tabs}
 
       {/* Filters — HRP-147: parity with Assessments (search + multi-status,
           no type filter — PDPs do not have a type). */}
@@ -569,7 +615,7 @@ export default function DevelopmentPage() {
             return (
               <Card key={p.id} className="relative cursor-pointer" data-testid={`development-row-${p.id}`} onClick={(e) => { if ((e.target as HTMLElement).closest("button, [role='menu'], [role='menuitem']")) return; router.push(`/development/${p.id}`); }}>
                 <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-3">
                     <CardTitle className="text-sm font-medium">
                       <Link href={`/development/${p.id}`} className="hover:underline" onClick={(e) => e.stopPropagation()} data-testid={`development-row-${p.id}-title`}>{p.title}</Link>
                     </CardTitle>
@@ -594,6 +640,7 @@ export default function DevelopmentPage() {
                         position and a status chip when not active. */}
                     {p.employee_name && (
                       <EmployeeSummaryLine
+                        employeeId={p.employee_id}
                         employee={{
                           user_name: p.employee_name,
                           position_title: p.employee_position_title,

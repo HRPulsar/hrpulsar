@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { api } from "@/lib/api";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 import type {
@@ -1495,9 +1496,8 @@ export default function TalentCardDetailPage() {
                     <TableRow key={c.id} data-testid="talent-market-candidate-row">
                       <TableCell className="text-sm">
                         {/* HRP-149: render "Name Last name" as a Link when the
-                            viewer has access to the employee profile (admin /
-                            manager-of-division / self), otherwise as plain
-                            text (mirrors HRP-85's participant treatment).
+                            viewer may open the employee's card (HRP-829
+                            REDO: EmployeeName), otherwise as plain text.
                             HRP-209: a quiet "(it's me)" tag follows the
                             viewer's own row so they spot themselves at a
                             glance. HRP-258: the line wraps EmployeeSummaryLine
@@ -1506,22 +1506,17 @@ export default function TalentCardDetailPage() {
                             recruiter to cross-reference /employees. */}
                         <div className="flex flex-col gap-0.5">
                           <span className="inline-flex items-center gap-2">
-                            {c.can_view_profile ? (
-                              <Link
-                                href={`/employees/${c.employee_id}`}
-                                className="font-medium text-primary underline-offset-2 hover:underline"
-                                data-testid="talent-market-candidate-name"
-                              >
-                                {c.employee_name || c.employee_id}
-                              </Link>
-                            ) : (
-                              <span
-                                className="font-medium"
-                                data-testid="talent-market-candidate-name"
-                              >
-                                {c.employee_name || c.employee_id}
-                              </span>
-                            )}
+                            {/* HRP-829 REDO: the card rule, not the HR read
+                                scope of `can_view_profile` (that one still
+                                gates the plan badge and the drawer). */}
+                            <EmployeeName
+                              employeeId={c.employee_id}
+                              className="font-medium"
+                              linkClassName="text-primary underline-offset-2 hover:underline"
+                              testId="talent-market-candidate-name"
+                            >
+                              {c.employee_name || c.employee_id}
+                            </EmployeeName>
                             {c.is_me && (
                               <span
                                 className="text-xs text-muted-foreground"
@@ -1817,14 +1812,14 @@ export default function TalentCardDetailPage() {
                               </TableCell>
                               <TableCell className="text-sm">
                                 <div className="flex flex-col gap-0.5">
-                                  <Link
-                                    href={`/employees/${p.employee_id}`}
-                                    className="font-medium text-primary underline-offset-2 hover:underline"
-                                    target="_blank"
-                                    rel="noreferrer"
+                                  <EmployeeName
+                                    employeeId={p.employee_id}
+                                    className="font-medium"
+                                    linkClassName="text-primary underline-offset-2 hover:underline"
+                                    newTab
                                   >
                                     {p.name}
-                                  </Link>
+                                  </EmployeeName>
                                   {/* HRP-258: same position + status chip
                                       treatment as the Candidates table so
                                       the picker matches the saved view. */}

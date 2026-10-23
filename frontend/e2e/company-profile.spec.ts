@@ -1,8 +1,11 @@
+import type { Page } from "@playwright/test";
+
 import { test, expect } from "./fixtures";
 import {
   provisionTenantMember,
   registerUser,
   setAuthTokens,
+  setupFullTenant,
 } from "./helpers";
 
 test.describe("Company profile page", () => {
@@ -152,6 +155,7 @@ test.describe("Company profile read-only for non-admin", () => {
       page.getByTestId("company-profile-input-website"),
     ).toBeDisabled();
     await expect(page.getByTestId("company-profile-input-size")).toBeDisabled();
+    await expect(page.getByTestId("company-profile-input-region")).toBeDisabled();
 
     await expect(page.getByTestId("company-profile-btn-save")).toHaveCount(0);
     await expect(
@@ -161,5 +165,73 @@ test.describe("Company profile read-only for non-admin", () => {
     await expect(
       page.getByText("Only admins can edit the company profile."),
     ).toBeVisible({ timeout: 10000 });
+  });
+});
+
+test.describe("Company region drives the education levels (HRP-1066)", () => {
+  let accessToken: string;
+  let refreshToken: string;
+  let employeeId: string;
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    const setup = await setupFullTenant(page);
+    accessToken = setup.accessToken;
+    refreshToken = setup.refreshToken;
+    employeeId = setup.employeeId;
+    await page.close();
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await setAuthTokens(page, accessToken, refreshToken);
+  });
+
+  async function pickRegion(page: Page, name: string) {
+    await page.goto("/company/profile");
+    const region = page.getByTestId("company-profile-input-region");
+    await expect(region).toBeEnabled({ timeout: 10000 });
+    await region.click();
+    await page.getByRole("option", { name, exact: true }).click();
+    await page.getByTestId("company-profile-btn-save").click();
+    await expect(page.getByText("Company profile saved")).toBeVisible({
+      timeout: 10000,
+    });
+    await page.reload();
+    await expect(page.getByTestId("company-profile-input-region")).toContainText(
+      name,
+      { timeout: 10000 },
+    );
+  }
+
+  async function degreeOptions(page: Page) {
+    await page.goto(`/employees/${employeeId}`);
+    await page.getByTestId("employee-tab-education").click();
+    await page.getByTestId("employee-education-btn-add").click();
+    await page.getByTestId("employee-edu-degree").click();
+    const options = page.getByRole("option");
+    await expect(options.first()).toBeVisible({ timeout: 10000 });
+    return options.allTextContents();
+  }
+
+  test("RU offers the Russian levels, no region the default set", async ({
+    page,
+  }) => {
+    await page.goto("/company/profile");
+    await expect(page.getByTestId("company-profile-input-region")).toContainText(
+      "Not specified",
+      { timeout: 10000 },
+    );
+    expect(await degreeOptions(page)).toContain("PhD");
+
+    await pickRegion(page, "Russia");
+    const ru = await degreeOptions(page);
+    expect(ru).toContain("Specialist degree");
+    expect(ru).toContain("Candidate of Sciences");
+    expect(ru).not.toContain("PhD");
+
+    await pickRegion(page, "Not specified");
+    const plain = await degreeOptions(page);
+    expect(plain).toContain("PhD");
+    expect(plain).not.toContain("Specialist degree");
   });
 });

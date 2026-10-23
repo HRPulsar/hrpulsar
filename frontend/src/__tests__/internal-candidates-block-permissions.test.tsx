@@ -28,11 +28,15 @@ const RUNS_HIRING = { "talent-market": "view", recruitment: "manage" };
 const READS_HIRING = { "talent-market": "view", recruitment: "view" };
 let sections: Record<string, string> = RUNS_HIRING;
 let payload: VacancyInternalCandidates = NOT_POSTED;
+// HRP-829 REDO: the ids GET /employees/card-access says the viewer may open.
+let openCards: string[] = [];
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {},
   api: {
-    get: vi.fn(() => Promise.resolve(payload)),
+    get: vi.fn((url: string) =>
+      Promise.resolve(url.startsWith("/employees/card-access") ? openCards : payload),
+    ),
     post: vi.fn(() => Promise.resolve(payload)),
   },
 }));
@@ -48,11 +52,13 @@ vi.mock("sonner", () => ({
 const { InternalCandidatesBlock } = await import(
   "@/components/recruitment/internal-candidates-block"
 );
+const { resetCardAccess } = await import("@/components/employees/employee-name");
 
 let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  resetCardAccess();
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -156,7 +162,9 @@ describe("Internal search switch and manual picks (HRP-678 / HRP-693)", () => {
     );
   });
 
-  it("labels a manually added employee below the bar instead of a dash", async () => {
+  // HRP-693 REDO (QA 20.10): no "added manually" label in any case - every
+  // row reads the talent market's percentage, however it got on the list.
+  it("shows every row's talent-market percentage and no manual label", async () => {
     await render(["recruiter"], {
       talent_card_id: "card-1",
       talent_card_status: "draft",
@@ -167,7 +175,7 @@ describe("Internal search switch and manual picks (HRP-678 / HRP-693)", () => {
           employee_id: "emp-1",
           employee_name: "Ada Byron",
           position_title: "Engineer",
-          match_score: null,
+          match_score: 62,
           status: "not_matched",
           candidate_id: null,
         },
@@ -181,23 +189,14 @@ describe("Internal search switch and manual picks (HRP-678 / HRP-693)", () => {
         },
       ],
     });
-    const badge = container.querySelector(
-      '[data-testid="vacancy-internal-candidate-manual-emp-1"]',
-    );
-    expect(badge).not.toBeNull();
-    expect(badge!.textContent).toContain("Added manually");
-    // The scored row keeps its percentage and gains no badge.
-    expect(
-      container.querySelector(
-        '[data-testid="vacancy-internal-candidate-manual-emp-2"]',
-      ),
-    ).toBeNull();
-    expect(container.textContent).toContain("84% match");
-    // The unscored row carries the label and no percentage.
-    const manualRow = container.querySelector(
-      '[data-testid="vacancy-internal-candidate-emp-1"]',
-    );
-    expect(manualRow!.textContent).not.toContain("% match");
+    const row = (id: string) =>
+      container.querySelector(`[data-testid="vacancy-internal-candidate-${id}"]`)!
+        .textContent;
+    // A manual pick below the bar and a matched row read the same way.
+    expect(row("emp-1")).toContain("62% match");
+    expect(row("emp-2")).toContain("84% match");
+    expect(container.textContent).not.toContain("Added manually");
+    expect(container.textContent).not.toContain("below the match bar");
   });
 });
 
@@ -301,9 +300,19 @@ const NAMED = (canView: boolean): VacancyInternalCandidates => ({
 const nameCell = () =>
   container.querySelector('[data-testid="vacancy-internal-candidate-emp-1-name"]');
 
+// HRP-829 REDO: whether the name links is the card rule's answer
+// (GET /employees/card-access), not the row's `can_view_profile`.
+async function renderNamed(canOpen: boolean, employees = "view") {
+  openCards = canOpen ? ["emp-1"] : [];
+  await render(["recruiter"], NAMED(!canOpen), { ...RUNS_HIRING, employees });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+}
+
 describe("Internal candidate name links (HRP-667)", () => {
   it("links the name when the viewer may open that profile", async () => {
-    await render(["recruiter"], NAMED(true));
+    await renderNamed(true);
     const cell = nameCell();
     expect(cell).not.toBeNull();
     expect(cell!.tagName).toBe("A");
@@ -312,11 +321,26 @@ describe("Internal candidate name links (HRP-667)", () => {
   });
 
   it("renders plain text when they may not", async () => {
-    await render(["recruiter"], NAMED(false));
+    await renderNamed(false);
     const cell = nameCell();
     expect(cell).not.toBeNull();
     expect(cell!.tagName).not.toBe("A");
     // The row itself is untouched — the shortlist is not narrowed.
     expect(cell!.textContent).toContain("Ada Byron");
+  });
+
+  it("is plain text with the employees section closed, unasked", async () => {
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.get).mockClear();
+    openCards = ["emp-1"];
+    roles = ["recruiter"];
+    payload = NAMED(true);
+    await render(["recruiter"], NAMED(true), RUNS_HIRING);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    expect(nameCell()!.tagName).not.toBe("A");
+    const urls = vi.mocked(api.get).mock.calls.map(([url]) => String(url));
+    expect(urls.some((url) => url.startsWith("/employees/card-access"))).toBe(false);
   });
 });

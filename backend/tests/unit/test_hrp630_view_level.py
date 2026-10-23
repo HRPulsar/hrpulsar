@@ -14,7 +14,8 @@ import uuid
 
 import pytest
 from app.modules.company.models import Division
-from app.modules.recruitment.models import QuestionSet
+from app.modules.recruitment.common import normalize_competence_id
+from app.modules.recruitment.models import QuestionSet, VacancyProfile
 
 from tests.unit.test_recruitment_manager_scope import _headers, _user
 from tests.unit.test_recruitment_section_access import (  # noqa: F401
@@ -134,12 +135,19 @@ async def test_the_hiring_roles_read_every_talent_card_at_view(auth_client, clie
 
 # HRP-629 / HRP-630 REDO (QA 12.10): a manager or hiring manager at ``view``
 # who is not on a round's evaluator list reads the sheets of a live round
-# (QA 09.10), and once the round is completed or archived its averages too -
-# the data row and each competence's round average. A live round's
-# averages stay closed to a non-evaluator below ``runs_rounds``.
+# (QA 09.10) and the round's averages - HRP-1081: live or closed alike.
 
 
 async def _scored_round(client, db, tenant, cv, evaluators=()):
+    # HRP-1075: a round completes once a profile competence carries a score.
+    db.add(
+        VacancyProfile(
+            tenant_id=tenant.id,
+            vacancy_id=cv.vacancy_id,
+            profile_data={"competences": [{"id": "craft", "name": "Craft"}]},
+        )
+    )
+    await db.commit()
     recruiter = _headers(await _user(db, tenant, "recruiter"))
     me = (await client.get("/api/auth/me", headers=recruiter)).json()["id"]
     created = await client.post(
@@ -154,7 +162,7 @@ async def _scored_round(client, db, tenant, cv, evaluators=()):
         assert added.status_code == 201, added.text
     listed = (await client.get(f"/api/v1/assessment-rounds/{rid}/assessments", headers=recruiter)).json()
     sheet = next(s["id"] for s in listed if s["evaluator_user_id"] == me)
-    competence = str(uuid.uuid4())
+    competence = str(normalize_competence_id("craft"))
     scored = await client.patch(
         f"/api/v1/assessments/{sheet}/competence-scores/{competence}",
         json={"score_value": 4, "score_source": "manual"},
@@ -165,17 +173,16 @@ async def _scored_round(client, db, tenant, cv, evaluators=()):
 
 
 @pytest.mark.parametrize("viewer", ["mgr", "hm"])
-async def test_a_non_evaluator_reads_a_closed_rounds_averages(client, db, tenant, hiring, viewer):  # noqa: F811
+async def test_a_non_evaluator_reads_a_rounds_averages_live_or_closed(client, db, tenant, hiring, viewer):  # noqa: F811
     rid, recruiter, competence = await _scored_round(client, db, tenant, hiring["mine_cv"])
     v = _headers(hiring[viewer])
     aggregate = f"/api/v1/assessment-rounds/{rid}/aggregate"
+    # HRP-1081: the one sheet a non-evaluator reads carries the round
+    # averages and who gave which score while the round is live, too.
     live = await client.get(aggregate, headers=v)
-    if viewer == "hm":
-        # Below ``runs_rounds`` a live round's averages stay closed.
-        assert _refused(live), live.text
-    else:
-        # The manager role runs rounds (HRP-830) - unchanged.
-        assert live.status_code == 200, live.text
+    assert live.status_code == 200, live.text
+    assert [(c["competence_id"], c["average"]) for c in live.json()["competences"]] == [(competence, 4.0)]
+    assert [s["score"] for s in live.json()["competences"][0]["scorers"]] == [4]
     for action in ("complete", "archive"):
         closed = await client.patch(f"/api/v1/assessment-rounds/{rid}", json={"action": action}, headers=recruiter)
         assert closed.status_code == 200, closed.text

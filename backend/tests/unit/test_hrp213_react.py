@@ -270,7 +270,7 @@ async def _seed_gap_templates(db: AsyncSession) -> None:
         ),
         (
             "talent_market.plan_requested",
-            "{{ employee_name }} requests a development plan for {{ card_title }}",
+            "{{ employee_name }} asked for a development plan",
             "<p>{{ employee_name }} requests a development plan for "
             "{{ card_title }}.</p>",
         ),
@@ -579,12 +579,14 @@ class TestRequestDevelopmentPlan:
         assert theirs[0][1]["link"] == (
             f"/talent-market/{card_dict['id']}?candidate={row.id}"
         )
-        # Same fix on the manager's side: the entry says what was asked, and
-        # (QA 10.09) for which card — the bell shows only the title.
-        assert theirs[0][1]["title"].endswith(
+        # Same fix on the manager's side: the entry says what was asked; the
+        # title is the seed subject again (QA 21.10, HRP-714) and the text
+        # names the card (QA 10.09).
+        assert theirs[0][1]["title"].endswith("asked for a development plan")
+        assert (
             f"requests a development plan for {card_dict['title']}"
+            in theirs[0][1]["message"]
         )
-        assert "requests a development plan for" in theirs[0][1]["message"]
         assert [
             code for _, _, code in letters if code == "talent_market.plan_requested"
         ] == ["talent_market.plan_requested"]

@@ -590,6 +590,10 @@ export function CandidateInterviewsSection({
             <p className="mt-1 text-xs text-muted-foreground">
               {t("candidateInterviewsDropzoneHint")}
             </p>
+            {/* HRP-1085: the transcript label hint every entry point shares. */}
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("interviewTranscriptLabelsHint")}
+            </p>
             <input
               ref={inputRef}
               type="file"

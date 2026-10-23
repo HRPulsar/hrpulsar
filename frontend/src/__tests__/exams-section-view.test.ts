@@ -19,8 +19,10 @@ const massExamPage = readFileSync(
 
 describe("the two views of the exams section (HRP-823)", () => {
   it("picks the manager view by the section level, not by a role flag", () => {
-    expect(examsPage).toContain('if (canManageSection("exams")) {');
-    expect(examsPage).toContain("return <ManagerExamsView />;");
+    // QA 13.10: `manage` adds the mass exams' tab ahead of one's own two.
+    expect(examsPage).toContain('const manage = canManageSection("exams");');
+    expect(examsPage).toContain('useSectionTab(manage ? ["all", "mine", "todo"] : ["mine", "todo"])');
+    expect(examsPage).toContain("return <ManagerExamsView tabs={tabs} />;");
     expect(examsPage).not.toMatch(/\bcanManage\b(?!Section)/);
   });
 
@@ -33,6 +35,6 @@ describe("the two views of the exams section (HRP-823)", () => {
   it("falls back to one's own exams rather than to nothing", () => {
     // No gate of its own: the page sits outside the section gate (see
     // lib/sections.ts), so `none` lands here too.
-    expect(examsPage).toContain("return <EmployeeExamsView />;");
+    expect(examsPage).toContain("return <EmployeeExamsView key={tab} tab={tab} tabs={tabs} onChanged={todo.reload} />;");
   });
 });

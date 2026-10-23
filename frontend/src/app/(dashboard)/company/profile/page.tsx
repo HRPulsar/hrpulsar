@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,8 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { CompanyTabs } from "@/components/company/company-tabs";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useAuth } from "@/context/auth-context";
+import { REGIONS } from "@/lib/regions";
 
 const COMPANY_SIZES = [
   "1-10",
@@ -37,6 +39,7 @@ const COMPANY_SIZES = [
 ];
 
 const NO_SIZE = "__none__";
+const NO_REGION = "__none__";
 
 interface CompanyProfile {
   id: string;
@@ -46,6 +49,8 @@ interface CompanyProfile {
   company_size: string | null;
   website: string | null;
   description: string | null;
+  // HRP-1066: ISO 3166-1 alpha-2; picks regional sets (education levels).
+  region: string | null;
   logo_file_id: string | null;
   logo_url: string | null;
   // HRP-623: show the grade on the directory card colleagues can open.
@@ -58,6 +63,16 @@ export default function CompanyProfilePage() {
   const t = useTranslations("company");
   const tc = useTranslations("common");
   const { canAdminister } = usePermissions();
+  const { refresh: refreshUser } = useAuth();
+  const locale = useLocale();
+  const regionNames = useMemo(() => {
+    const names = new Intl.DisplayNames([locale], { type: "region" });
+    return new Map(
+      REGIONS.map((code) => [code, names.of(code) ?? code] as const).sort(
+        (a, b) => a[1].localeCompare(b[1], locale),
+      ),
+    );
+  }, [locale]);
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -69,6 +84,7 @@ export default function CompanyProfilePage() {
   const [form, setForm] = useState({
     industry: "",
     company_size: "",
+    region: "",
     website: "",
     description: "",
     directory_show_grades: false,
@@ -83,6 +99,7 @@ export default function CompanyProfilePage() {
       setForm({
         industry: data.industry ?? "",
         company_size: data.company_size ?? "",
+        region: data.region ?? "",
         website: data.website ?? "",
         description: data.description ?? "",
         directory_show_grades: data.directory_show_grades,
@@ -108,6 +125,7 @@ export default function CompanyProfilePage() {
       const payload = {
         industry: form.industry.trim() || null,
         company_size: form.company_size || null,
+        region: form.region || null,
         website: form.website.trim() || null,
         description: form.description.trim() || null,
         directory_show_grades: form.directory_show_grades,
@@ -122,6 +140,8 @@ export default function CompanyProfilePage() {
         "/settings/company-profile",
         payload,
       );
+      // The employee card reads the region from /auth/me.
+      if (data.region !== profile?.region) void refreshUser();
       setProfile(data);
       toast.success(t("toastProfileSaved"));
     } catch (err) {
@@ -410,6 +430,37 @@ export default function CompanyProfilePage() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="company-profile-region">{t("region")}</Label>
+                <Select
+                  value={form.region || NO_REGION}
+                  onValueChange={(v) =>
+                    setForm({ ...form, region: v === NO_REGION ? "" : v })
+                  }
+                  disabled={readOnly}
+                >
+                  <SelectTrigger
+                    id="company-profile-region"
+                    className="w-full"
+                    data-testid="company-profile-input-region"
+                  >
+                    <SelectValue>
+                      {form.region
+                        ? (regionNames.get(form.region) ?? form.region)
+                        : t("notSpecified")}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_REGION}>{t("notSpecified")}</SelectItem>
+                    {[...regionNames].map(([code, name]) => (
+                      <SelectItem key={code} value={code}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{t("regionHint")}</p>
               </div>
             </div>
 

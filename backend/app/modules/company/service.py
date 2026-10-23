@@ -31,6 +31,7 @@ from app.modules.company.models import (
     TenantSectionSetting,
 )
 from app.modules.company.schemas import (
+    REGIONS,
     CompanyProfileUpdate,
     DivisionCreate,
     DivisionTree,
@@ -374,6 +375,29 @@ async def get_division_tree(
         else:
             roots.append(node)
 
+    # HRP-942: one grouped count for the whole tree, summed up each branch.
+    # Only people on the books (active, on leave) - the tree is read by every
+    # role, and the directory lists exactly those to anyone outside their own
+    # subtree; counting leavers would hand rank-and-file the very aggregate
+    # the directory withholds.
+    from app.modules.employee.service import DIRECTORY_STATUSES
+
+    rows = await db.execute(
+        select(Employee.division_id, func.count(Employee.id))
+        .where(
+            Employee.tenant_id == tenant_id,
+            Employee.status.in_(DIRECTORY_STATUSES),
+        )
+        .group_by(Employee.division_id)
+    )
+    own = dict(rows.tuples().all())
+
+    def count(node: DivisionTree) -> int:
+        node.employee_count = own.get(node.id, 0) + sum(map(count, node.children))
+        return node.employee_count
+
+    for root in roots:
+        count(root)
     return roots
 
 
@@ -654,6 +678,7 @@ async def get_company_profile(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
         "logo_file_id": tenant.logo_file_id,
         "logo_url": logo_url,
         "default_locale": tenant.default_locale,
+        "region": tenant.region,
         "directory_show_grades": tenant.directory_show_grades,
         # W6: the Coverage ROI rate. Omitting it here answered null on a
         # tenant that had set one, and the next save of any other field
@@ -676,6 +701,8 @@ async def update_company_profile(
         payload["default_locale"] = payload["default_locale"].strip().lower()
         if payload["default_locale"] not in settings.available_locales_list:
             raise AppError("unsupported_default_locale", status.HTTP_400_BAD_REQUEST)
+    if payload.get("region") is not None and payload["region"] not in REGIONS:
+        raise AppError("unsupported_region", status.HTTP_400_BAD_REQUEST)
     for field, value in payload.items():
         setattr(tenant, field, value)
     await db.commit()
@@ -1057,9 +1084,10 @@ def _section_override_queries(tenant_id: uuid.UUID) -> tuple[Select, Select]:
 
 def _section_overrides_from(rows, hidden) -> tuple[dict[tuple[str, str], Level], set[str]]:
     # A row the registry's flags now forbid (stored before a section became
-    # never_hidden / admin_locked) is dropped like an unknown code: honoured
-    # it would hide or lower what the registry pins, and the matrix screen
-    # would send back state its own save refuses.
+    # never_hidden / admin_locked, or before the role got a ceiling there,
+    # HRP-831) is dropped like an unknown code: honoured it would hide,
+    # lower or raise what the registry pins, and the matrix screen would
+    # send back state its own save refuses.
     overrides: dict[tuple[str, str], Level] = {
         (section, role): level  # type: ignore[misc]
         for section, role, level in rows
@@ -1067,6 +1095,7 @@ def _section_overrides_from(rows, hidden) -> tuple[dict[tuple[str, str], Level],
         and role in ROLE_CODES
         and level in sections.LEVELS
         and not (role == "admin" and SECTIONS_BY_CODE[section].admin_locked)
+        and sections.LEVEL_ORDER[level] <= sections.LEVEL_ORDER[SECTIONS_BY_CODE[section].ceiling(role)]
     }
     return overrides, {
         s
@@ -1102,6 +1131,7 @@ def _matrix(overrides: dict[tuple[str, str], Level], hidden: set[str]) -> dict:
                 "hidden": s.code in hidden,
                 "admin_locked": s.admin_locked,
                 "never_hidden": s.never_hidden,
+                "ceilings": dict(s.ceilings),
                 "defaults": dict(s.defaults),
                 "levels": {r: overrides.get((s.code, r), s.defaults[r]) for r in ROLE_CODES},
             }
@@ -1165,6 +1195,8 @@ async def update_section_access(
         for role, level in row.levels.items():
             if s.admin_locked and role == "admin" and level != "manage":
                 raise AppError("section_access_admin_locked", status.HTTP_400_BAD_REQUEST)
+            if sections.LEVEL_ORDER[level] > sections.LEVEL_ORDER[s.ceiling(role)]:
+                raise AppError("section_access_role_ceiling", status.HTTP_400_BAD_REQUEST)
             if level != s.defaults[role]:
                 new_overrides[(s.code, role)] = level
 

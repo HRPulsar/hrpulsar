@@ -5,7 +5,7 @@
 // agent type to what an agent of that type does.
 
 import type { ReactNode } from "react";
-import Link from "next/link";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { useTranslations } from "next-intl";
 import {
   Popover,
@@ -31,10 +31,9 @@ export function around(sentence: (arg: string) => string, node: ReactNode): Reac
   );
 }
 
-/** A person's name as a link to the employee card. No access check here: the
- * card answers for itself - a colleague outside the reader's HR scope opens
- * as the directory card (HRP-623), anyone else as "not found". A person
- * without an id stays plain text. */
+/** A person's name as a link to the employee card where the reader may open
+ * it (HRP-829 REDO, `EmployeeName`) - a colleague outside the reader's HR
+ * scope opens as the directory card (HRP-623) - and plain text otherwise. */
 export function PersonLink({
   person,
   testId,
@@ -42,15 +41,14 @@ export function PersonLink({
   person: { employee_id?: string | null; name: string };
   testId: string;
 }) {
-  if (!person.employee_id) return <>{person.name}</>;
   return (
-    <Link
-      href={`/employees/${person.employee_id}`}
-      className="text-foreground underline-offset-4 hover:underline"
-      data-testid={testId}
+    <EmployeeName
+      employeeId={person.employee_id}
+      linkClassName="text-foreground underline-offset-4 hover:underline"
+      testId={testId}
     >
       {person.name}
-    </Link>
+    </EmployeeName>
   );
 }
 

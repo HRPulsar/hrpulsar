@@ -464,15 +464,19 @@ export function CompetenceScoreList({
                   })}
                 </div>
               )}
-              <textarea
-                value={score?.comment ?? ""}
-                readOnly={disabled}
-                onChange={(e) => onCompetenceComment(comp.id, e.target.value)}
-                placeholder={t("evalSheetCommentPlaceholder")}
-                className="w-full rounded-md border bg-background p-2 text-xs"
-                rows={2}
-                data-testid={`assessment-competence-comment-${comp.id}`}
-              />
+              {/* HRP-1081: a read-only sheet with no note has nothing to show
+                  here - an empty box asking for a comment reads as input. */}
+              {(!disabled || score?.comment) && (
+                <textarea
+                  value={score?.comment ?? ""}
+                  readOnly={disabled}
+                  onChange={(e) => onCompetenceComment(comp.id, e.target.value)}
+                  placeholder={t("evalSheetCommentPlaceholder")}
+                  className="w-full rounded-md border bg-background p-2 text-xs"
+                  rows={2}
+                  data-testid={`assessment-competence-comment-${comp.id}`}
+                />
+              )}
             </div>
           </details>
         );

@@ -12,7 +12,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { GripVertical } from "lucide-react";
+import { GripVertical, Search } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { ApiError, api } from "@/lib/api";
 import { getBrandName } from "@/lib/brand";
@@ -24,7 +24,7 @@ import {
 } from "@/lib/active-ai-session-route";
 import { ActiveSessionConflictDialog } from "@/components/competence-generation/ActiveSessionConflictDialog";
 import type { CompetenceGroupTree, DictionaryItem } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LoadErrorState } from "@/components/load-error-state";
@@ -58,6 +58,7 @@ import { TreeExpandControls } from "@/components/ui/tree-expand-controls";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useAuth } from "@/context/auth-context";
 import { useTreeExpansion } from "@/hooks/use-tree-expansion";
+import { matchCompetenceTree, type CompetenceTreeMatch } from "@/lib/competence-tree-search";
 import { toast } from "sonner";
 import {
   CheckCircle2,
@@ -144,6 +145,7 @@ function GroupNode({
   onOpenActiveSession,
   isExpanded,
   onToggleExpand,
+  match,
 }: {
   group: CompetenceGroupTree;
   depth?: number;
@@ -166,6 +168,8 @@ function GroupNode({
   // buttons can flip every group at once.
   isExpanded: (groupId: string) => boolean;
   onToggleExpand: (groupId: string) => void;
+  // HRP-1082: what the search keeps on screen; null shows everything.
+  match: CompetenceTreeMatch | null;
 }) {
   const t = useTranslations("competences");
   // HRP-827: `view` reads the tree; authoring is `manage`, deleting and AI
@@ -414,45 +418,50 @@ function GroupNode({
 
       {expanded && (
         <>
-          {group.competences.map((comp) => (
-            <CompetenceRow
-              key={comp.id}
-              comp={comp as CompetenceItem}
-              depth={depth}
-              generationLocked={generationLocked}
-              generationLockedTargetId={generationLockedTargetId}
-              onEditCompetence={onEditCompetence}
-              onDeleteCompetence={onDeleteCompetence}
-              onTogglePublishCompetence={onTogglePublishCompetence}
-              onGenerateIndicators={onGenerateIndicators}
-              activeSessionsMap={activeSessionsMap}
-              onOpenActiveSession={onOpenActiveSession}
-            />
-          ))}
-          {group.children.map((child) => (
-            <GroupNode
-              key={child.id}
-              group={child}
-              depth={depth + 1}
-              onEditGroup={onEditGroup}
-              onDeleteGroup={onDeleteGroup}
-              onDeactivateGroup={onDeactivateGroup}
-              onAddChild={onAddChild}
-              onAddCompetence={onAddCompetence}
-              onBulkAddCompetences={onBulkAddCompetences}
-              onEditCompetence={onEditCompetence}
-              onDeleteCompetence={onDeleteCompetence}
-              onTogglePublishCompetence={onTogglePublishCompetence}
-              onGenerateGroup={onGenerateGroup}
-              onGenerateIndicators={onGenerateIndicators}
-              generationLocked={generationLocked}
-              generationLockedTargetId={generationLockedTargetId}
-              activeSessionsMap={activeSessionsMap}
-              onOpenActiveSession={onOpenActiveSession}
-              isExpanded={isExpanded}
-              onToggleExpand={onToggleExpand}
-            />
-          ))}
+          {group.competences
+            .filter((comp) => !match || match.competences.has(comp.id))
+            .map((comp) => (
+              <CompetenceRow
+                key={comp.id}
+                comp={comp as CompetenceItem}
+                depth={depth}
+                generationLocked={generationLocked}
+                generationLockedTargetId={generationLockedTargetId}
+                onEditCompetence={onEditCompetence}
+                onDeleteCompetence={onDeleteCompetence}
+                onTogglePublishCompetence={onTogglePublishCompetence}
+                onGenerateIndicators={onGenerateIndicators}
+                activeSessionsMap={activeSessionsMap}
+                onOpenActiveSession={onOpenActiveSession}
+              />
+            ))}
+          {group.children
+            .filter((child) => !match || match.groups.has(child.id))
+            .map((child) => (
+              <GroupNode
+                key={child.id}
+                group={child}
+                depth={depth + 1}
+                match={match}
+                onEditGroup={onEditGroup}
+                onDeleteGroup={onDeleteGroup}
+                onDeactivateGroup={onDeactivateGroup}
+                onAddChild={onAddChild}
+                onAddCompetence={onAddCompetence}
+                onBulkAddCompetences={onBulkAddCompetences}
+                onEditCompetence={onEditCompetence}
+                onDeleteCompetence={onDeleteCompetence}
+                onTogglePublishCompetence={onTogglePublishCompetence}
+                onGenerateGroup={onGenerateGroup}
+                onGenerateIndicators={onGenerateIndicators}
+                generationLocked={generationLocked}
+                generationLockedTargetId={generationLockedTargetId}
+                activeSessionsMap={activeSessionsMap}
+                onOpenActiveSession={onOpenActiveSession}
+                isExpanded={isExpanded}
+                onToggleExpand={onToggleExpand}
+              />
+            ))}
         </>
       )}
     </div>
@@ -1289,6 +1298,11 @@ export default function CompetencesPage() {
     allExpanded: allGroupsExpanded,
     allCollapsed: allGroupsCollapsed,
   } = useTreeExpansion(allGroupIds, "all");
+  // HRP-1082: a search over group and competence titles. Typing opens the
+  // tree, so a match inside a collapsed group is on screen at once.
+  const [search, setSearch] = useState("");
+  const match = useMemo(() => matchCompetenceTree(tree, search), [tree, search]);
+  const shownGroups = tree.filter((g) => !match || match.groups.has(g.id));
 
   if (loading) {
     return (
@@ -1346,8 +1360,21 @@ export default function CompetencesPage() {
       </div>
 
       <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">{t("competenceTree")}</CardTitle>
+        <CardHeader className="flex flex-wrap items-center justify-between gap-3">
+          <div className="relative min-w-48 flex-1 sm:max-w-sm">
+            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              data-testid="competences-input-search"
+              type="search"
+              placeholder={t("pickerSearchPlaceholder")}
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                if (e.target.value.trim()) expandAllGroups();
+              }}
+              className="pl-8"
+            />
+          </div>
           {/* HRP-109: bulk expand/collapse for the whole tree. */}
           <TreeExpandControls
             expandAll={expandAllGroups}
@@ -1367,13 +1394,21 @@ export default function CompetencesPage() {
             <p className="py-4 text-center text-sm text-muted-foreground">
               {t("emptyGroups")}
             </p>
+          ) : shownGroups.length === 0 ? (
+            <p
+              className="py-4 text-center text-sm text-muted-foreground"
+              data-testid="competences-search-empty"
+            >
+              {t("searchNoMatches")}
+            </p>
           ) : (
             <DndContext sensors={dndSensors} onDragEnd={handleDragEnd}>
               <div className="-mx-3">
-                {tree.map((group) => (
+                {shownGroups.map((group) => (
                   <GroupNode
                     key={group.id}
                     group={group}
+                    match={match}
                     onEditGroup={openEditGroup}
                     onDeleteGroup={openDeleteGroup}
                     onDeactivateGroup={toggleGroupActive}

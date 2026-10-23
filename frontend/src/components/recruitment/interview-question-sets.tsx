@@ -60,6 +60,7 @@ import type { CompetenceItem } from "@/lib/types";
 import { inlineEditKeys, useInlineEdit } from "@/hooks/use-inline-edit";
 import { AddFromCompetencyDialog } from "./add-from-competency-dialog";
 import type { NewQuestionPayload } from "./question-payload";
+import { questionSetName } from "./question-set-name";
 
 import {
   GOAL_LABEL_KEYS,
@@ -773,7 +774,7 @@ export function InterviewQuestionSets({
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              {s.name}
+              {questionSetName(t, s.name)}
               <span className="ml-1 text-xs text-muted-foreground">
                 ({activeQuestions(s).length})
               </span>
@@ -826,7 +827,7 @@ export function InterviewQuestionSets({
           <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
             <div className="space-y-1">
               <CardTitle className="flex items-center gap-2 text-base">
-                {currentSet.name}
+                {questionSetName(t, currentSet.name)}
                 <Badge
                   variant="outline"
                   className="text-xs uppercase tracking-wide"

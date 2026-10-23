@@ -210,6 +210,9 @@ export interface ResumeDedupPreviewItem {
   parsed_email: string | null;
   existing_candidate_id: string | null;
   existing_candidate_full_name: string | null;
+  /** HRP-830 REDO: the email belongs to a candidate the caller cannot
+   *  reach - flagged without naming them; a recruiter or HR attaches them. */
+  duplicate_elsewhere?: boolean;
 }
 
 export interface BatchFinalizeFile {
@@ -794,9 +797,10 @@ export interface VacancyInternalCandidate {
   /** HRP-711 — set once this employee is in the vacancy's own pipeline;
    *  the row then links to the candidate instead of offering Add. */
   candidate_id: string | null;
-  /** HRP-667 REDO — whether this viewer may open the employee's profile.
-   *  The shortlist is the same for everyone who may read the vacancy
-   *  (HRP-703); only the link is scoped. */
+  /** HRP-667 REDO — whether the employee is in this viewer's HR read scope.
+   *  The name link follows the card rule instead (EmployeeName, HRP-829
+   *  REDO). The shortlist is the same for everyone who may read the vacancy
+   *  (HRP-703). */
   can_view_profile?: boolean;
 }
 

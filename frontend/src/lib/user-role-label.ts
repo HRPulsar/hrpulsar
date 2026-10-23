@@ -116,3 +116,19 @@ export function resolveRoleLabel(
   const key = SYSTEM_ROLE_KEYS[code];
   return key ? translate(key) : code.replace(/_/g, " ");
 }
+
+/**
+ * HRP-1064/1065: the label of one role code wherever a single role is shown
+ * - the invite form, the editable Pending cell and the read-only cell alike.
+ * A system role comes from the catalog; a tenant's custom role reads its own
+ * name from `roles`, and a code nobody knows stays as it is.
+ */
+export function roleCodeLabel(
+  code: string,
+  roles: readonly { code: string; name: string }[],
+  translate: (key: string) => string,
+): string {
+  const key = SYSTEM_ROLE_KEYS[code];
+  if (key) return translate(key);
+  return roles.find((r) => r.code === code)?.name ?? code;
+}

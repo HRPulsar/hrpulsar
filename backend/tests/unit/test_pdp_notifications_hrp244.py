@@ -13,6 +13,7 @@ post-launch gate for cancellations.
 
 import uuid
 from datetime import date
+from functools import partial
 
 import pytest
 from app.core.email_templates import (
@@ -39,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 class TestHRP244Templates:
     def test_review_submitted_subject_includes_title(self):
         subject, html = render_pdp_review_submitted_email(
-            "Ivan Owner", pdp_title="Q3 Growth Plan"
+            "Ivan Owner", pdp_title="Q3 Growth Plan", pdp_id="p1"
         )
         assert (
             subject
@@ -49,12 +50,12 @@ class TestHRP244Templates:
         assert "Q3 Growth Plan" in html
 
     def test_review_submitted_no_title_falls_back(self):
-        subject, _ = render_pdp_review_submitted_email("Ivan Owner")
+        subject, _ = render_pdp_review_submitted_email("Ivan Owner", pdp_id="p1")
         assert subject == "Your employee's development plan submitted for review"
 
     def test_review_submitted_escapes_title(self):
         _, html = render_pdp_review_submitted_email(
-            "Ivan Owner", pdp_title="<script>alert(1)</script>"
+            "Ivan Owner", pdp_title="<script>alert(1)</script>", pdp_id="p1"
         )
         assert "<script>" not in html
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
@@ -80,7 +81,7 @@ class TestHRP244Templates:
 
     def test_done_to_reviewer(self):
         subject, html = render_pdp_done_to_reviewer_email(
-            "Ivan Owner", pdp_title="Q3 Growth Plan"
+            "Ivan Owner", pdp_title="Q3 Growth Plan", pdp_id="p1"
         )
         assert subject == "Your employee's development plan completed: Q3 Growth Plan"
         assert "Ivan Owner" in html
@@ -94,7 +95,7 @@ class TestHRP244Templates:
 
     def test_cancelled_to_reviewer(self):
         subject, html = render_pdp_cancelled_to_reviewer_email(
-            "Ivan Owner", pdp_title="Q3 Growth Plan"
+            "Ivan Owner", pdp_title="Q3 Growth Plan", pdp_id="p1"
         )
         assert subject == "Your employee's development plan cancelled: Q3 Growth Plan"
         assert "Ivan Owner" in html
@@ -105,14 +106,14 @@ class TestHRP244Templates:
         # generic fallback name used to collide into the same word twice).
         for render in (
             render_pdp_done_to_employee_email,
-            render_pdp_done_to_reviewer_email,
+            partial(render_pdp_done_to_reviewer_email, pdp_id="p1"),
             render_pdp_cancelled_to_employee_email,
-            render_pdp_cancelled_to_reviewer_email,
+            partial(render_pdp_cancelled_to_reviewer_email, pdp_id="p1"),
         ):
             for title in ("Q3 Growth Plan", None):
                 subject, html = render(None, pdp_title=title)
-                assert "The employee" not in html, (render.__name__, title)
-                assert "{employee_name}" not in html, (render.__name__, title)
+                assert "The employee" not in html, (render, title)
+                assert "{employee_name}" not in html, (render, title)
                 if title:
                     assert title in subject
 
@@ -120,7 +121,9 @@ class TestHRP244Templates:
         # HRP-584 review: the name is user-editable profile data and lands
         # inside markup — it must be escaped like the title next to it.
         _, html = render_pdp_done_to_reviewer_email(
-            '</strong><a href="http://evil">x</a>', pdp_title="Q3 Growth Plan"
+            '</strong><a href="http://evil">x</a>',
+            pdp_title="Q3 Growth Plan",
+            pdp_id="p1",
         )
         assert '<a href="http://evil">' not in html
         assert "&lt;a href=&#34;http://evil&#34;&gt;" in html

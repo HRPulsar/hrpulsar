@@ -91,6 +91,8 @@ async def test_start_provisions_demo_tenant_with_seed(
     assert tenant.is_demo is True
     assert tenant.expires_at is not None
     assert tenant.last_active_at is not None
+    # HRP-1066: only a Russian demo carries a region.
+    assert tenant.region is None
 
     # Counts loosened from the original investor seed (3/8/2) — HRP-281
     # extends the demo with additional vacancies / candidates /
@@ -157,6 +159,30 @@ def test_demo_content_language_falls_back_for_unsupported_locale(monkeypatch):
 
     monkeypatch.setattr(settings, "default_locale", "de")
     assert demo_service._demo_content_language() == "de"
+
+
+def test_demo_region_follows_the_seed_locale(monkeypatch):
+    """HRP-1066: only a Russian demo is born with a region (RU), so its
+    Education dialog offers the Russian levels."""
+    for locale in ("en", "de"):
+        monkeypatch.setattr(settings, "default_locale", locale)
+        assert demo_service._demo_region() is None
+
+
+@pytest.mark.asyncio
+async def test_start_on_ru_sets_the_region(
+    client: AsyncClient, admin_role, enable_demo, monkeypatch, db: AsyncSession
+):
+    # The ru seed catalog ships with the enterprise edition.
+    pytest.importorskip("ee")
+    monkeypatch.setattr(settings, "available_locales", "en,ru")
+    monkeypatch.setattr(settings, "default_locale", "ru")
+
+    resp = await client.post("/api/demo/start", json={})
+    assert resp.status_code == 201, resp.text
+    tenant = await db.get(Tenant, uuid.UUID(resp.json()["tenant_id"]))
+    assert tenant is not None
+    assert tenant.region == "RU"
 
 
 @pytest.mark.asyncio

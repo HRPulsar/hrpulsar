@@ -73,8 +73,11 @@ test.describe("Coverage — row links", () => {
     await expect(lastRow).toBeInViewport();
     await expect(lastRow).toBeFocused();
 
-    // (a) The executor's name opens the card.
-    await page.getByTestId(`coverage-link-executor-${signed.id}`).click();
+    // (a) The executor's name opens the card - a link once the card check
+    // answers (HRP-829 REDO), text until then.
+    const executor = page.getByTestId(`coverage-link-executor-${signed.id}`);
+    await expect(executor).toHaveAttribute("href", `/employees/${controller.id}`);
+    await executor.click();
     await expect(page).toHaveURL(new RegExp(`/employees/${controller.id}$`));
     await expect(page.getByTestId("employee-name")).toBeVisible({ timeout: 10000 });
 
@@ -89,7 +92,9 @@ test.describe("Coverage — row links", () => {
         "href",
         `/employees/${colleague.employeeId}`,
       );
-      await reader.getByTestId(`coverage-link-executor-${signed.id}`).click();
+      const readerExecutor = reader.getByTestId(`coverage-link-executor-${signed.id}`);
+      await expect(readerExecutor).toHaveAttribute("href", `/employees/${controller.id}`);
+      await readerExecutor.click();
       await expect(reader).toHaveURL(new RegExp(`/employees/${controller.id}$`));
       // The directory card (HRP-623): who the person is, nothing to edit.
       await expect(reader.getByTestId("employee-name")).toBeVisible({ timeout: 10000 });

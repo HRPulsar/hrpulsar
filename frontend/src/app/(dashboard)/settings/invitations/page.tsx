@@ -13,6 +13,7 @@ import type {
   Role,
 } from "@/lib/types";
 import { flattenTree } from "@/lib/utils";
+import { roleCodeLabel } from "@/lib/user-role-label";
 import { formatDate } from "@/lib/date-format";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -122,6 +123,7 @@ function InvitationsPageContent() {
   const t = useTranslations("settings");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
+  const tRole = useTranslations("sidebar");
   const { user } = useAuth();
   const isAdmin = !!(
     user?.is_platform_admin || user?.roles?.includes("admin")
@@ -144,6 +146,8 @@ function InvitationsPageContent() {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [total, setTotal] = useState(0);
   const [roles, setRoles] = useState<Role[]>([]);
+  // HRP-1064/1065: one label for a role code in the form and in both cells.
+  const roleLabel = (code: string) => roleCodeLabel(code, roles, tRole);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
@@ -460,24 +464,21 @@ function InvitationsPageContent() {
                                 className="h-8 w-[140px]"
                                 data-testid={`invitations-row-${inv.id}-edit-role`}
                               >
-                                <SelectValue>
-                                  {roles.find((r) => r.code === inv.role_code)?.name ??
-                                    inv.role_code}
-                                </SelectValue>
+                                <SelectValue>{roleLabel(inv.role_code)}</SelectValue>
                               </SelectTrigger>
                               <SelectContent>
                                 {roles
                                   .filter((r) => allowedRoleCodes.has(r.code))
                                   .map((r) => (
                                     <SelectItem key={r.id} value={r.code}>
-                                      {r.name}
+                                      {roleLabel(r.code)}
                                     </SelectItem>
                                   ))}
                               </SelectContent>
                             </Select>
                           ) : (
                             <span data-testid={`invitations-row-${inv.id}-role`}>
-                              {inv.role_code}
+                              {roleLabel(inv.role_code)}
                             </span>
                           )}
                         </TableCell>
@@ -644,16 +645,14 @@ function InvitationsPageContent() {
                 }
               >
                 <SelectTrigger className="w-full" data-testid="invitations-modal-invite-select-role">
-                  <SelectValue>
-                    {roles.find((r) => r.code === inviteForm.role_code)?.name ?? ""}
-                  </SelectValue>
+                  <SelectValue>{roleLabel(inviteForm.role_code)}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {roles
                     .filter((r) => allowedRoleCodes.has(r.code))
                     .map((r) => (
                       <SelectItem key={r.id} value={r.code}>
-                        {r.name}
+                        {roleLabel(r.code)}
                       </SelectItem>
                     ))}
                 </SelectContent>

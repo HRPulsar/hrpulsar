@@ -10,6 +10,7 @@ to the routes (the section is self-guarded: three of those are POSTs).
 """
 
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,6 +74,10 @@ async def create_card(
 @router.post("/talent-market/search")
 async def search_cards(
     data: SearchRequest,
+    # HRP-824 (QA 13.10): the two tabs every level opens on /talent-market -
+    # "I'm a candidate" and "I'm appointed", the caller's own employee row
+    # whatever their level or read scope.
+    tab: Literal["mine", "appointed"] | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     scope: TalentScope = Depends(talent_scope),
@@ -99,6 +104,7 @@ async def search_cards(
         # `reacted_by_me` so the Reacted chip can render on previews even
         # for admins (admins are sometimes employees too).
         viewer_employee_id=scope.employee_id,
+        tab=tab,
     )
     return {"items": items, "total": total}
 

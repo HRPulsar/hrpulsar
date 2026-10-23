@@ -16,6 +16,7 @@ import type {
   VacancyProfile,
 } from "@/lib/types";
 import { interviewStatusLabel } from "@/lib/recruitment-types";
+import { interviewMediaBlock } from "@/lib/interview-upload";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -76,6 +77,9 @@ export default function InterviewDetailPage() {
   const tc = useTranslations("common");
   const [interview, setInterview] = useState<Interview | null>(null);
   const [media, setMedia] = useState<InterviewMediaURL | null>(null);
+  // HRP-1085: a link that could not be issued must not leave the block
+  // spinning on "Fetching recording link…" forever.
+  const [mediaFailed, setMediaFailed] = useState(false);
   const [profile, setProfile] = useState<VacancyProfile | null>(null);
   const [cvCtx, setCvCtx] = useState<CandidateVacancy | null>(null);
   const [loading, setLoading] = useState(true);
@@ -112,21 +116,42 @@ export default function InterviewDetailPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerRef = useRef<HTMLMediaElement | null>(null);
 
+  // HRP-980: Download is `manage`'s, like the backend's `runs_hiring`, and
+  // a paused vacancy does not lock it - nothing changes. Every click signs
+  // a fresh link that saves the file under its name: the playback one
+  // expires after 5 minutes.
+  async function downloadRecording() {
+    try {
+      const { url } = await api.get<InterviewMediaURL>(
+        `/recruitment/interviews/${id}/media-download-url`,
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.rel = "noopener";
+      a.click();
+    } catch {
+      toast.error(t("playerDownloadFailed"));
+    }
+  }
+
   const refresh = useCallback(async () => {
     try {
       const data = await api.get<Interview>(
         `/recruitment/interviews/${id}`,
       );
       setInterview(data);
-      // After upload happens, try fetching media URL.
-      if (data.audio_file_id || data.video_file_id) {
+      // After upload happens, try fetching media URL. HRP-1085: an
+      // uploaded pdf/txt transcript has one too - the block waits for it.
+      if (data.audio_file_id || data.video_file_id || data.transcript_file_id) {
         try {
           const m = await api.get<InterviewMediaURL>(
             `/recruitment/interviews/${id}/media-url`,
           );
           setMedia(m);
+          setMediaFailed(false);
         } catch {
           setMedia(null);
+          setMediaFailed(true);
         }
       }
       return data;
@@ -404,14 +429,11 @@ export default function InterviewDetailPage() {
   const interviewerNames = (interview.interviewers ?? []).map(
     (i) => i.full_name,
   );
+  const mediaBlock = interviewMediaBlock(interview, !!media, mediaFailed);
   // HRP-387: an interview created by dropping a file has no type of its own
   // until the upload lands; afterwards the type is a property of the asset
-  // and stops being hand-editable.
-  const typeLocked = Boolean(
-    interview.audio_file_id ||
-      interview.video_file_id ||
-      interview.transcript_file_id,
-  );
+  // and stops being hand-editable. HRP-1085: pasted text counts as one.
+  const typeLocked = mediaBlock !== "upload";
   const typeLabels: Record<string, string> = {
     audio: t("candidateInterviewsTypeAudio"),
     video: t("candidateInterviewsTypeVideo"),
@@ -799,9 +821,7 @@ export default function InterviewDetailPage() {
         {/* LEFT — player + transcript */}
         <div className="space-y-4 lg:col-span-3">
           <section className="rounded-lg border bg-muted/30 p-3">
-            {!interview.audio_file_id &&
-            !interview.video_file_id &&
-            !interview.transcript_file_id ? (
+            {mediaBlock === "upload" ? (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
                   {t("interviewNoRecording")}
@@ -837,31 +857,65 @@ export default function InterviewDetailPage() {
                   </>
                 )}
               </div>
+            ) : mediaBlock === "transcript" ? (
+              <p
+                className="flex items-center gap-2 text-sm"
+                data-testid="recruitment-interview-transcript-uploaded"
+              >
+                <FileText className="size-4 text-muted-foreground" />
+                {t("interviewTranscriptUploaded")}
+              </p>
             ) : !media ? (
               <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                {t("interviewFetchingLink")}
+                {mediaBlock === "unavailable" ? (
+                  t("interviewMediaUnavailable")
+                ) : (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    {t("interviewFetchingLink")}
+                  </>
+                )}
               </div>
             ) : media.kind === "text_transcript" ? (
-              <object
-                data={media.url}
-                type={media.mime_type || "application/pdf"}
-                className="h-[480px] w-full rounded-md bg-white"
-                data-testid="recruitment-interview-pdf-viewer"
-              >
-                <a
-                  href={media.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-muted-foreground underline"
+              <div className="space-y-2">
+                <p
+                  className="flex items-center gap-2 text-sm"
+                  data-testid="recruitment-interview-transcript-uploaded"
                 >
-                  {t("interviewOpenTranscriptFile")}
-                </a>
-              </object>
+                  <FileText className="size-4 text-muted-foreground" />
+                  {t("interviewTranscriptUploadedFile", {
+                    name: media.filename ?? "",
+                  })}
+                </p>
+                {/* HRP-1085: only a pdf is shown inline. A txt is served as
+                    bare text/plain, which a browser decodes as Latin-1, and
+                    its text is in the Transcript block below anyway. */}
+                {(!media.mime_type || media.mime_type === "application/pdf") && (
+                  <object
+                    data={media.url}
+                    type="application/pdf"
+                    className="h-[480px] w-full rounded-md bg-white"
+                    data-testid="recruitment-interview-pdf-viewer"
+                  >
+                    <a
+                      href={media.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-muted-foreground underline"
+                    >
+                      {t("interviewOpenTranscriptFile")}
+                    </a>
+                  </object>
+                )}
+              </div>
             ) : (
               <InterviewPlayer
                 src={media.url}
                 kind={media.kind}
+                onDownload={canManage ? downloadRecording : undefined}
+                // HRP-980: a citation clicked after the 5-minute link has
+                // expired seeks into a part never loaded - renew it.
+                onExpired={() => void refresh()}
                 onTime={setCurrentSec}
                 refSetter={(el) => {
                   playerRef.current = el;

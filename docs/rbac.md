@@ -34,7 +34,10 @@ below asks for `manage` on the `employees` section instead of the
 `admin`/`manager` role list, so a tenant that raises or lowers a role
 moves that role's row: `manage` writes inside the caller's subtree, an
 admin-level role (`admin`, `hr`, `platform_admin`) at `manage` writes the
-whole workspace.
+whole workspace. `recruiter`, `hiring_manager` and `employee` go no further
+than `view` here (a role ceiling, REDO QA 14.10): `manage` would run a
+subtree those roles do not head, so only `admin`, `hr` and `manager` may be
+raised to it.
 
 `x` = allowed, `—` = `403`, `s` = allowed but limited (see notes).
 
@@ -117,6 +120,27 @@ it is the HR record.
 
 `GET /employees/me` answers the caller's own card in the full schema, or `404
 employee_profile_not_found` when the account has no employee row.
+
+**Who opens a card (HRP-829 REDO, QA 14.10).** One rule,
+`readable_card_ids` in `employee/service.py`, decides whether
+`GET /employees/{id}` opens at all - and the same rule decides whether an
+employee's name is a link to `/employees/{id}` anywhere in the product:
+
+| Caller's `employees` level | Card opens (name is a link) | Otherwise (name is text, card `404 employee_not_found`) |
+|---|---|---|
+| `none` | nobody's, one's own included | everyone |
+| `view` / `manage`, admin-level role | everyone, any status | - |
+| `view` / `manage`, a division head (`manager`) | own card and the managed subtree at any status, anyone else while `active` / `on_leave` | someone `inactive` / `terminated` outside the subtree |
+| `view` / `manage`, anyone else (`recruiter`, `hiring_manager`, `employee`) | own card, anyone while `active` / `on_leave` | someone `inactive` / `terminated` |
+
+The UI asks `GET /employees/card-access?ids=...` (up to 200 ids, answers the
+openable ones) once per page for every name it renders - the
+`EmployeeName` component, batched by 100 - and renders text until the answer
+arrives or when the check fails. With the section closed it asks nothing:
+every name is text, no transition bounces to the dashboard. The card route
+stays outside the gate (`SHARED_READS`) so a closed card answers like an
+unknown id rather than the gate's `403`. The global search lists no
+employees at `none`; one's own "My profile" entries are gone there too.
 
 Which row a caller lands in for the list is the role and the level: an
 admin-level role, then `manage` on `employees` (HRP-829 - it used to be the
@@ -594,7 +618,8 @@ section - the other audience. Everything under `/api/exams` is one
 employee taking an exam of their own: `questions`, `answer` and `finish`
 resolve the caller's own employee row and refuse anyone else (HRP-328),
 `review` adds whoever's read scope covers the taker, and the list answers
-that same read scope. Those five are in `PERSONAL_PATHS`, so no level of
+that same read scope; its tabs and the To do count answer the caller's own
+row (see "List tabs"). Those six are in `PERSONAL_PATHS`, so no level of
 the matrix closes them outright - the assignment e-mail links straight to
 `/exams`, and a section closed after the invitation went out must not
 strand it. The page behind that link follows: it is outside the
@@ -851,25 +876,55 @@ Who works in hiring is the `recruitment` row of the section matrix (HRP-830).
 `manage` runs hiring; below it two roles keep a piece of their own on the
 vacancies in their scope (Maxim, 25.09), so the section is self-guarded:
 every write asks for `manage`, one of those two roles, or the admin / hr
-role itself, and the gate closes `none`.
+role itself, and the gate closes `none`. The `employee` cell is capped at
+`none` (a role ceiling, see "Section access"): the Employee role never
+works in hiring, and the matrix screen shows the cell locked.
 
 | Caller | Reads | Evaluate: questions, human scores, the candidate's stage | Hiring rounds: rounds, evaluators, scores, invites | Run hiring: vacancies, candidates, interviews, AI analyses, consents, reports, hiring-round scales |
 |---|---|---|---|---|
-| `manage` (`admin`, `hr`, `recruiter` by default) | the whole workspace | x | x | x |
+| `manage` holding an admin-level role or `recruiter` (`admin`, `hr`, `recruiter` by default) | the whole workspace | x | x | x |
+| `manage`, any other role (`manager`, `hiring_manager` raised by the tenant) | their vacancies | x | x | x, on their vacancies |
+| `view` holding `recruiter` | the whole workspace | `403` | `403` | `403` |
 | `view` holding `hiring_manager` | their vacancies | x, their own column of the scores | `403` | `403` |
 | `view` holding `manager` | their vacancies | `403` | x | `403` |
 | any other `view` | their vacancies | `403` | `403` | `403` |
 | `none` | `403` | `403` | `403` | `403` |
 
-"Their vacancies" is the HRP-629 scope: the vacancies they own, are the named
-hiring manager of, or that sit in a division they manage, and everything that
-hangs off them. An admin-level role (`admin`, `hr`, `platform_admin`) reads
-the whole workspace at any level; so does `manage` - the level replaced the
-`recruiter` role in `recruitment.scope`, and the writes that carry no scope
-of their own (creating a vacancy, a candidate, an interview) are only
-reachable from there. Below `manage` a write outside the scope answers `403
-outside_recruitment_scope`, a write the level does not reach `403
-auth_insufficient_permissions`.
+"Their vacancies" is the HRP-629 scope: the vacancies they are the named hiring
+manager of or that sit in a division they manage, and everything that hangs
+off them; authorship alone no longer reaches a vacancy (HRP-830 REDO). An admin-level role (`admin`, `hr`, `platform_admin`) and the
+`recruiter` role read the whole workspace at any level the section is open to
+them (`UNRESTRICTED_ROLE_CODES` in `recruitment.scope`, HRP-830 REDO, QA
+14.10); `manage` alone no longer does - a manager runs hiring on their own
+divisions, a hiring manager on the vacancies they are named on. A write
+outside the scope answers `403 outside_recruitment_scope`, a write the level
+does not reach `403 auth_insufficient_permissions`.
+
+`manage` inside the scope (`runs_hiring`): every hiring resource a `manage`
+route names in its path resolves back to a vacancy in scope
+(`PATH_SCOPE_KEYS`), a vacancy named in the body too (attaching a candidate).
+Linking an existing candidate to a vacancy hands their card over, so a scoped
+caller links only one already in their scope (`assert_candidate_linkable`,
+fail-closed). Someone already a candidate elsewhere is attached by a recruiter
+or HR: the duplicate warning (manual add, resume dedup preview) tells a scoped
+caller the email is taken without naming the candidate - that the email exists
+in the tenant is the price of one candidate per email. Archiving a candidate
+is tenant-wide, so a scoped caller archives one only when every application
+is theirs; otherwise they detach it from their own vacancy. Fan-out
+notifications with no named recipient go only to the roles that run all of
+hiring, and the twin card of a vacancy one applied to is fenced on the talent
+market the same way as the vacancy (`UNRESTRICTED_ROLE_CODES`).
+The writes that land outside every vacancy are the whole workspace's
+(`runs_all_hiring`): a candidate added on their own - a scoped caller adds
+candidates from one of their vacancies - and the section's onboarding and
+demo data. Creating or re-homing a vacancy keeps it in the caller's scope
+(`assert_vacancy_placement`): a division of their subtree, or - holding the
+`hiring_manager` role - themselves as its hiring manager; authorship does not
+count. The Division picker offers a manager their subtree, the Hiring manager
+picker offers a hiring manager with no division only themselves. The
+workspace summary (`/recruitment/analytics/summary`) counts the caller's
+vacancies, and a bulk AI analysis only the applications of the vacancy in its
+path.
 
 Next to the level:
 
@@ -878,6 +933,14 @@ Next to the level:
   evaluator's cell is `manage`'s (Maxim, 25.09). A hiring-round sheet is its
   evaluator's at every level - scoring it and submitting it. A stage change
   stays inside the vacancy's own funnel.
+- **The HRP-971 fence** keeps a candidate off the vacancy they applied to
+  below `UNRESTRICTED_ROLE_CODES` - a manager raised to `manage` included;
+  the admin level and the recruiter stay unfenced, as they read everything.
+- **A round's averages read like its sheets** (HRP-1081): every reader of
+  the round in scope, live or closed, gets its per-competence averages and
+  who gave which score (`GET /v1/assessment-rounds/{id}/aggregate`). An
+  evaluator of a live round still sees only their own numbers until their
+  sheet is in (HRP-373).
 - **The tenant settings' writes stay the `admin` role's** - the funnel
   stages, the consent templates, the LLM and transcription providers, the
   interview-analysis scales (`/recruitment/settings/scales`), branding,
@@ -894,8 +957,9 @@ Next to the level:
   request list, the audit log, and reading the retention and role settings.
   `manage` alone does not reach them; an `hr` the tenant lowers to `view`
   keeps them.
-- **The AI analysis payload** is full for an unrestricted scope (admin-level
-  or `manage`), the hiring-manager slice for the `hiring_manager` role and
+- **The AI analysis payload** is full for an unrestricted scope or `manage`
+  (`RecruitmentScope.full_payload`), the hiring-manager slice for the
+  `hiring_manager` role and
   stripped for everyone else (`resolve_user_role`). `platform_admin` reads it
   in full now; the old role list left it out.
 - **The vacancy's candidate table** (`GET …/candidates/enriched`) reads at
@@ -1091,11 +1155,12 @@ unlike an assigned exam, a closed section means the tenant stopped running
 plans for that role. The dashboard does not read the plan, so it survives;
 the employee card drops its Development tab. Since HRP-829 the employee list
 and the card (`GET /employees`, `GET /employees/{id}`) are shared reads -
-every people picker and the global search are built on them - so a role
-whose `employees` is `none` keeps them in the API, while the pages bounce
-and the card's sub-resources (events, experience, education, pay,
-competences) answer `403`: one's own included, the same trade-off as one's
-own plan.
+every people picker is built on the list - so a role whose `employees` is
+`none` keeps the list in the API, while the pages bounce and the card's
+sub-resources (events, experience, education, pay, competences) answer
+`403`: one's own included, the same trade-off as one's own plan. The card
+itself closes at `none` by its own rule (REDO QA 14.10, see "Who opens a
+card"), as `404` like an unknown id.
 
 **Lockout protection**, checked on `PUT` and again when resolving: the
 admin block (`dictionaries`, `import`, `invitations`, `roles`,
@@ -1103,6 +1168,17 @@ admin block (`dictionaries`, `import`, `invitations`, `roles`,
 `admin` and cannot be hidden (`400 section_access_admin_locked`,
 `section_access_cannot_hide`); `employees` cannot be hidden either. An
 unknown section or role code is `400 section_access_unknown_section`.
+
+**Role ceilings** (HRP-831): a section may cap what the matrix hands a role
+(`Section.ceilings` in `core/sections.py`) - `invitations` is `none` for
+`recruiter`, `hiring_manager` and `employee`, `roles` at most `view` for
+every role but `admin`, `employees` at most `view` for `recruiter`,
+`hiring_manager` and `employee` (HRP-829 REDO). A save above the ceiling is
+`400 section_access_role_ceiling`, a row stored before the cap is dropped
+on read, and the effective level never goes above it. The screen locks the
+levels above the ceiling - the whole cell when it is `none` - with the
+reason in a hint. The recruitment cap (`employee` at `none`, HRP-830) is
+described with its section.
 
 `GET /auth/me` carries `sections` - every section the caller opens and how
 far, the strongest of their roles; hidden and `none` are absent. Since every
@@ -1129,6 +1205,39 @@ in the SPA is gone with the translation - the menu entry, the page and the
 export button read `sections.analytics` alone. What the figures cover is a
 separate question the read scope answers; see "Analytics and the
 assessment export".
+
+### List tabs (HRP-823…826)
+
+The lists of exams, assessments, development plans and the talent market
+open in tabs (QA 13.10). The section's own tab is the list as it was and
+shows at `manage` only; the other two show at every level that opens the
+page and answer for the caller's own employee row (assessments: the
+caller as a participant) whatever their level or read scope - a division
+head holding `manage` sees only their own there, not their subtree's.
+`hr` sits at `view` on all four by default, so it reads only its own items
+on these pages until the tenant raises it to `manage` - the admin tier's
+read scope still answers the detail pages and the API without `tab`.
+
+| Section | Tab | `?tab=` | What it lists |
+|---|---|---|---|
+| exams | My exams | `mine` | one's own exams whose mass exam left Draft |
+| exams | To do (N) | `todo` | the same, `assigned` or `in_progress` |
+| assessments | My assessments | `mine` | past Draft, where one takes part as Self |
+| assessments | To do (N) | `todo` | neither Draft, Done nor Cancelled, where one takes part in any role and one's questionnaire is not completed |
+| development | My plans | `mine` | one's own plans past Draft |
+| development | To do (N) | `todo` | the same in `sent`, `in_progress` or `returned` |
+| talent-market | I'm a candidate | `mine` | the cards past Draft one is a candidate on, and the Draft ones one is appointed on (`employee_read_filter`) |
+| talent-market | I'm appointed | `appointed` | the cards one is appointed on, Cancelled aside |
+
+One contract: `?tab=` on the list the page already reads (`GET /api/exams`,
+`GET /api/assessments-grouped`, `GET /api/pdp`, `POST
+/api/talent-market/search`), and `GET <that list>/todo-count` -> `{"count":
+N}` for the To do label. Without `tab` every list answers as before. A tab
+lists assessments one by one, mass ones included - the group card would
+open everyone else's rows. The page keeps the tab in its URL, falls back
+to the first visible tab for one it does not show, and the letters to the
+person on a plan or an exam open the tab that holds it (To do while it
+waits on them, My once closed); a reviewer's letter keeps the bare list.
 
 ## Error codes returned on `/employees/*` write rejections
 
@@ -1189,7 +1298,11 @@ role, sending, editing, cancelling and resending invitations). All four are
 admin-locked and never hidden, so the admin keeps `manage` whatever the
 tenant saves; `platform_admin`, which the literal `require_role("admin")`
 used to keep out of import, roles and AI settings, reaches them like every
-section. `GET /api/roles` is a shared read - the invitation form is built
+section. Two cells are capped (QA 15.10): `recruiter`, `hiring_manager`
+and `employee` never reach invitations - an invitation is a seat in a
+division they do not head - and no role but `admin` writes roles, since
+`manage` there would add nothing to `view` with the matrix screen itself
+the admin's. `GET /api/roles` is a shared read - the invitation form is built
 on it - answered to whoever opens roles or invitations at `view` or
 better (it carries how many people hold each role). `POST`, `PUT` and
 `DELETE /api/roles` still create, rename and remove a tenant role at

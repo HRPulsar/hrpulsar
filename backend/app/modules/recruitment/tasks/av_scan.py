@@ -117,18 +117,24 @@ def scan_interview_media_task(self, interview_id: str, tenant_id: str) -> dict:
             # explicitly skipped) before it is handed to the external ASR
             # provider. On any refusal (e.g. 402 insufficient credits) the
             # flag is dropped so the UI falls back to the manual buttons.
-            if (
-                verdict in {"clean", "skipped"}
-                and interview.auto_process
-                and (interview.audio_file_id or interview.video_file_id)
-            ):
+            if verdict in {"clean", "skipped"} and interview.auto_process:
                 from app.modules.recruitment.tasks.analysis import (
+                    _chain_analysis_if_requested,
                     auto_chain_step,
                 )
 
-                if not auto_chain_step(interview_id, tenant_id, "transcribe"):
-                    interview.auto_process = False
-                    db.commit()
+                if interview.audio_file_id or interview.video_file_id:
+                    if not auto_chain_step(interview_id, tenant_id, "transcribe"):
+                        interview.auto_process = False
+                        db.commit()
+                elif interview.transcription_status == "completed":
+                    # HRP-1031: an uploaded pdf/txt transcript is already
+                    # transcribed, so the chain skips to the analyze hop -
+                    # the same one-shot, billed hop the transcribe task
+                    # makes for a recording.
+                    _chain_analysis_if_requested(
+                        db, interview_id, tenant_id, requested=True
+                    )
 
             return {"status": "ok", "verdict": verdict}
     except Exception as exc:  # noqa: BLE001

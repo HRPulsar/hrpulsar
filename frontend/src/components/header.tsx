@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { useAuth } from "@/context/auth-context";
+import { usePermissions } from "@/hooks/use-permissions";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { GlobalSearch } from "@/components/global-search";
 import { NotificationBell } from "@/components/notification-bell";
@@ -104,6 +105,7 @@ function buildCrumbs(
 
 export function Header() {
   const { user, signOut } = useAuth();
+  const { canViewSection } = usePermissions();
   const pathname = usePathname();
   const t = useTranslations("common");
   const tNav = useTranslations("sidebar");
@@ -165,9 +167,13 @@ export function Header() {
               <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
             </div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem render={<Link href="/employees/me" />} className="cursor-pointer" data-testid="header-menu-my-profile">
-              {tNav("myProfile")}
-            </DropdownMenuItem>
+            {/* HRP-829 REDO: with the employees section closed no card
+                opens, one's own included - no entry that only bounces. */}
+            {canViewSection("employees") && (
+              <DropdownMenuItem render={<Link href="/employees/me" />} className="cursor-pointer" data-testid="header-menu-my-profile">
+                {tNav("myProfile")}
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem render={<Link href="/settings/profile" />} className="cursor-pointer" data-testid="header-menu-settings">
               {t("settings")}
             </DropdownMenuItem>

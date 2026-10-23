@@ -251,6 +251,29 @@ def reanchor_analysis_citations(
     return check_analysis_citations(analysis, segments, transcript)
 
 
+def reanchor_citations_after_edit(
+    analysis: dict, segments: list[dict], transcript: str | None
+) -> None:
+    """Point stored citations at the segments of an edited transcript.
+
+    HRP-1085: saving the whole text rebuilds the segments under new ids.
+    Every quote the new segments still hold takes its segment and
+    timecodes, found by text as in ``reanchor_analysis_citations``. Unlike
+    that check nothing is dropped: a quote the edit removed keeps its old
+    id, so the page marks it outdated (``locateCitation``) instead of the
+    analysis silently losing it. In place.
+    """
+    for holder in _citation_holders(analysis):
+        if holder.get("citations"):
+            holder["citations"] = [
+                _checked_citation(
+                    {**citation, "segment_id": None}, segments, transcript or ""
+                )
+                or citation
+                for citation in holder["citations"]
+            ]
+
+
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
@@ -660,9 +683,10 @@ RESUME_ONLY_ANALYSIS_SYSTEM_PROMPT = (
     "6. Verdict:\n"
     "   • NEVER return 'recommended' — without a live conversation you "
     "cannot recommend responsibly. Even a strong resume gets "
-    "'needs_check' with the note 'Strong candidate based on resume. "
-    "Interview required to confirm.' and "
-    "recommendation_for_next_step='schedule_interview'.\n"
+    "'needs_check' and recommendation_for_next_step='schedule_interview'; "
+    "verdict_summary then says that the candidate is strong on the "
+    "resume and that an interview is required to confirm it, written in "
+    "the analysis language (rule 10).\n"
     "   • Weak resume — 'not_recommended' with specific reasons.\n"
     "   • Neutral / incomplete — 'needs_check'.\n"
     "7. recommendation_for_next_step: schedule_interview / "
@@ -670,7 +694,14 @@ RESUME_ONLY_ANALYSIS_SYSTEM_PROMPT = (
     "default to 'schedule_interview'.\n"
     "8. Do not invent facts that are not in the resume.\n"
     "9. Return only JSON matching the provided schema, without any "
-    "introductory text or commentary."
+    "introductory text or commentary.\n"
+    # HRP-1086: the language is the AI content language passed as
+    # "Analysis language", not the interface locale; without this rule a
+    # fixed English note came back verbatim in a ru tenant.
+    "10. Write every free-text field (verdict_summary, key_strength, "
+    "key_risk, risk_mitigation, reasoning, suggested_question, red flag "
+    "descriptions) in the 'Analysis language' given in the prompt. Only "
+    "excerpt_text stays verbatim in the resume's own language."
 )
 
 

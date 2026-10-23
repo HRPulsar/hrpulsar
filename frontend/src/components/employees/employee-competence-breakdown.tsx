@@ -13,26 +13,25 @@ import {
 } from "@/components/ui/dialog";
 import type { EmployeeCompetenceLevelBreakdown } from "@/lib/types";
 import { BADGE_COLOR } from "@/lib/badge-tones";
+import { matchPercentColor } from "@/components/assessment/match-percent-chip";
 import { skillLevelTitleLabel } from "@/lib/reference-labels";
 
 interface EmployeeCompetenceBreakdownProps {
   competenceId: string;
   competenceTitle: string;
   breakdown: EmployeeCompetenceLevelBreakdown[];
+  /** HRP-1105: the bar the row's own percent is judged against - the levels
+   *  take the same colours as every other competence percent. */
+  bar: number;
   /** Used to build a stable `data-testid` per row/button. */
   testIdPrefix: string;
-}
-
-function levelTone(percent: number): string {
-  if (percent >= 75) return BADGE_COLOR.green;
-  if (percent >= 50) return BADGE_COLOR.yellow;
-  return BADGE_COLOR.red;
 }
 
 export function EmployeeCompetenceBreakdown({
   competenceId,
   competenceTitle,
   breakdown,
+  bar,
   testIdPrefix,
 }: EmployeeCompetenceBreakdownProps) {
   const t = useTranslations("employees");
@@ -92,7 +91,7 @@ export function EmployeeCompetenceBreakdown({
                 <td className="py-2">{skillLevelTitleLabel(tRef, row.skill_level_title)}</td>
                 <td className="py-2 text-right">
                   <span
-                    className={`rounded-md px-2 py-0.5 text-xs font-medium ${levelTone(row.percent)}`}
+                    className={`rounded-md px-2 py-0.5 text-xs font-medium ${BADGE_COLOR[matchPercentColor(row.percent, bar)]}`}
                   >
                     {row.percent}%
                   </span>

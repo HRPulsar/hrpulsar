@@ -25,6 +25,12 @@ import {
 } from "@/components/ui/select";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
 import { HiringManagerSelect } from "@/components/recruitment/hiring-manager-select";
+import {
+  type DivisionOption,
+  loadVacancyDivisions,
+  placeableDivisions,
+} from "@/components/recruitment/vacancy-divisions";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ChevronDown, ChevronUp, ExternalLink, Pencil } from "lucide-react";
 import { toast } from "sonner";
@@ -60,11 +66,6 @@ interface PositionOption {
   division_id?: string | null;
   specializations?: { id: string; title?: string | null }[];
   grades?: { id: string; title?: string | null }[];
-}
-
-interface DivisionOption {
-  id: string;
-  name?: string | null;
 }
 
 interface OverviewFormValues {
@@ -209,6 +210,10 @@ export function VacancyOverviewSection({
   const [saving, setSaving] = useState(false);
   const [positions, setPositions] = useState<PositionOption[]>([]);
   const [divisions, setDivisions] = useState<DivisionOption[]>([]);
+  const [allowedDivisions, setAllowedDivisions] = useState<Set<string> | null>(
+    null,
+  );
+  const { seesAllHiring } = usePermissions();
   const [pendingPositionChange, setPendingPositionChange] = useState<
     string | null
   >(null);
@@ -234,21 +239,10 @@ export function VacancyOverviewSection({
     })();
     (async () => {
       try {
-        const flatten = (list: unknown[]): DivisionOption[] => {
-          const out: DivisionOption[] = [];
-          for (const node of list) {
-            if (!node || typeof node !== "object") continue;
-            const n = node as { id?: string; name?: string; children?: unknown[] };
-            if (n.id) out.push({ id: n.id, name: n.name });
-            if (n.children && Array.isArray(n.children)) {
-              out.push(...flatten(n.children));
-            }
-          }
-          return out;
-        };
-        const data = await api.get<unknown[]>("/divisions");
+        const loaded = await loadVacancyDivisions(seesAllHiring);
         if (cancelled) return;
-        setDivisions(flatten(Array.isArray(data) ? data : []));
+        setDivisions(loaded.divisions);
+        setAllowedDivisions(loaded.allowed);
       } catch {
         // ignore
       }
@@ -256,7 +250,7 @@ export function VacancyOverviewSection({
     return () => {
       cancelled = true;
     };
-  }, [editing]);
+  }, [editing, seesAllHiring]);
 
   const selectedPosition = useMemo(
     () => positions.find((p) => p.id === form.position_id) ?? null,
@@ -425,6 +419,11 @@ export function VacancyOverviewSection({
             setField={setField}
             positions={positions}
             divisions={divisions}
+            placeable={placeableDivisions(
+              divisions,
+              allowedDivisions,
+              initial.division_id,
+            )}
             hiringManagerFallback={vacancy.hiring_manager_name ?? null}
             positionSpecOptions={positionSpecOptions}
             positionGradeOptions={positionGradeOptions}
@@ -735,6 +734,8 @@ interface OverviewEditGridProps {
   ) => void;
   positions: PositionOption[];
   divisions: DivisionOption[];
+  /** HRP-830 REDO: what the picker offers - a manager's own subtree. */
+  placeable: DivisionOption[];
   hiringManagerFallback: string | null;
   positionSpecOptions: { value: string; label: string }[];
   positionGradeOptions: { value: string; label: string }[];
@@ -749,6 +750,7 @@ function OverviewEditGrid({
   setField,
   positions,
   divisions,
+  placeable,
   hiringManagerFallback,
   positionSpecOptions,
   positionGradeOptions,
@@ -852,7 +854,7 @@ function OverviewEditGrid({
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {divisions.map((d) => (
+              {placeable.map((d) => (
                 <SelectItem
                   key={d.id}
                   value={d.id}

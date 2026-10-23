@@ -543,10 +543,35 @@ async def create_mass_assessment(
     )
 
 
+# HRP-826 (QA 13.10): the two tabs every level opens on /assessments -
+# "My assessments" and "To do" (see ``service.list_assessments_grouped``).
+# Both answer for the caller as a participant whatever their level or read
+# scope, so a division head sees only their own there.
+AssessmentTab = Literal["mine", "todo"]
+
+
+@router.get("/assessments-grouped/todo-count")
+async def count_my_assessments_to_do(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, int]:
+    """The N of the "To do (N)" tab (HRP-826)."""
+    _, total = await service.list_assessments_grouped(
+        db,
+        current_user.tenant_id,
+        0,
+        1,
+        participant_user_id=current_user.id,
+        tab="todo",
+    )
+    return {"count": total}
+
+
 @router.get("/assessments-grouped", response_model=GroupedAssessmentList)
 async def list_assessments_grouped(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    tab: AssessmentTab | None = None,
     # HRP-193: server-side filters so X-Y of N + pagination follow the
     # filtered slice instead of the (already-paged) raw list. Mirrors
     # the contract used by /employees: case-insensitive search + repeated
@@ -572,6 +597,7 @@ async def list_assessments_grouped(
         search=search,
         type_codes=type,
         status_codes=status,
+        tab=tab,
     )
     return {"items": items, "total": total}
 
@@ -857,14 +883,49 @@ async def create_pdp(
     )
 
 
+# HRP-825 (QA 13.10): the two tabs every level opens on /development -
+# "My plans" (where the caller is the plan's employee, once it left Draft)
+# and "To do" (the same in Sent, In progress or Returned). Both answer for
+# the caller's own employee row whatever their level or read scope.
+PDPTab = Literal["mine", "todo"]
+_PDP_TODO_STATUSES = ("sent", "in_progress", "returned")
+
+
+async def _own_pdps(db: AsyncSession, current_user: User, tab: PDPTab) -> list[dict]:
+    from app.core.access_scope import get_current_employee
+
+    own = await get_current_employee(db, current_user)
+    if own is None:
+        return []
+    return await pdp_service.list_pdps(
+        db,
+        current_user.tenant_id,
+        own.id,
+        hide_drafts=True,
+        statuses=_PDP_TODO_STATUSES if tab == "todo" else None,
+    )
+
+
+@router.get("/pdp/todo-count")
+async def count_my_pdps_to_do(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, int]:
+    """The N of the "To do (N)" tab (HRP-825)."""
+    return {"count": len(await _own_pdps(db, current_user, "todo"))}
+
+
 @router.get("/pdp", response_model=list[PDPRead])
 async def list_pdps(
     employee_id: uuid.UUID | None = None,
+    tab: PDPTab | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     from app.core.access_scope import get_visible_employee_ids
 
+    if tab is not None:
+        return await _own_pdps(db, current_user, tab)
     visible_ids = await get_visible_employee_ids(db, current_user)
     # HRP-19 + HRP-142: only the plan owner is hidden from drafts (their own
     # authoring queue is irrelevant to them). Admins/HR/platform_admin and

@@ -83,19 +83,6 @@ async def _ensure_admin_role(db: AsyncSession) -> Role:
     return role
 
 
-async def _ensure_assessment_status(db: AsyncSession, code: str) -> AssessmentStatus:
-    existing = (
-        await db.execute(select(AssessmentStatus).where(AssessmentStatus.code == code))
-    ).scalar_one_or_none()
-    if existing is not None:
-        return existing
-    s = AssessmentStatus(code=code, title=code.title(), sequence=0)
-    db.add(s)
-    await db.commit()
-    await db.refresh(s)
-    return s
-
-
 async def _ensure_assessment_type(db: AsyncSession, code: str) -> AssessmentType:
     existing = (
         await db.execute(select(AssessmentType).where(AssessmentType.code == code))
@@ -308,10 +295,10 @@ async def _make_world(
 
 
 @pytest_asyncio.fixture
-async def worlds(db: AsyncSession):
+async def worlds(db: AsyncSession, assessment_statuses):
     """Build tenant A (paid) and tenant B (demo) side-by-side."""
     role = await _ensure_admin_role(db)
-    status = await _ensure_assessment_status(db, "done")
+    status = assessment_statuses["done"]
     a_type = await _ensure_assessment_type(db, "self")
     a = await _make_world(
         db, is_demo=False, role=role, status=status, a_type=a_type

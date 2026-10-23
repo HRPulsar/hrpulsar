@@ -105,6 +105,13 @@ test.describe("Division CRUD", () => {
     await expect(
       page.getByTestId(`company-division-${divisionId}`),
     ).toBeVisible({ timeout: 10000 });
+    // HRP-942: the headcount and the menu show without a hover.
+    await expect(
+      page.getByTestId(`company-division-${divisionId}-employee-count`),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId(`company-division-${divisionId}-actions`),
+    ).toBeVisible();
   });
 
   test("division actions dropdown", async ({ page }) => {

@@ -650,6 +650,9 @@ class ResumeDedupPreviewItem(BaseModel):
     parsed_email: str | None = None
     existing_candidate_id: uuid.UUID | None = None
     existing_candidate_full_name: str | None = None
+    # HRP-830 REDO: the email is taken by a candidate the caller cannot
+    # reach - flagged without naming them.
+    duplicate_elsewhere: bool = False
 
 
 class BatchFinalizeFile(BaseModel):
@@ -948,6 +951,15 @@ class InterviewSegmentUpdate(BaseModel):
 
 class TranscriptUpdate(BaseModel):
     transcript: str
+
+    @field_validator("transcript")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        # HRP-1085: saving the whole text rebuilds the segments, so blank
+        # text would wipe them; refused as the missing value it is.
+        if not value.strip():
+            raise ValueError("Field required")
+        return value
 
 
 class AIAssessmentRead(BaseModel):

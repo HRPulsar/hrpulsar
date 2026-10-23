@@ -909,6 +909,27 @@ async def test_my_loop_stale_and_survey_pending(
 
 
 @pytest.mark.asyncio
+async def test_my_loop_plan_findings_open_the_to_do_tab(db: AsyncSession, tenant):
+    # HRP-825: the three plan findings are one's own open plans - the
+    # Development list's "To do" tab, not the section's full list.
+    emp = await _make_employee(db, tenant)
+    soon_emp = await _make_employee(db, tenant)
+    db.add_all(
+        [
+            _pdp(tenant, emp, status="returned", deadline=datetime.now(UTC) - timedelta(days=3)),
+            _pdp(tenant, soon_emp, status="in_progress", deadline=datetime.now(UTC) + timedelta(days=2)),
+        ]
+    )
+    await db.commit()
+
+    findings = {f["code"]: f for f in (await analytics_service.my_loop(db, tenant.id, emp.user_id))["findings"]}
+    assert findings["pdp_returned"]["href"] == "/development?tab=todo"
+    assert findings["pdp_overdue"]["href"] == "/development?tab=todo"
+    soon = {f["code"]: f for f in (await analytics_service.my_loop(db, tenant.id, soon_emp.user_id))["findings"]}
+    assert soon["pdp_deadline_soon"]["href"] == "/development?tab=todo"
+
+
+@pytest.mark.asyncio
 async def test_my_loop_personal_closure_and_strengths(
     db: AsyncSession, tenant, status_done, type_self
 ):

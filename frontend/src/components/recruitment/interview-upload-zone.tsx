@@ -295,7 +295,9 @@ export function InterviewUploadZone({
           {
             upload_id: init.upload_id,
             parts,
-            auto_process: autoProcess && kind !== "text_transcript",
+            // HRP-1031: a ready transcript goes straight to analysis when
+            // the box is ticked - the backend skips the transcribe hop.
+            auto_process: autoProcess,
           },
         );
         setProgress(100);
@@ -513,6 +515,10 @@ export function InterviewUploadZone({
             {t("interviewUploadDropHint")}
             <br />
             {t("interviewUploadFormatsHint")}
+            <br />
+            {/* HRP-1085: how a pdf/txt transcript is split, as in the paste
+                dialog - it used to be said only there. */}
+            {t("interviewTranscriptLabelsHint")}
           </p>
           <label className="flex items-center gap-2 text-xs">
             <Checkbox

@@ -162,6 +162,25 @@ describe("Recruitment settings follow the APIs' audiences (HRP-1045)", () => {
     ]);
   });
 
+  // HRP-1045 REDO (QA 14.10): one subtitle for everyone; the GDPR pointer
+  // only where GDPR opens (admin, hr) - the rest read the funnel note.
+  it("words the hub by audience", async () => {
+    const m = enMessages.recruitment;
+    for (const [roles, gdpr] of [
+      [["admin"], true],
+      [["hr"], true],
+      [["recruiter"], false],
+      [["manager"], false],
+      [["hiring_manager"], false],
+    ] as const) {
+      await render(<SettingsHubPage />, [...roles], "manage");
+      const text = byId("recruitment-settings-hub")!.textContent!;
+      expect(text).toContain(m.settingsDescription);
+      expect(text).toContain(gdpr ? m.settingsWhatElseBody : m.settingsWhatElseBodyFunnel);
+      if (!gdpr) expect(text, roles[0]).not.toContain("GDPR");
+    }
+  });
+
   it("lets hr read retention without the save button", async () => {
     await render(<RetentionPage />, ["hr"], "manage");
     expect(byId("retention-input-interviews_days")).not.toBeNull();

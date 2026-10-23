@@ -108,6 +108,16 @@ it("keeps the runs being typed when the hours come back from the server", async 
   expect((field("input-hours") as HTMLInputElement).value).toBe("3");
 });
 
+// HRP-904: "Details" read as plain text - nothing said the line opens.
+it("marks the step details with a chevron that turns when open", async () => {
+  await render(STEP);
+  const summary = field("details").querySelector("summary")!;
+  const chevron = summary.querySelector('[data-testid="coverage-step-row-s-1-details-chevron"]');
+  expect(chevron).not.toBeNull();
+  expect(chevron!.getAttribute("class")).toContain("group-open:rotate-90");
+  expect(summary.textContent).toBe(enMessages.coverage.stepDetails);
+});
+
 // M22: the attribute existed in the model, the wire types and the test-id
 // catalog, but no select ever rendered - so every breakdown shipped
 // `reversibility=unknown`.

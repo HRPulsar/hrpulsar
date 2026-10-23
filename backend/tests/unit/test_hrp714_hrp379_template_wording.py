@@ -15,7 +15,10 @@ import pathlib
 from types import ModuleType
 
 from app.modules.notification.models import NotificationTemplate
-from app.modules.notification.service import render_db_template_preview
+from app.modules.notification.service import (
+    render_db_template,
+    render_db_template_preview,
+)
 from jinja2 import Template
 
 _VERSIONS = pathlib.Path(__file__).resolve().parents[2] / "migrations" / "versions"
@@ -167,4 +170,95 @@ class TestPlanRequestedWording:
             (_SUBMITTED, "de"),
             (_PLAN, "en"),
             (_PLAN, "de"),
+        }
+
+
+class TestPlanRequestedSubjectBack:
+    """HRP-714 (QA 21.10): ``hrp714plansubject`` puts the seed subject
+    back - the bell's title and the letter's subject read "{name} asked
+    for a development plan" again - while the body keeps the
+    ``hrp379714tplcopy`` wording that names the card."""
+
+    _EXPECTED = {
+        "en": (
+            "Jane Doe asked for a development plan",
+            "Jane Doe requests a development plan for Platform Architect.",
+            "View candidate matches",
+        ),
+        "de": (
+            "Jane Doe hat um einen Entwicklungsplan gebeten",
+            "Jane Doe bittet um einen Entwicklungsplan für Platform Architect.",
+            "Übereinstimmungen des Kandidaten ansehen",
+        ),
+    }
+    _CONTEXT = {"employee_name": "Jane Doe", "card_title": "Platform Architect"}
+
+    @staticmethod
+    def _back(locale: str, column: str, text: str, *, undo: bool = False) -> str:
+        """Apply ``hrp714plansubject`` to one row/column, as its SQL would."""
+        module = _module("hrp714plansubject_plan_requested_subject_back.py")
+        swaps = [s for s in module.SWAPS if s[:3] == (_PLAN, locale, column)]
+        for _code, _locale, _column, current, new in swaps[::-1] if undo else swaps:
+            old, repl = (new, current) if undo else (current, new)
+            assert old in text, f"{old!r} is not in the {locale} {column}"
+            text = text.replace(old, repl)
+        return text
+
+    def _template(self, locale: str) -> NotificationTemplate:
+        subject, body = _plan_seed()[locale]
+        return NotificationTemplate(
+            code=_PLAN,
+            locale=locale,
+            subject_template=self._back(
+                locale,
+                "subject_template",
+                _reword(_PLAN, locale, "subject_template", subject),
+            ),
+            body_template=self._back(
+                locale, "body_template", _reword(_PLAN, locale, "body_template", body)
+            ),
+            notification_type="email",
+        )
+
+    def test_subject_is_the_seed_one_and_the_body_keeps_the_rewording(self) -> None:
+        for locale, (subject, body) in _plan_seed().items():
+            template = self._template(locale)
+            assert template.subject_template == subject
+            assert template.body_template == _reword(
+                _PLAN, locale, "body_template", body
+            )
+
+    def test_bell_and_letter_read_as_qa_asked(self) -> None:
+        for locale, (title, text, link_text) in self._EXPECTED.items():
+            template = self._template(locale)
+            bell_title, bell_text = render_db_template_preview(
+                template, {**self._CONTEXT, "link_url": None}
+            )
+            assert (bell_title, bell_text) == (title, text)
+
+            subject, letter = render_db_template(
+                template, {**self._CONTEXT, "link_url": "https://app.example.com/c"}
+            )
+            assert subject == title
+            assert f'<a href="https://app.example.com/c">{link_text}</a>' in letter
+            assert "Platform Architect</b>" in letter
+
+    def test_downgrade_restores_the_hrp379714tplcopy_subject(self) -> None:
+        for locale, (subject, _body) in _plan_seed().items():
+            reworded = _reword(_PLAN, locale, "subject_template", subject)
+            assert (
+                self._back(
+                    locale,
+                    "subject_template",
+                    self._template(locale).subject_template,
+                    undo=True,
+                )
+                == reworded
+            )
+
+    def test_swap_table_touches_only_the_plan_subject_in_core_locales(self) -> None:
+        module = _module("hrp714plansubject_plan_requested_subject_back.py")
+        assert {s[:3] for s in module.SWAPS} == {
+            (_PLAN, "en", "subject_template"),
+            (_PLAN, "de", "subject_template"),
         }

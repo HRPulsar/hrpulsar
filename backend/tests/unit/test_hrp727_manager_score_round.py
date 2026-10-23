@@ -24,7 +24,9 @@ from app.modules.recruitment.models import CandidateVacancy
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.unit.test_hrp186_manager_assessment import (
+    CRITICAL_COMPETENCE_ID,
     _make_candidate_vacancy,
+    _make_profile,
     _make_vacancy,
     _scale_payload,
 )
@@ -32,6 +34,7 @@ from tests.unit.test_hrp186_manager_assessment import (
 
 async def _vacancy_with_scale(db: AsyncSession, tenant, user):
     vacancy = await _make_vacancy(db, tenant)
+    await _make_profile(db, tenant, vacancy)
     cv = await _make_candidate_vacancy(db, tenant, vacancy)
     scale = await service.create_scale(db, tenant.id, user.id, _scale_payload())
     await service.set_vacancy_scale(
@@ -56,7 +59,7 @@ async def _score_round(
         tenant.id,
         user.id,
         sheet.id,
-        uuid.uuid4(),
+        CRITICAL_COMPETENCE_ID,
         CompetenceScoreIn(score_value=level),
     )
     return round_id

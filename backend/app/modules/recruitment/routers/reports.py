@@ -188,7 +188,7 @@ async def compare_vacancy_candidates(
     _scope: None = Depends(vacancy_scope),
     scope: RecruitmentScope = Depends(recruitment_scope),
 ):
-    role = service.resolve_user_role(current_user, full=scope.unrestricted)
+    role = service.resolve_user_role(current_user, full=scope.full_payload)
     return await service.compare_candidates(
         db,
         current_user.tenant_id,
@@ -291,8 +291,12 @@ async def get_vacancy_analytics(
 async def get_recruitment_summary(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
+    scope_filter: ColumnElement[bool] | None = Depends(list_scope_filter),
 ):
-    return await analytics_service.recruitment_summary(db, current_user.tenant_id)
+    # HRP-830 REDO: ``manage`` reads its own vacancies' numbers.
+    return await analytics_service.recruitment_summary(
+        db, current_user.tenant_id, scope_filter=scope_filter
+    )
 
 
 @router.get(

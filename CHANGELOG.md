@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.5.4] - 2026-10-23
+
+### Added
+- Assessments: submitting a questionnaire with unanswered questions scrolls to the first one and focuses it (HRP-317)
+- Exams: the page opens in tabs - Exams for whoever runs them, My exams and To do (N) with one's own (HRP-823)
+- Talent Market: the page opens in tabs - Talent Market for whoever authors the board, I'm a candidate and I'm appointed with one's own cards (HRP-824)
+- Development: the page opens in tabs - Development plans for whoever authors plans, My plans and To do (N) with one's own (HRP-825)
+- Assessments: the page opens in tabs - Assessments for whoever runs them, My assessments and To do (N) with one's own questionnaires (HRP-826)
+- Company: the division tree shows each division's manager, deputy, description and headcount, and its actions menu without a hover (HRP-942)
+- Competences: a search by group or competence title above the tree, next to Expand all / Collapse all (HRP-1082)
+- Company: the company profile has a Region; for Russia the employee Education degree offers the Russian education levels (HRP-1066)
+- Recruitment: whoever runs hiring downloads the interview recording from the player under its file name, with a fresh link on every click (HRP-980)
+
+### Changed
+- Section access: HR at the default View level sees only their own items on Exams, Assessments, Development and Talent Market; the full lists open with Manage (HRP-823, HRP-824, HRP-825, HRP-826)
+- Recruitment: library competences of a vacancy show their proficiency level, and Add from library asks for the level of each picked competence in a second step; the talent-market card posted from the vacancy carries the same levels (HRP-1087)
+- Employees: Recruiter, Hiring manager and Employee can no longer be given Manage on the Employees section (HRP-829)
+
+### Fixed
+- Demo: the sample interview recording speaks its transcript in the demo's language, each line at its timecode (HRP-980)
+- Recruitment: a citation clicked after the interview page has been open for a while plays the recording instead of failing (HRP-980)
+- Employees: an employee's name links to their card across the product only where the reader may open that card, and is plain text when the Employees section is closed for the role (HRP-829)
+- Coverage: on the Steps tab a step's Details carries a chevron, so it reads as a block that opens (HRP-904)
+- Employee card: the education degree and the compensation type in the list show in the interface language, in the Add and Edit dialogs too (HRP-1066)
+- Invitations: the role shows by its name in the interface language - in the invite form, in an editable Pending row and once the invitation is accepted, cancelled or expired (HRP-1064, HRP-1065)
+- Employee card: on the Competences tab the levels window and the Other competences list colour a percent on the same scale as the rest of the product - 75% is yellow, not green (HRP-1105)
+- Development: a plan for a division manager gets the manager of the division above as its reviewer, and the reviewer's letters open the plan itself (HRP-1048)
+- Assessments: a 180° or 360° assessment of a division manager adds the manager of the division above as its manager participant (HRP-1049)
+- Assessments: the answer scale legend is titled What the answer options mean, is hidden when no option has a description and marks options without one as Not specified; the question preview is titled Questions preview (HRP-721)
+- Analytics: the Grade changes hint no longer mentions changes recorded before grades were kept in the history (HRP-732)
+- Development: a long plan title no longer runs into the status chip on the plans list (HRP-940)
+- Section access: invitations stay closed to recruiters, hiring managers and employees, and only admins get full access to roles; the screen shows those cells locked with the reason (HRP-831)
+- Section access: recruitment stays closed to the Employee role, shown as a locked cell with the reason (HRP-830)
+- Recruitment: a reader who is not scoring an assessment round sees its sheet once instead of once per evaluator, with each competence's round average and every evaluator's score, and an evaluator of a closed round sees the assessed-competences count over all evaluators (HRP-1081)
+- Recruitment: a division manager or hiring manager with manage access runs hiring on their own vacancies only, and the Division and Hiring manager fields of a vacancy offer only their own sub-tree or themselves; a recruiter with view access reads every vacancy of the company (HRP-830)
+- Recruitment: a division manager or hiring manager links only candidates already on their vacancies; someone who is a candidate elsewhere in the company is added by a recruiter or HR, and only the hiring team that sees all vacancies receives notifications not addressed to anyone (HRP-830)
+- Recruitment: the settings page subtitle reads "A single hub for recruitment module settings.", and roles other than Admin and HR see only the funnel note under "What else can be configured?" (HRP-1045)
+- Recruitment: Internal candidates of a vacancy no longer carry the "Added manually — below the match bar" label; every row shows its talent-market match percentage (HRP-693)
+- Recruitment: the Interview questions tabs and set titles on the candidate page and the vacancy Questions tab are shown in the interface language (HRP-1117)
+- Recruitment: Mark as complete stays available once other evaluators, internal or external, have scored every Critical competence, even after you start scoring the round yourself (HRP-1075)
+- Talent Market: a manager's notification about a development-plan request is titled "{name} asked for a development plan" again in the bell and the email subject; the text still names the card (HRP-714)
+- Recruitment: the invitation email to an external evaluator no longer says that the link works without an account (HRP-1061)
+- Recruitment: a resume-only AI analysis of a strong candidate writes its "strong on the resume, interview required to confirm" note in the workspace's AI content language instead of English (HRP-1086)
+- Recruitment: with "Transcribe and run AI analysis automatically after upload" ticked, an uploaded pdf or txt transcript now starts the AI analysis on its own, billed like the analysis of an uploaded recording (HRP-1031)
+- Recruitment: a pasted or uploaded pdf/txt transcript is split into segments by speaker names as well as by Interviewer/Candidate labels; the interview page shows it as uploaded instead of fetching a recording link forever, and editing the whole transcript updates its segments (HRP-1085)
+- Demo: the sample screen interview with nothing uploaded yet shows as Scheduled, and every sample interview shows its recording type (HRP-980)
+
 ## [2.5.3] - 2026-10-16
 
 ### Fixed

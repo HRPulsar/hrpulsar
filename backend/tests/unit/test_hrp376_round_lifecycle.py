@@ -31,6 +31,7 @@ from tests.unit.test_hrp186_manager_assessment import (
     _make_candidate_vacancy,
     _make_profile,
     _make_vacancy,
+    _score_critical,
 )
 
 
@@ -42,6 +43,12 @@ async def _round(db: AsyncSession, tenant, user, kind: str = "interview"):
         db, tenant.id, user.id, cv.id, RoundCreate(type=kind)
     )
     return cv, uuid.UUID(str(rd["id"]))
+
+
+async def _complete(db: AsyncSession, tenant, user, rd_id):
+    # HRP-1075: a round completes once its Critical competence is scored.
+    await _score_critical(db, tenant, user, rd_id)
+    await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
 
 
 async def _invite(db: AsyncSession, tenant, user, cv, round_id, *, status="pending"):
@@ -69,7 +76,7 @@ async def _invite(db: AsyncSession, tenant, user, cv, round_id, *, status="pendi
 class TestCompleteRound:
     async def test_completing_twice_is_refused(self, db: AsyncSession, tenant, user):
         _, rd_id = await _round(db, tenant, user)
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
         with pytest.raises(HTTPException) as exc:
             await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
         assert exc.value.status_code == 409
@@ -81,7 +88,7 @@ class TestCompleteRound:
         own = await service.get_or_create_assessment(
             db, tenant.id, rd_id, evaluator_user_id=user.id
         )
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
 
         await db.refresh(own)
         assert own.status == "submitted"
@@ -101,7 +108,7 @@ class TestCompleteRound:
         cv, rd_id = await _round(db, tenant, user)
         inv = await _invite(db, tenant, user, cv, rd_id)
 
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
 
         await db.refresh(inv)
         assert inv.status == "revoked"
@@ -118,7 +125,7 @@ class TestCompleteRound:
         cv, rd_id = await _round(db, tenant, user)
         inv = await _invite(db, tenant, user, cv, rd_id, status="submitted")
 
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
 
         await db.refresh(inv)
         # A submitted evaluation still feeds the aggregate — rewriting it
@@ -134,7 +141,7 @@ class TestCompleteRound:
         inv.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()
 
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
 
         await db.refresh(inv)
         assert inv.revoked_at is None
@@ -143,7 +150,7 @@ class TestCompleteRound:
         self, db: AsyncSession, tenant, user
     ):
         cv, rd_id = await _round(db, tenant, user)
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
 
         with pytest.raises(HTTPException) as exc:
             await service.add_evaluator(db, tenant.id, user.id, rd_id, user.id)
@@ -159,7 +166,7 @@ class TestReopenRound:
         own = await service.get_or_create_assessment(
             db, tenant.id, rd_id, evaluator_user_id=user.id
         )
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
         rd = await service.apply_round_action(db, tenant.id, user.id, rd_id, "reopen")
 
         assert rd["status"] == "in_progress"
@@ -187,7 +194,7 @@ class TestReopenRound:
         """
         cv, rd_id = await _round(db, tenant, user)
         inv = await _invite(db, tenant, user, cv, rd_id)
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "reopen")
 
         await db.refresh(inv)
@@ -257,7 +264,7 @@ class TestArchiveAndRestore:
     ):
         # A bare status write cannot express this — hence the action verb.
         _, rd_id = await _round(db, tenant, user)
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "archive")
         rd = await service.apply_round_action(db, tenant.id, user.id, rd_id, "restore")
         assert rd["status"] == "complete"
@@ -393,6 +400,7 @@ class TestArchivedRoundOnThePublicSurface:
 class TestLegacyStatusShape:
     async def test_status_complete_still_works(self, db: AsyncSession, tenant, user):
         _, rd_id = await _round(db, tenant, user)
+        await _score_critical(db, tenant, user, rd_id)
         rd = await service.update_round_status(
             db, tenant.id, user.id, rd_id, "complete"
         )
@@ -530,7 +538,7 @@ class TestRedoPublicContextRoundStatus:
         self, db: AsyncSession, tenant, user
     ):
         inv, rd_id = await self._submitted_invite(db, tenant, user)
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
 
         ctx = await public_service.public_get_context(db, inv.token)
         assert ctx["round_status"] == "completed"
@@ -594,7 +602,7 @@ class TestRedoReopenKeepsReediting:
         # Re-submitting works on the live round before anything closes it.
         await public_service.public_submit(db, inv.token)
 
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
         ctx = await public_service.public_get_context(db, inv.token)
         assert (ctx["status"], ctx["round_status"], ctx["allow_reediting"]) == (
             "submitted",
@@ -623,7 +631,7 @@ class TestRedoReopenKeepsReediting:
         inv, rd_id = await self._submitted_external(
             db, tenant, user, allow_reediting=False
         )
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "reopen")
 
         ctx = await public_service.public_get_context(db, inv.token)
@@ -642,7 +650,7 @@ class TestRedoReopenKeepsReediting:
         inv, rd_id = await self._submitted_external(
             db, tenant, user, allow_reediting=True
         )
-        await service.apply_round_action(db, tenant.id, user.id, rd_id, "complete")
+        await _complete(db, tenant, user, rd_id)
         await service.apply_round_action(db, tenant.id, user.id, rd_id, "reopen")
         inv.expires_at = datetime.now(UTC) - timedelta(days=1)
         await db.commit()

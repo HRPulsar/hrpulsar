@@ -385,6 +385,213 @@ class TestTextTranscript:
         speakers = {s["speaker"] for s in result["segments"]}
         assert speakers == {"speaker_0", "speaker_1"}
 
+    async def test_editing_the_whole_text_transcript_rebuilds_its_segments(
+        self, db, tenant, user
+    ):
+        """HRP-1085: the page shows segments, so saving the whole text has
+        to rebuild them - it used to change only the blob, and the edit
+        looked lost on screen and after a reload."""
+        from app.modules.recruitment.schemas import TranscriptUpdate
+
+        ctx = await _setup_cv(db, tenant, user)
+        first = await _scheduled_interview(db, tenant, user, ctx["cv"])
+        await sign_consent(db, tenant.id, ctx["candidate"]["id"])
+        await service.paste_text_transcript(
+            db,
+            tenant.id,
+            first["id"],
+            TextTranscriptRequest(text="Anna: Hello.\nIvan: Hi."),
+        )
+
+        result = await interview_service.update_transcript(
+            db,
+            tenant.id,
+            first["id"],
+            TranscriptUpdate(transcript="Anna: Hello again.\nIvan: Hi.\nAnna: Bye."),
+        )
+        assert [(s["speaker"], s["text"]) for s in result["segments"]] == [
+            ("speaker_0", "Hello again."),
+            ("speaker_1", "Hi."),
+            ("speaker_0", "Bye."),
+        ]
+        # A reload reads the same rows.
+        again = await interview_service.get_interview(db, tenant.id, first["id"])
+        assert [s["text"] for s in again["segments"]] == ["Hello again.", "Hi.", "Bye."]
+
+    async def test_editing_the_whole_text_reanchors_saved_citations(
+        self, db, tenant, user
+    ):
+        """HRP-1085 (review): the rebuild mints new segment ids. A saved
+        citation whose quote is still in the text points at its new segment
+        - in the analysis, its AI row and its run - and a quote the edit
+        removed keeps its old id, so the page marks it outdated."""
+        from app.modules.recruitment.models import AIAnalysisRun, AIAssessment
+        from app.modules.recruitment.schemas import TranscriptUpdate
+
+        ctx = await _setup_cv(db, tenant, user)
+        first = await _scheduled_interview(db, tenant, user, ctx["cv"])
+        await sign_consent(db, tenant.id, ctx["candidate"]["id"])
+        pasted = await service.paste_text_transcript(
+            db,
+            tenant.id,
+            first["id"],
+            TextTranscriptRequest(
+                text=(
+                    "Anna: Tell me about payments.\n"
+                    "Ivan: I built the settlement pipeline.\n"
+                    "Anna: Thanks."
+                )
+            ),
+        )
+        old = {str(s["text"]): str(s["id"]) for s in pasted["segments"]}
+        citations = [
+            {
+                "quote": "built the settlement pipeline",
+                "segment_id": old["I built the settlement pipeline."],
+                "start_sec": 99.0,
+                "end_sec": 100.0,
+            },
+            {
+                "quote": "Tell me about payments",
+                "segment_id": old["Tell me about payments."],
+                "start_sec": 0.0,
+                "end_sec": 2.0,
+            },
+        ]
+        interview = (
+            await db.execute(select(Interview).where(Interview.id == first["id"]))
+        ).scalar_one()
+        interview.analysis_data = {
+            "competence_assessments": [{"competence_id": "c1", "citations": citations}]
+        }
+        row = AIAssessment(
+            tenant_id=tenant.id,
+            interview_id=interview.id,
+            competence_id=uuid.uuid4(),
+            status="assessed",
+            citations=citations,
+        )
+        run = AIAnalysisRun(
+            tenant_id=tenant.id,
+            candidate_vacancy_id=ctx["cv"]["id"],
+            interview_id=interview.id,
+            mode="full",
+            status="failed",
+            analysis_data={"competence_assessments": [{"citations": citations}]},
+        )
+        db.add_all([row, run])
+        await db.commit()
+
+        result = await interview_service.update_transcript(
+            db,
+            tenant.id,
+            first["id"],
+            TranscriptUpdate(
+                transcript=(
+                    "Anna: What did you build?\n"
+                    "Ivan: I built the settlement pipeline.\n"
+                    "Anna: Thanks."
+                )
+            ),
+        )
+        new = next(s for s in result["segments"] if "settlement" in s["text"])
+        assert str(new["id"]) != old["I built the settlement pipeline."]
+
+        stored = [
+            (
+                await db.execute(
+                    select(Interview)
+                    .where(Interview.id == first["id"])
+                    .execution_options(populate_existing=True)
+                )
+            )
+            .scalar_one()
+            .analysis_data["competence_assessments"][0]["citations"],
+            (
+                await db.execute(
+                    select(AIAssessment)
+                    .where(AIAssessment.id == row.id)
+                    .execution_options(populate_existing=True)
+                )
+            )
+            .scalar_one()
+            .citations,
+            (
+                await db.execute(
+                    select(AIAnalysisRun)
+                    .where(AIAnalysisRun.id == run.id)
+                    .execution_options(populate_existing=True)
+                )
+            )
+            .scalar_one()
+            .analysis_data["competence_assessments"][0]["citations"],
+        ]
+        for kept, lost in stored:
+            assert kept["segment_id"] == str(new["id"])
+            assert (kept["start_sec"], kept["end_sec"]) == (
+                new["start_sec"],
+                new["end_sec"],
+            )
+            # Gone from the text: left as it was, the page reads it outdated.
+            assert lost == citations[1]
+
+    def test_a_blank_whole_transcript_is_refused(self):
+        """HRP-1085 (review): saving rebuilds the segments, so blank text
+        would wipe them - refused as a missing value."""
+        from app.core.i18n import validation_key_for_message
+        from app.modules.recruitment.schemas import TranscriptUpdate
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as caught:
+            TranscriptUpdate(transcript="  \n ")
+        message = caught.value.errors()[0]["msg"].removeprefix("Value error, ")
+        assert validation_key_for_message(message) == "errors.validation.missing"
+        assert TranscriptUpdate(transcript="Anna: Hi.").transcript == "Anna: Hi."
+
+    async def test_editing_a_recording_transcript_keeps_its_timed_segments(
+        self, db, tenant, user
+    ):
+        from app.modules.recruitment.models import InterviewSegment
+        from app.modules.recruitment.schemas import TranscriptUpdate
+        from app.modules.storage.models import File
+
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+        audio = File(
+            tenant_id=tenant.id,
+            name="upload",
+            original_name="call.mp3",
+            path=f"{tenant.id}/interviews/{interview.id}/upload",
+            size=2048,
+            mime_type="audio/mpeg",
+            uploaded_by=user.id,
+            entity_type="interview",
+            entity_id=interview.id,
+        )
+        db.add(audio)
+        await db.flush()
+        interview.audio_file_id = audio.id
+        interview.transcript = "Hello there."
+        db.add(
+            InterviewSegment(
+                tenant_id=tenant.id,
+                interview_id=interview.id,
+                speaker="speaker_0",
+                start_sec=12.5,
+                end_sec=14.0,
+                text="Hello there.",
+            )
+        )
+        await db.commit()
+
+        result = await interview_service.update_transcript(
+            db, tenant.id, interview.id, TranscriptUpdate(transcript="Hello, there.")
+        )
+        assert result["transcript"] == "Hello, there."
+        assert [(s["start_sec"], s["text"]) for s in result["segments"]] == [
+            (12.5, "Hello there.")
+        ]
+
 
 class TestArchiveRestoreReplace:
     async def test_archive_then_restore(self, db, tenant, user):
@@ -474,7 +681,7 @@ class TestSignedUrl:
 
         captured: dict = {}
 
-        def fake_presign(path, expires_in=3600):
+        def fake_presign(path, expires_in=3600, **_):
             captured["path"] = path
             captured["expires_in"] = expires_in
             return f"https://signed/{path}?ttl={expires_in}"
@@ -697,6 +904,140 @@ class TestAutoProcess:
         # Auto-processing was a per-upload decision; the replacement
         # upload makes its own.
         assert result["auto_process"] is False
+
+    @staticmethod
+    async def _complete_transcript(db, tenant, user, interview, *, body):
+        from unittest.mock import MagicMock, patch
+
+        from app.modules.recruitment.schemas import CompleteUploadRequest
+
+        with (
+            patch("app.core.s3.complete_multipart_upload", return_value="s3://loc"),
+            patch("app.core.s3.head_object", return_value={"ContentLength": 64}),
+            patch(
+                "app.core.s3.download_bytes",
+                return_value=body,
+                side_effect=None if body else RuntimeError("unreadable"),
+            ),
+            patch(
+                "app.modules.recruitment.tasks.scan_interview_media_task"
+            ) as scan_task,
+        ):
+            scan_task.delay = MagicMock()
+            return await interview_service.complete_interview_upload(
+                db,
+                tenant.id,
+                user.id,
+                interview.id,
+                CompleteUploadRequest(upload_id="up-t", parts=[], auto_process=True),
+                filename="transcript.txt",
+                mime_type="text/plain",
+                kind="text_transcript",
+            )
+
+    async def test_ready_transcript_upload_keeps_the_flag(self, db, tenant, user):
+        """HRP-1031: the box was ticked and the transcript is already
+        complete, so the flag stays on for the AV task's analyze hop."""
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+        result = await self._complete_transcript(
+            db, tenant, user, interview, body=b"Interviewer: Hi.\nCandidate: Hello.\n"
+        )
+        assert result["transcription_status"] == "completed"
+        assert result["auto_process"] is True
+
+    async def test_transcript_without_text_drops_the_flag(self, db, tenant, user):
+        """Nothing was extracted, so there is nothing to analyse."""
+        ctx = await _setup_cv(db, tenant, user)
+        interview = await _consent_interview(db, tenant, user, ctx["cv"])
+        result = await self._complete_transcript(db, tenant, user, interview, body=None)
+        assert result["transcription_status"] != "completed"
+        assert result["auto_process"] is False
+
+
+class TestAvScanChain:
+    """HRP-1031: after a clean/skipped verdict the AV task starts the auto
+    chain - transcription for a recording, analysis for a ready transcript
+    (the hop the transcribe task makes, billed the same way)."""
+
+    @staticmethod
+    def _scan(row, *, verdict: str = "skipped"):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from app.modules.recruitment.tasks import analysis as analysis_tasks
+        from app.modules.recruitment.tasks import av_scan
+
+        class _Session:
+            def __init__(self, _engine):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def execute(self, *_args, **_kwargs):
+                return SimpleNamespace(scalar_one_or_none=lambda: row)
+
+            def commit(self):
+                pass
+
+        chain, step = MagicMock(), MagicMock(return_value=True)
+        with (
+            patch("sqlalchemy.create_engine", return_value=MagicMock()),
+            patch("sqlalchemy.orm.Session", _Session),
+            patch.object(av_scan, "_av_scan_bytes", return_value=verdict),
+            patch.object(analysis_tasks, "_chain_analysis_if_requested", chain),
+            patch.object(analysis_tasks, "auto_chain_step", step),
+        ):
+            av_scan.scan_interview_media_task.run(str(uuid.uuid4()), str(uuid.uuid4()))
+        return chain, step
+
+    @staticmethod
+    def _row(**overrides):
+        from types import SimpleNamespace
+
+        values = {
+            "file_s3_key": "t/interviews/i/upload",
+            "audio_file_id": None,
+            "video_file_id": None,
+            "transcript_file_id": uuid.uuid4(),
+            "transcription_status": "completed",
+            "auto_process": True,
+            "av_status": "pending",
+            "av_scanned_at": None,
+            "status": "uploaded",
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_ready_transcript_goes_straight_to_analysis(self) -> None:
+        chain, step = self._scan(self._row())
+        chain.assert_called_once()
+        assert chain.call_args.kwargs == {"requested": True}
+        step.assert_not_called()
+
+    def test_recording_still_starts_with_transcription(self) -> None:
+        chain, step = self._scan(self._row(audio_file_id=uuid.uuid4()))
+        chain.assert_not_called()
+        assert step.call_args.args[2] == "transcribe"
+
+    @pytest.mark.parametrize(
+        ("overrides", "verdict"),
+        [
+            ({"auto_process": False}, "skipped"),
+            ({"transcription_status": "pending"}, "skipped"),
+            ({}, "error"),
+        ],
+    )
+    def test_no_chain_without_flag_text_or_a_clean_verdict(
+        self, overrides, verdict
+    ) -> None:
+        chain, step = self._scan(self._row(**overrides), verdict=verdict)
+        chain.assert_not_called()
+        step.assert_not_called()
 
 
 class TestTranscriptUploadKind:

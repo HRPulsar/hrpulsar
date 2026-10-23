@@ -12,7 +12,7 @@ import logging
 import re
 import unicodedata
 import uuid
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
 from urllib.parse import quote
 
@@ -1519,6 +1519,8 @@ async def add_internal_candidate_to_vacancy(
     user_id: uuid.UUID,
     vacancy_id: uuid.UUID,
     employee_id: uuid.UUID,
+    *,
+    may_reuse: Callable[[uuid.UUID], Awaitable[bool]] | None = None,
 ) -> dict:
     """Move an employee off the internal shortlist into the pipeline (HRP-711).
 
@@ -1618,6 +1620,16 @@ async def add_internal_candidate_to_vacancy(
         )
     if candidate is None and user.email:
         candidate = await find_active_candidate_by_email(db, tenant_id, user.email)
+    if (
+        candidate is not None
+        and may_reuse is not None
+        and not await may_reuse(candidate.id)
+    ):
+        # HRP-830 REDO review: reusing the employee's existing candidate row
+        # hands its card and resumes over - a scoped caller who cannot reach
+        # it is told the person is a candidate already, never which row; a
+        # recruiter or HR attaches them.
+        raise AppError("candidate_email_taken_elsewhere", status.HTTP_409_CONFLICT)
 
     if candidate is None:
         parsed = await _employee_parsed_resume(db, tenant_id, employee, person)

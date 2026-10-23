@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { api } from "@/lib/api";
 import { flattenTree } from "@/lib/utils";
 import { dictionaryItemLabel, gradeTitleLabel } from "@/lib/reference-labels";
@@ -811,13 +812,13 @@ export default function EmployeesPage() {
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex flex-col leading-tight">
-                          <Link
-                            data-testid={`employees-row-${emp.id}-name`}
-                            href={`/employees/${emp.id}`}
-                            className="hover:underline"
+                          <EmployeeName
+                            employeeId={emp.id}
+                            testId={`employees-row-${emp.id}-name`}
+                            linkClassName="hover:underline"
                           >
                             {emp.user_name || "—"}
-                          </Link>
+                          </EmployeeName>
                           <span
                             data-testid={`employees-row-${emp.id}-email`}
                             className="text-xs text-muted-foreground"

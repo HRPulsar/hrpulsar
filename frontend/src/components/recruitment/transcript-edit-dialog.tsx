@@ -90,9 +90,11 @@ export function TranscriptEditDialog({
           >
             {tc("cancel")}
           </Button>
+          {/* HRP-1085: saving rebuilds the segments; empty text would wipe
+              them, and the backend refuses it too. */}
           <Button
             onClick={handleSave}
-            disabled={submitting}
+            disabled={submitting || !text.trim()}
             data-testid="recruitment-transcript-btn-save"
           >
             {submitting ? (

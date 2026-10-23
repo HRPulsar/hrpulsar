@@ -106,6 +106,8 @@ class AccessOwnerRead(BaseModel):
     is still with the company."""
 
     user_id: uuid.UUID
+    # HRP-829 REDO: the card the name links to; none for an account with no card.
+    employee_id: uuid.UUID | None = None
     name: str
     position_title: str | None = None
     # The employee card's status; an account with no card reads by the

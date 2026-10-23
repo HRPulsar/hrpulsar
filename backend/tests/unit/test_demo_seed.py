@@ -303,9 +303,14 @@ async def test_the_headline_interview_has_a_recording_to_seek(
 ):
     """HRP-980: at least one demo interview plays back, so a citation click
     seeks a recording rather than doing nothing. The asset goes to the
-    tenant's own prefix, which the demo purge sweeps."""
-    from app.modules.demo.seed import _ELENA_RECORDING
+    tenant's own prefix, which the demo purge sweeps. It is a voiced mp3
+    as long as the interview says, and every transcript line starts
+    inside it. The recordings ship with the enterprise edition only."""
+    pytest.importorskip("ee.i18n_catalogs")
+    from app.modules.demo.seed import elena_recording
     from app.modules.recruitment import interview_service
+    from app.modules.recruitment.media_duration import get_audio_duration_seconds
+    from app.modules.recruitment.models import InterviewSegment
     from app.modules.storage.models import File
 
     stored: dict[str, tuple[bytes, str]] = {}
@@ -339,11 +344,69 @@ async def test_the_headline_interview_has_a_recording_to_seek(
     assert "Elena" in elena.title
     file_row = await db.get(File, elena.audio_file_id)
     assert file_row.path.startswith(f"tenants/{tenant.id}/")
-    assert stored[file_row.path] == (_ELENA_RECORDING.read_bytes(), "audio/mp4")
-    assert file_row.size == len(_ELENA_RECORDING.read_bytes()) < 150_000
+    recording = elena_recording().read_bytes()
+    assert stored[file_row.path] == (recording, "audio/mpeg")
+    assert file_row.path.endswith(".mp3") and file_row.mime_type == "audio/mpeg"
+    # Speech bitrate: a few MB, not a studio master.
+    assert file_row.size == len(recording) < 5_000_000
+    assert file_row.original_name == f"{elena.title}.mp3"
+
+    seconds = get_audio_duration_seconds(recording)
+    assert elena.duration_seconds == round(seconds) > 5 * 60
+    assert elena.duration_minutes == round(seconds / 60)
+    starts = (
+        (
+            await db.execute(
+                select(InterviewSegment.start_sec).where(
+                    InterviewSegment.interview_id == elena.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert starts and max(starts) < seconds
 
     media = await interview_service.get_interview_media_url(db, tenant.id, elena.id)
     assert media["kind"] == "audio" and media["url"].endswith(file_row.path)
+
+
+@pytest.mark.asyncio
+async def test_a_community_build_seeds_the_interview_as_text(
+    db: AsyncSession, tenant, user, monkeypatch
+):
+    """HRP-980: the voiced recordings live in ``ee/demo_seed/`` only - the
+    demo sandbox is enterprise, and the public repo carries no mp3. Without
+    ``ee`` the seed still runs: Elena's interview is a text transcript with
+    no recording and no made-up duration."""
+    import sys
+
+    from app.modules.demo.seed import elena_recording
+    from app.modules.demo.seed_i18n import _CATALOG_DIR
+
+    assert not list(_CATALOG_DIR.glob("*.mp3"))
+    monkeypatch.setitem(sys.modules, "ee.i18n_catalogs", None)
+    uploads: list[str] = []
+    monkeypatch.setattr(
+        "app.core.s3.upload_file", lambda data, path, ct: uploads.append(path) or path
+    )
+    assert elena_recording() is None
+    await _flag_demo(db, tenant)
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    elena = (
+        await db.execute(
+            select(Interview).where(
+                Interview.tenant_id == tenant.id,
+                Interview.title.like("%Elena Volkova"),
+                Interview.transcript.is_not(None),
+            )
+        )
+    ).scalar_one()
+    assert elena.audio_file_id is None and elena.type == "text_transcript"
+    assert elena.duration_seconds is None and elena.duration_minutes is None
+    assert not [path for path in uploads if path.endswith(".mp3")]
 
 
 @pytest.mark.asyncio

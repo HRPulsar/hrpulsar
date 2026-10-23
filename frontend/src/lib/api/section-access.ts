@@ -8,6 +8,8 @@ export interface SectionAccessSection {
   hidden: boolean;
   admin_locked: boolean;
   never_hidden: boolean;
+  /** HRP-831: role code -> the most that role may get here; absent = manage. */
+  ceilings: Partial<Record<string, MatrixLevel>>;
   defaults: Record<string, MatrixLevel>;
   levels: Record<string, MatrixLevel>;
 }

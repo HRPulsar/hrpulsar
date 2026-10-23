@@ -19,7 +19,7 @@ own, ask for an agent for themselves.
 from __future__ import annotations
 
 from collections.abc import Callable, Container, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from fastapi import Depends
@@ -50,6 +50,13 @@ class Section:
     self_guarded: bool = False  # its routes rule mutations per resource
     admin_locked: bool = False  # the admin row never drops below manage; implies never_hidden
     never_hidden: bool = False  # cannot be hidden from everyone
+    # HRP-831: role code -> the most the matrix may hand that role here. The
+    # tenant cannot save a level above it, a stored one is dropped on read,
+    # and ``role_level`` never answers above it.
+    ceilings: Mapping[str, Level] = field(default_factory=dict)
+
+    def ceiling(self, role: str) -> Level:
+        return self.ceilings.get(role, "manage")
 
 
 def _row(
@@ -82,6 +89,9 @@ SECTIONS: tuple[Section, ...] = (
         _row("manage", "view", "manage", "view", "view", "view"),
         self_guarded=True,
         never_hidden=True,
+        # REDO QA 14.10: ``manage`` there would run the subtree a recruiter,
+        # hiring manager or employee does not head - nothing past ``view``.
+        ceilings=dict.fromkeys(("recruiter", "hiring_manager", "employee"), "view"),
     ),
     # HRP-828: ``manage`` shapes the org chart - creates, edits, moves and
     # maps divisions and authors positions - within the caller's subtree
@@ -193,11 +203,12 @@ SECTIONS: tuple[Section, ...] = (
         _row("manage", "view", "manage", "view", "view", "view"),
         self_guarded=True,
     ),
-    # HRP-830: ``manage`` runs hiring for the whole workspace - vacancies,
-    # candidates, interviews, AI analyses, consents, reports, evaluation and
-    # hiring rounds - and sees all of it (``recruitment.scope``). ``view``
-    # reads the vacancies in the caller's scope: their own, the ones they
-    # are hiring manager of, their managed subtree's. Two roles keep a
+    # HRP-830: ``manage`` runs hiring - vacancies, candidates, interviews,
+    # AI analyses, consents, reports, evaluation and hiring rounds - and
+    # ``view`` reads it, both within the caller's scope (``recruitment.scope``,
+    # REDO QA 14.10): the whole workspace for the admin level and the
+    # recruiter, the managed subtree for a manager, the vacancies naming
+    # them for a hiring manager. Two roles keep a
     # piece on top of ``view`` there (Maxim, 25.09): ``hiring_manager``
     # evaluates - questions, human scores, the candidate's stage - and
     # ``manager`` runs hiring rounds, so the section guards itself: every
@@ -213,6 +224,9 @@ SECTIONS: tuple[Section, ...] = (
          "/v1/assessment-rounds", "/v1/assessments", "/v1/manager-assessment-invites"),
         _row("manage", "manage", "view", "manage", "view", "none"),
         self_guarded=True,
+        # HRP-830: the Employee role never reaches hiring - the cell stays
+        # ``none``, locked on the matrix screen with the reason.
+        ceilings={"employee": "none"},
     ),
     # HRP-822: read-only by nature, so the generic rule is enough and the
     # section needs no ``self_guarded`` - ``view`` reads the charts,
@@ -242,8 +256,27 @@ SECTIONS: tuple[Section, ...] = (
     # a manager sees and sends only into their subtree; the role a caller
     # may hand out stays the inviter hierarchy's (``_INVITE_ALLOWED``).
     Section("import", ("/import",), _row("manage", "none", "none", "none", "none", "none"), admin_locked=True, never_hidden=True),
-    Section("invitations", ("/invitations",), _row("manage", "manage", "manage", "none", "none", "none"), admin_locked=True, never_hidden=True),
-    Section("roles", ("/roles",), _row("manage", "none", "none", "none", "none", "none"), admin_locked=True, never_hidden=True),
+    # HRP-831 (QA 15.10): the roles below ``manager`` invite nobody - an
+    # invitation is a seat in a division they do not head - so their cell is
+    # ``none`` for good. Writing roles is the admin's: ``manage`` on roles
+    # would add nothing to ``view`` for anyone else, the matrix screen
+    # itself being the admin role's.
+    Section(
+        "invitations",
+        ("/invitations",),
+        _row("manage", "manage", "manage", "none", "none", "none"),
+        admin_locked=True,
+        never_hidden=True,
+        ceilings=dict.fromkeys(("recruiter", "hiring_manager", "employee"), "none"),
+    ),
+    Section(
+        "roles",
+        ("/roles",),
+        _row("manage", "none", "none", "none", "none", "none"),
+        admin_locked=True,
+        never_hidden=True,
+        ceilings=dict.fromkeys(("hr", "manager", "recruiter", "hiring_manager", "employee"), "view"),
+    ),
     Section("ai-settings", ("/admin/ai-settings",), _row("manage", "none", "none", "none", "none", "none"), admin_locked=True, never_hidden=True),
 )
 SECTIONS_BY_CODE: dict[str, Section] = {s.code: s for s in SECTIONS}
@@ -269,10 +302,12 @@ PERSONAL_PATHS: frozenset[str] = frozenset(
         "/api/analytics/my-loop",
         "/api/analytics/my-loop/ai-summary",
         # HRP-823: everything under ``/exams`` is the taker's own side of
-        # the exams section - the list answers the caller's read scope, the
-        # other four resolve one exam through the caller's own employee row.
+        # the exams section - the list answers the caller's read scope (its
+        # tabs and the To do count the caller's own row), the other four
+        # resolve one exam through the caller's own employee row.
         # ``/mass-exams`` is the section itself and stays gated.
         "/api/exams",
+        "/api/exams/todo-count",
         "/api/exams/{exam_id}/questions",
         "/api/exams/{exam_id}/review",
         "/api/exams/{exam_id}/answer",
@@ -310,7 +345,9 @@ SHARED_READS: frozenset[str] = frozenset(
         "/api/grade-system/specializations/{specialization_id}/grades",
         # HRP-829: the employee list behind every people picker and the
         # global search, and the card other sections open an employee
-        # with. Each keeps its own read scope and schema.
+        # with. Each keeps its own read scope and schema; the card closes
+        # at ``none`` itself (``readable_card_ids``, REDO QA 14.10) with
+        # the answer of an unknown id rather than the gate's 403.
         "/api/employees",
         "/api/employees/{employee_id}",
         # HRP-831: the role list behind the invitation form - the route
@@ -346,10 +383,13 @@ def role_level(
     overrides: Mapping[tuple[str, str], Level],
     hidden: Container[str],
 ) -> Level:
-    """One cell after the tenant's override and the lockout floor."""
+    """One cell after the tenant's override, the role's ceiling and the
+    lockout floor."""
     level = overrides.get((section.code, role), section.defaults[role])
     if section.code in hidden and not section.never_hidden:
         level = "none"
+    if LEVEL_ORDER[level] > LEVEL_ORDER[section.ceiling(role)]:
+        level = section.ceiling(role)
     if section.admin_locked and role == "admin":
         level = "manage"  # §8: the admin block never locks the admin out
     return level

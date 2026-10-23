@@ -59,13 +59,22 @@ test.describe("Vacancy library competences (HRP-687)", () => {
     await page
       .getByTestId(`vacancy-competences-library-picker-${competence.id}`)
       .click();
-    await page.getByTestId("vacancy-competences-library-save-btn").click();
+    // HRP-1087: step 2 asks the level for each picked competence.
+    await page.getByTestId("vacancy-competences-library-next-btn").click();
+    const save = page.getByTestId("vacancy-competences-library-save-btn");
+    await expect(save).toBeDisabled();
+    await page.getByTestId(`vacancy-competences-library-level-${competence.id}`).click();
+    await page.getByRole("option").first().click();
+    await save.click();
 
     // Reactivity, both halves: the section lists the linked competence and
     // the sibling internal-candidates block re-reads its precondition.
     await expect(
       page.getByTestId(`vacancy-library-competence-${competence.id}`),
     ).toBeVisible({ timeout: 10000 });
+    await expect(
+      page.getByTestId(`vacancy-library-competence-level-${competence.id}`),
+    ).toBeVisible();
     await expect(postBtn).toBeEnabled({ timeout: 10000 });
 
     await postBtn.click();

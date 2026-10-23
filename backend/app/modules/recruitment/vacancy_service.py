@@ -563,6 +563,24 @@ async def _seed_competences_from_library(
                 aggregated,
             )
 
+    # HRP-1087: the levels in ladder order, so the first - the one the
+    # vacancy shows and its talent-market twin matches on
+    # (``_sync_card_competences``) - is the lowest any chosen grade asks,
+    # not whichever a set happened to yield first.
+    from app.modules.competence.models import SkillLevel
+
+    all_levels = {sl for levels in aggregated.values() for sl in levels}
+    rank: dict[uuid.UUID, int] = {}
+    if all_levels:
+        rank = {
+            row.id: row.sort_index
+            for row in await db.execute(
+                select(SkillLevel.id, SkillLevel.sort_index).where(
+                    SkillLevel.id.in_(all_levels)
+                )
+            )
+        }
+
     for competence_id, skill_levels in aggregated.items():
         existing = (
             await db.execute(
@@ -574,12 +592,13 @@ async def _seed_competences_from_library(
         ).scalar_one_or_none()
         if existing:
             continue
+        ordered = sorted(skill_levels, key=lambda sl: (rank.get(sl, 0), str(sl)))
         db.add(
             VacancyCompetence(
                 tenant_id=tenant_id,
                 vacancy_id=vacancy_id,
                 competence_id=competence_id,
-                skill_level_ids=[str(sl) for sl in skill_levels],
+                skill_level_ids=[str(sl) for sl in ordered],
                 source="library",
             )
         )

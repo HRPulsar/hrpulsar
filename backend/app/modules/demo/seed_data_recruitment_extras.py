@@ -346,7 +346,7 @@ EXTRA_CANDIDATES: list[dict] = [
         "ai_strength": "Owned the Stripe Dashboard React migration end-to-end.",
         "ai_risk": "Limited hands-on hiring experience.",
         "ai_mitigation": "Hiring panel will probe interview calibration.",
-        "interview_kind": "in_progress_upload",
+        "interview_kind": "scheduled_screen",
         "analysis_mode": "resume_only",
         "next_step": "schedule_interview",
         "competence_notes": [
@@ -1640,14 +1640,16 @@ EXTRA_PARSED_RESUMES: dict[str, dict] = {
 #
 # The seeder reads this map to decide which Interview row shape to lay
 # down for the candidate. Values map onto status fields on the
-# Interview model.
+# Interview model. ``type`` is the recording type the interview page
+# shows (HRP-980): a seeded transcript is a text transcript, a slot with
+# nothing attached yet is undecided.
 
 INTERVIEW_SHAPES: dict[str, dict] = {
     "completed_no_ai": {
         "status": "completed",
         "transcription_status": "completed",
         "analysis_status": "pending",
-        "type": "technical",
+        "type": "text_transcript",
         "title_prefix": "Technical interview — ",
         "transcript": (
             "[Transcript redacted for demo brevity. AI analysis has not been "
@@ -1656,21 +1658,24 @@ INTERVIEW_SHAPES: dict[str, dict] = {
         "duration_minutes": 40,
         "days_ago": 2,
     },
-    "in_progress_upload": {
-        "status": "in_progress",
+    # HRP-980: no recording is attached, so the screen is still ahead -
+    # "in_progress" read as an upload that never comes. Tomorrow, so the
+    # slot is not already past when the demo is opened.
+    "scheduled_screen": {
+        "status": "scheduled",
         "transcription_status": "pending",
         "analysis_status": "pending",
-        "type": "screen",
+        "type": "undecided",
         "title_prefix": "Screen — ",
         "transcript": None,
         "duration_minutes": None,
-        "days_ago": 0,
+        "days_ago": -1,
     },
     "scheduled": {
         "status": "scheduled",
         "transcription_status": "pending",
         "analysis_status": "pending",
-        "type": "technical",
+        "type": "undecided",
         "title_prefix": "Scheduled technical — ",
         "transcript": None,
         "duration_minutes": None,
@@ -1680,7 +1685,7 @@ INTERVIEW_SHAPES: dict[str, dict] = {
         "status": "archived",
         "transcription_status": "completed",
         "analysis_status": "completed",
-        "type": "screen",
+        "type": "text_transcript",
         "title_prefix": "Archived screen — ",
         "transcript": "[Archived. Candidate withdrew before final round.]",
         "duration_minutes": 30,

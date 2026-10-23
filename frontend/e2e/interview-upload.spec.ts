@@ -138,6 +138,14 @@ test.describe("Recruitment interview upload (HRP-202)", () => {
     await expect(
       page.getByText("happy to walk through my experience", { exact: false }),
     ).toBeVisible();
+    // HRP-1085: the upload block now says the transcript is in, instead of
+    // offering the upload or the paste again.
+    await expect(
+      page.getByTestId("recruitment-interview-transcript-uploaded"),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("recruitment-interview-btn-paste-text"),
+    ).toHaveCount(0);
 
     // Archive → restore lifecycle.
     const archResp = await page.request.post(

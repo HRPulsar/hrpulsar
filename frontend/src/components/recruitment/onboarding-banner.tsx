@@ -71,9 +71,11 @@ export function RecruitmentOnboardingBanner() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   // HRP-830: the first-cycle banner is the hiring team's - its checklist
-  // and demo data are `manage` on recruitment, so a `view` holder skips
-  // the call rather than drawing a 403 on every page.
-  const canManage = usePermissions().canManageSection("recruitment");
+  // and demo data are `manage` on recruitment over the whole workspace
+  // (`runs_all_hiring`), so anyone else skips the call rather than drawing
+  // a 403 on every page.
+  const { canManageSection, seesAllHiring } = usePermissions();
+  const canManage = canManageSection("recruitment") && seesAllHiring;
 
   const load = useCallback(async () => {
     if (!canManage) {

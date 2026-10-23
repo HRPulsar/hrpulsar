@@ -340,3 +340,84 @@ async def test_clone_seed_builds_the_candidate_card_in_the_seed_locale(
             )
         )
     ).scalar_one() == "isabell.faerber@example.com"
+
+
+@pytest.mark.parametrize("locale", ["en", "de", "ru"])
+async def test_seeded_interviews_carry_their_candidate_name_and_none_awaits_an_upload(
+    db: AsyncSession, tenant, user, skill_levels, monkeypatch, locale: str
+):
+    """HRP-980 (QA 21.10): the screen of the candidate the ru catalog calls
+    Helena Brennan sat "in_progress" with nothing uploaded, so it read as
+    an upload that never comes - it is scheduled. The name in every
+    interview title is the candidate's own, in every seed locale, and every
+    interview has a recording type the page can name ("technical" was
+    none: Details read "Type -")."""
+    from app.modules.recruitment.models import Candidate, CandidateVacancy
+
+    if locale != "en" and not seed_i18n._load_catalog(locale):
+        pytest.skip(f"no {locale} seed catalog in this build")
+    monkeypatch.setattr(settings, "available_locales", f"{locale},en")
+    monkeypatch.setattr(settings, "default_locale", locale)
+    tenant.is_demo = True
+    await db.commit()
+    await clone_seed_into_demo_tenant(db, tenant.id, owner_user_id=user.id)
+    await db.commit()
+
+    rows = (
+        await db.execute(
+            select(Interview, Candidate.full_name)
+            .join(
+                CandidateVacancy, CandidateVacancy.id == Interview.candidate_vacancy_id
+            )
+            .join(Candidate, Candidate.id == CandidateVacancy.candidate_id)
+            .where(Interview.tenant_id == tenant.id)
+        )
+    ).all()
+    assert rows
+    for interview, name in rows:
+        assert interview.title.endswith(f" — {name}"), (interview.title, name)
+        if not (
+            interview.audio_file_id
+            or interview.video_file_id
+            or interview.transcript_file_id
+            or interview.transcript
+        ):
+            assert interview.status == "scheduled", interview.title
+            assert interview.type == "undecided", interview.title
+        elif not interview.audio_file_id:
+            assert interview.type == "text_transcript", interview.title
+    helena = seed_i18n.translate("Helena Brennan", locale)
+    assert [i.status for i, name in rows if name == helena] == ["scheduled"]
+
+
+@pytest.mark.parametrize("locale", ["en", "de", "ru"])
+def test_the_recording_speaks_the_transcript_of_its_locale(locale: str, monkeypatch):
+    """HRP-980 (QA 21.10): Elena's recording is voiced from the transcript
+    of the seed locale, line by line - each [HH:MM:SS] is where its line
+    starts, so they all fall inside the recording, which is no longer than
+    the conversation (no silence padding it to a round length), and the
+    header's duration is the recording's own. The recordings are
+    enterprise-only (``ee/demo_seed/``)."""
+    pytest.importorskip("ee.i18n_catalogs")
+    from app.modules.demo.seed import elena_recording
+    from app.modules.demo.seed_data import parse_transcript_segments
+    from app.modules.recruitment.media_duration import get_audio_duration_seconds
+
+    if locale != "en" and not seed_i18n._load_catalog(locale):
+        pytest.skip(f"no {locale} seed catalog in this build")
+    monkeypatch.setattr(settings, "available_locales", f"{locale},en")
+    monkeypatch.setattr(settings, "default_locale", locale)
+
+    recording = elena_recording()
+    suffix = "" if locale == "en" else f".{locale}"
+    assert recording is not None
+    assert recording.name == f"interview-recording-elena{suffix}.mp3"
+    assert recording.parent.name == "demo_seed"
+    seconds = get_audio_duration_seconds(str(recording))
+    assert seconds
+
+    transcript = load_transcript()
+    starts = [row["start_sec"] for row in parse_transcript_segments(transcript)]
+    assert len(starts) > 40 and starts == sorted(set(starts))
+    assert starts[-1] < seconds < starts[-1] + 30
+    assert f": {round(seconds / 60)} " in transcript.splitlines()[4]

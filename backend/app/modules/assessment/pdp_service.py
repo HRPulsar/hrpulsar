@@ -1,5 +1,6 @@
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 
 from fastapi import status
@@ -98,36 +99,36 @@ def _format_user_name(user) -> str | None:
 
 async def _resolve_reviewer_user_id(db: AsyncSession, p: PDP) -> uuid.UUID | None:
     """Reviewer user id = explicit reviewer if set, else the employee's
-    division manager (as a ``users.id``). Used both to render the reviewer
+    line manager (as a ``users.id``). Used both to render the reviewer
     name and to gate the under-review item-toggle permission (HRP-130) —
     these two must agree, otherwise a manager who appears as the reviewer
-    on screen can't actually accept items."""
+    on screen can't actually accept items.
+
+    HRP-1048: a head of their own division gets the head above them; with
+    nobody assigned up to the root they stay their own reviewer, as before.
+    """
+    from app.modules.company.line_manager import resolve_line_manager
     from app.modules.company.models import Division
-    from app.modules.employee.models import Employee
 
     if p.reviewer_id:
         return p.reviewer_id
 
     employee = getattr(p, "employee", None)
-    division_id = getattr(employee, "division_id", None) if employee else None
-    if not division_id:
+    if employee is None:
         return None
-
-    division = await db.get(Division, division_id)
-    if division is None or division.manager_id is None:
+    manager = await resolve_line_manager(db, employee)
+    if manager is not None:
+        return manager.user_id
+    if employee.division_id is None:
         return None
-
-    manager_result = await db.execute(
-        select(Employee).where(Employee.id == division.manager_id)
-    )
-    manager = manager_result.scalar_one_or_none()
-    if manager is None or manager.user_id is None:
-        return None
-    return manager.user_id
+    division = await db.get(Division, employee.division_id)
+    if division is not None and division.manager_id == employee.id:
+        return employee.user_id
+    return None
 
 
 async def _resolve_reviewer_name(db: AsyncSession, p: PDP) -> str | None:
-    """Reviewer = explicit reviewer if set, else employee's division manager."""
+    """Reviewer = explicit reviewer if set, else the employee's line manager."""
     from app.modules.auth.models import User
 
     reviewer_user_id = await _resolve_reviewer_user_id(db, p)
@@ -282,12 +283,20 @@ async def _pdp_to_detail(
 ) -> dict:
     reviewer_user_id = await _resolve_reviewer_user_id(db, p)
     reviewer_name: str | None = None
+    reviewer_employee_id: uuid.UUID | None = None
     if reviewer_user_id is not None:
         from app.modules.auth.models import User
+        from app.modules.employee.models import Employee
 
         reviewer_user = await db.get(User, reviewer_user_id)
         reviewer_name = _format_user_name(reviewer_user)
+        reviewer_employee_id = await db.scalar(
+            select(Employee.id).where(
+                Employee.user_id == reviewer_user_id, Employee.tenant_id == p.tenant_id
+            )
+        )
     data = _pdp_to_read(p, reviewer_name=reviewer_name)
+    data["reviewer_employee_id"] = reviewer_employee_id
 
     # HRP-24: while the plan is under review, the assigned employee sees the
     # snapshot taken at the moment of transition rather than the live items.
@@ -301,7 +310,7 @@ async def _pdp_to_detail(
         and viewer_user_id == employee_user_id
     )
     # HRP-130: ``is_reviewer`` mirrors the same fallback used for
-    # ``reviewer_name`` (explicit reviewer OR division manager). The UI uses
+    # ``reviewer_name`` (explicit reviewer OR line manager). The UI uses
     # it to enable the item checkbox for managers who appear as the implicit
     # reviewer; the backend gate in ``mark_item_passed`` resolves the same
     # way so the two never diverge.
@@ -798,10 +807,13 @@ async def list_pdps(
     visible_employee_ids: set[uuid.UUID] | None = None,
     *,
     hide_drafts: bool = False,
+    statuses: Sequence[str] | None = None,
 ) -> list[dict]:
     query = (
         select(PDP).where(PDP.tenant_id == tenant_id).order_by(PDP.created_at.desc())
     )
+    if statuses is not None:
+        query = query.where(PDP.status.in_(statuses))
     if visible_employee_ids is not None:
         if not visible_employee_ids:
             return []
@@ -1143,6 +1155,7 @@ async def _notify_pdp_review_submitted(
         subject, body = render_pdp_review_submitted_email(
             employee_name,
             pdp_title=p.title,
+            pdp_id=str(p.id),
             locale=resolve_locale(
                 user_language=reviewer.language, tenant_default=tenant_default
             ),
@@ -1245,6 +1258,7 @@ async def _notify_pdp_done(
         subject, body = render_pdp_done_to_reviewer_email(
             owner_display,
             pdp_title=p.title,
+            pdp_id=str(p.id),
             locale=reviewer_locale,
         )
         enqueue_email(
@@ -1308,6 +1322,7 @@ async def _notify_pdp_cancelled(
         subject, body = render_pdp_cancelled_to_reviewer_email(
             owner_display,
             pdp_title=p.title,
+            pdp_id=str(p.id),
             locale=reviewer_locale,
         )
         enqueue_email(

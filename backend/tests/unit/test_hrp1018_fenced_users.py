@@ -94,7 +94,7 @@ async def test_fenced_users_answers_what_fenced_off_vacancy_answers(auth_client,
         ]
     )
     await db.commit()
-    # Unfenced although candidates: the admin level and ``manage``.
+    # Unfenced although candidates: the admin level and the recruiter.
     hr, recruiter = await _user(db, tenant, "hr"), await _user(db, tenant, "recruiter")
     for u in (hr, recruiter):
         await _apply(db, tenant, vac, email=u.email)
@@ -109,11 +109,11 @@ async def test_fenced_users_answers_what_fenced_off_vacancy_answers(auth_client,
 
     batch, one_by_one = await _both()
     assert batch == one_by_one == {by_email.id, by_person.id, reacted.id}
-    # Raised to ``manage``, the manager runs hiring and leaves the fence -
-    # the tenant's override is read, not the defaults.
+    # HRP-830 REDO: raised to ``manage``, the manager runs hiring on their own
+    # divisions only - still fenced off the vacancy they applied to.
     await _save(auth_client, levels={"recruitment": {"manager": "manage"}})
     batch, one_by_one = await _both()
-    assert batch == one_by_one == {by_person.id, reacted.id}
+    assert batch == one_by_one == {by_email.id, by_person.id, reacted.id}
 
 
 async def test_fenced_users_does_not_query_per_candidate(db, tenant):

@@ -248,9 +248,9 @@ def resolve_user_role(user, *, full: bool) -> str | None:
     """The audience ``user`` reads the AI payload as (R3a).
 
     Read paths in the recruitment services accept a single role string
-    and filter the AI payload by it. ``full`` is the caller's unrestricted
-    ``RecruitmentScope`` - an admin-level role or ``manage`` on recruitment
-    (HRP-830), the ones who see the whole hiring surface - and reads the
+    and filter the AI payload by it. ``full`` is the caller's
+    ``RecruitmentScope.full_payload`` - the whole hiring surface (admin level,
+    recruiter) or ``manage`` on recruitment (HRP-830) - and reads the
     full payload; that used to be the admin/recruiter/hr role list. The
     ``hiring_manager`` role gets its slice, anyone else ``None``, which
     strips the AI payload (defence in depth on top of the section gate).

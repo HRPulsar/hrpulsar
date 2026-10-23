@@ -10,9 +10,11 @@ the (potentially billing-wrapped) function in this module.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from functools import lru_cache
+from typing import Any, get_args
 
 from fastapi import status
 from sqlalchemy import and_, delete, select, update
@@ -494,45 +496,129 @@ def _interview_to_read(
     }
 
 
-def _parse_speaker_segments(text: str) -> list[dict]:
-    """Parse ``Interviewer: …`` / ``Candidate: …`` speaker labels.
+# HRP-1085: role words a transcript labels its speakers with live in the
+# message catalogs, one list per language (``recruitment.transcript_labels``;
+# the ru list ships with the ee catalog only). They map to the roles at
+# once - the interviewer is ``speaker_0`` and the candidate ``speaker_1``,
+# the convention the speaker-role pass (``speaker_roles``) also writes. A
+# transcript is in its own language whatever the tenant's locale, so every
+# AI content language counts.
+_ROLE_SPEAKERS = (("interviewer", "speaker_0"), ("candidate", "speaker_1"))
 
-    HRP-202 acceptance: when a transcript is pasted or uploaded as text,
-    speaker prefixes are extracted into ``InterviewSegment`` rows so the
-    AI analysis stage gets structured input. Unlabelled lines collapse
-    into the prior speaker's segment to keep the segment count sane.
+
+@lru_cache(maxsize=1)
+def _role_labels() -> dict[str, str]:
+    """Lower-cased role word -> speaker id, over every content language."""
+    from app.core.i18n import catalog_list
+    from app.modules.ai_settings.schemas import ContentLanguage
+
+    return {
+        word.lower(): speaker
+        for role, speaker in _ROLE_SPEAKERS
+        for locale in get_args(ContentLanguage)
+        for word in catalog_list(f"recruitment.transcript_labels.{role}", locale)
+    }
+
+
+# ``<label>: <text>``. A label is short (at most four words, 40 chars),
+# starts with a letter and does not end a sentence; German gender forms
+# ("Interviewer:in") keep their inner colon. An optional leading timecode
+# ("[00:01:15]") is skipped so its colons are not read as a label.
+_LABELLED_LINE = re.compile(
+    r"^(?:\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s+)?"
+    r"(?P<label>[^\W\d_][\w .'\u2019*-]{0,39}?(?:[:*_]in)?)\s*:\s*(?P<text>.*)$"
+)
+_SENTENCE_END = (".", "!", "?", "\u2026", "\u00bb", '"', "\u201d", ")")
+
+
+def _speaker_label(line: str) -> tuple[str, str] | None:
+    """``(label, text)`` when ``line`` opens with a speaker label."""
+    match = _LABELLED_LINE.match(line)
+    if match is None:
+        return None
+    label = " ".join(match.group("label").split())
+    text = match.group("text").strip()
+    if (
+        len(label.split()) > 4
+        or label.endswith(".")
+        # "https://..." is a link, not a speaker called "https".
+        or text.startswith("//")
+        # "We start at 10:30" is a clock, not a speaker "We start at 10";
+        # "Speaker 1: Hi" still is one.
+        or (label[-1].isdigit() and text[:1].isdigit())
+    ):
+        return None
+    return label, text
+
+
+def _parse_speaker_segments(text: str) -> list[dict]:
+    """Split a ready-made transcript into speaker segments.
+
+    The one parser behind every text transcript - pasted, uploaded as
+    pdf/txt (HRP-202, HRP-385) or edited as a whole (HRP-1085). A line
+    opening with ``<label>: `` starts a segment; lines without a label join
+    the segment before them.
+
+    Known role words (``_role_labels``) always split. Any other label - a name, "HR manager" - splits only when
+    the file as a whole is labelled: at least two different labels, and a
+    label opens most of its paragraphs (a paragraph starts after a blank
+    line, after a line that ends a sentence, or at a label - so a pdf's
+    wrapped lines are not counted as paragraphs of their own). That keeps
+    a narrative with the odd "Note:" in one piece. Such labels become
+    speakers numbered by first appearance, ``speaker_0`` up (after the two
+    role ids when the file also uses role words) - the shape a diarizing
+    provider returns.
     """
 
-    speakers = {
-        "interviewer": "speaker_0",
-        "candidate": "speaker_1",
-    }
+    lines = [raw.strip() for raw in text.splitlines()]
+    parsed = [(_speaker_label(line) if line else None) for line in lines]
+
+    labels: list[str] = []
+    paragraph_starts = labelled_lines = 0
+    previous = ""
+    for line, hit in zip(lines, parsed, strict=True):
+        if not line:
+            previous = ""
+            continue
+        if hit is not None:
+            labelled_lines += 1
+            paragraph_starts += 1
+            if hit[0].lower() not in labels:
+                labels.append(hit[0].lower())
+        elif not previous or previous.endswith(_SENTENCE_END):
+            paragraph_starts += 1
+        previous = line
+    whole_file_labelled = len(labels) >= 2 and labelled_lines * 2 > paragraph_starts
+
+    roles = _role_labels()
+    speakers = {label: roles[label] for label in labels if label in roles}
+    if whole_file_labelled:
+        next_id = 2 if speakers else 0
+        for label in labels:
+            if label not in speakers:
+                speakers[label] = f"speaker_{next_id}"
+                next_id += 1
+
     segments: list[dict] = []
     current_speaker = "speaker_0"
     current_text: list[str] = []
 
     def flush() -> None:
-        nonlocal current_text
         if current_text:
             segments.append(
-                {
-                    "speaker": current_speaker,
-                    "text": " ".join(current_text).strip(),
-                }
+                {"speaker": current_speaker, "text": " ".join(current_text).strip()}
             )
-            current_text = []
+            current_text.clear()
 
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
+    for line, hit in zip(lines, parsed, strict=True):
         if not line:
             continue
-        head, sep, rest = line.partition(":")
-        key = head.strip().lower()
-        if sep and key in speakers:
+        speaker = speakers.get(hit[0].lower()) if hit is not None else None
+        if hit is not None and speaker is not None:
             flush()
-            current_speaker = speakers[key]
-            if rest.strip():
-                current_text.append(rest.strip())
+            current_speaker = speaker
+            if hit[1]:
+                current_text.append(hit[1])
         else:
             current_text.append(line)
     flush()
@@ -1003,6 +1089,13 @@ async def update_transcript(
 
     interview = await _get_interview_with_relations(db, tenant_id, interview_id)
     interview.transcript = redact_pii(data.transcript)
+    # HRP-1085: the page shows the segments, so an edit of a text
+    # transcript that left them alone saved and changed nothing on screen.
+    # A recording keeps its segments: they carry the provider's timecodes,
+    # which free text cannot be re-aligned with; it is edited per segment.
+    if not (interview.audio_file_id or interview.video_file_id):
+        await _rebuild_text_segments(db, tenant_id, interview, interview.transcript)
+        await _reanchor_citations_after_edit(db, tenant_id, interview)
     await db.commit()
     await db.refresh(interview, attribute_names=["segments", "interviewers"])
     return await _interview_read(db, interview, role="recruiter")
@@ -1028,6 +1121,20 @@ async def _apply_text_transcript(
     interview.transcription_status = "completed"
     # Nothing to scan for a transcript, and nothing to transcribe.
     interview.av_status = "skipped"
+    await _rebuild_text_segments(db, tenant_id, interview, text)
+
+
+async def _rebuild_text_segments(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    interview: Interview,
+    text: str,
+) -> None:
+    """Replace the interview's segments with ``text`` parsed by speaker.
+
+    Timecodes are estimated from word counts: a text transcript has no
+    recording to take them from.
+    """
 
     await db.execute(
         delete(InterviewSegment).where(
@@ -1053,6 +1160,64 @@ async def _apply_text_transcript(
             )
         )
         cursor += approx_seconds
+
+
+async def _reanchor_citations_after_edit(
+    db: AsyncSession, tenant_id: uuid.UUID, interview: Interview
+) -> None:
+    """Re-point this interview's saved citations at its rebuilt segments.
+
+    HRP-1085: the analysis, its AI rows and its runs name segment ids the
+    rebuild just replaced; see ``reanchor_citations_after_edit``.
+    """
+    from copy import deepcopy
+
+    from app.modules.recruitment.prompts_interview import (
+        reanchor_citations_after_edit,
+    )
+
+    await db.flush()
+    segments = [
+        {"id": s.id, "start_sec": s.start_sec, "end_sec": s.end_sec, "text": s.text}
+        for s in (
+            await db.execute(
+                select(InterviewSegment)
+                .where(
+                    InterviewSegment.interview_id == interview.id,
+                    InterviewSegment.tenant_id == tenant_id,
+                )
+                .order_by(InterviewSegment.start_sec.asc())
+            )
+        ).scalars()
+    ]
+
+    def reanchored(analysis: dict) -> dict:
+        copy = deepcopy(analysis)
+        reanchor_citations_after_edit(copy, segments, interview.transcript)
+        return copy
+
+    if interview.analysis_data:
+        interview.analysis_data = reanchored(interview.analysis_data)
+    for row in (
+        await db.execute(
+            select(AIAssessment).where(
+                AIAssessment.interview_id == interview.id,
+                AIAssessment.tenant_id == tenant_id,
+            )
+        )
+    ).scalars():
+        holder = reanchored({"competence_assessments": [{"citations": row.citations}]})
+        row.citations = holder["competence_assessments"][0]["citations"]
+    for run in (
+        await db.execute(
+            select(AIAnalysisRun).where(
+                AIAnalysisRun.interview_id == interview.id,
+                AIAnalysisRun.tenant_id == tenant_id,
+            )
+        )
+    ).scalars():
+        if run.analysis_data:
+            run.analysis_data = reanchored(run.analysis_data)
 
 
 async def paste_text_transcript(
@@ -1554,7 +1719,7 @@ async def complete_interview_upload(
     interview.av_status = "pending"
     interview.transcription_status = "pending"
     interview.analysis_status = "pending"
-    interview.auto_process = bool(data.auto_process) and kind in {"audio", "video"}
+    interview.auto_process = bool(data.auto_process)
 
     # HRP-385: an uploaded pdf/txt transcript has to reach the same state
     # as a pasted one, otherwise the file attaches but every follow-up
@@ -1591,6 +1756,12 @@ async def complete_interview_upload(
             # below really does scan it (a malicious PDF must still be
             # caught) — leave the verdict pending for it to fill in.
             interview.av_status = "pending"
+        # HRP-1031: a ready transcript has nothing to transcribe, so with
+        # the box ticked the AV task hands it straight to analysis; one
+        # with no extractable text has nothing to analyse either.
+        interview.auto_process = (
+            interview.auto_process and interview.transcription_status == "completed"
+        )
 
     # Mark the persistent upload-session as completed so the orphan-
     # cleanup task knows not to touch the now-finalized object.
@@ -1644,16 +1815,20 @@ async def get_interview_media_url(
     role: str | None = None,
     *,
     allow_invited_evaluator_playback: bool = False,
+    download: bool = False,
 ) -> dict:
     """Issue a short-lived presigned GET URL for the interview's media.
 
     Audio takes precedence over video. For ``invited_evaluator`` the URL
     is only emitted when the tenant has enabled invited-evaluator
     playback — and even then, the TTL stays at 5 minutes so a leaked URL
-    has narrow blast radius. Download (long-lived) is never issued.
+    has narrow blast radius. Download (long-lived) is never issued:
+    ``download=True`` (HRP-980) signs the same 5-minute link to save the
+    file under its own name, fresh on every click.
     """
 
     from app.core.s3 import get_presigned_url
+    from app.modules.recruitment.candidate_service import _attachment_disposition
     from app.modules.storage.models import File as FileModel
 
     role_norm = (role or "").lower()
@@ -1683,7 +1858,15 @@ async def get_interview_media_url(
     if not file_record:
         raise AppError("interview_media_file_not_found", status.HTTP_404_NOT_FOUND)
 
-    url = get_presigned_url(file_record.path, expires_in=_SIGNED_URL_TTL)
+    url = get_presigned_url(
+        file_record.path,
+        expires_in=_SIGNED_URL_TTL,
+        content_disposition=_attachment_disposition(
+            file_record.original_name or file_record.name
+        )
+        if download
+        else None,
+    )
     if not url:
         raise AppError(
             "object_storage_not_configured",

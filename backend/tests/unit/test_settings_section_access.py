@@ -161,21 +161,21 @@ async def test_view_reads_and_manage_writes(auth_client, client, db, tenant):
         )
     )
 
-    await _save(
-        auth_client, levels={"ai-settings": {"hr": "manage"}, "roles": {"hr": "manage"}}
-    )
+    await _save(auth_client, levels={"ai-settings": {"hr": "manage"}})
     assert (
         await client.patch("/api/admin/ai-settings", json={}, headers=hr)
     ).status_code == 200
+    # HRP-831 (QA 15.10): writing roles stays the admin's - ``view`` is the
+    # most the matrix hands anyone else there (test_section_access_api).
     created = await client.post(
         "/api/roles",
         json={"name": "Auditor", "code": f"auditor-{uuid.uuid4().hex[:4]}"},
-        headers=hr,
+        headers=_headers(await _user(db, tenant, "platform_admin")),
     )
     assert created.status_code == 201, created.text
-    assert (
+    assert _refused(
         await client.delete(f"/api/roles/{created.json()['id']}", headers=hr)
-    ).status_code == 204
+    )
 
 
 async def test_closing_a_section_closes_its_api_and_menu(
@@ -354,42 +354,44 @@ async def test_invitations_narrow_to_the_subtree_below_the_admin_level(
 async def test_view_without_a_subtree_reads_an_empty_registry(
     auth_client, client, db, tenant
 ):
-    # A raised role heading nothing reads nothing and sends nothing.
-    h = _headers(await _user(db, tenant, "hiring_manager"))
-    await _save(auth_client, levels={"invitations": {"hiring_manager": "view"}})
+    # A manager heading nothing, lowered to ``view``, reads nothing and
+    # sends nothing.
+    h = _headers(await _user(db, tenant, "manager"))
+    await _save(auth_client, levels={"invitations": {"manager": "view"}})
     listed = await client.get("/api/invitations", headers=h)
     assert listed.status_code == 200 and listed.json()["total"] == 0
     assert _refused(await client.post("/api/invitations", json=_invite(), headers=h))
 
 
-async def test_a_raised_role_invites_employees_only(auth_client, client, db, tenant):
+async def test_the_roles_below_manager_never_reach_invitations(
+    auth_client, client, db, tenant
+):
+    # HRP-831 (QA 15.10): the recruiter, the hiring manager and the
+    # employee are ``none`` on invitations for good - the matrix refuses to
+    # raise them, so even one heading a division sends nothing.
     recruiter = await _user(db, tenant, "recruiter")
-    await _user(db, tenant, "employee")
     own = await _headed(db, tenant, recruiter)
     h = _headers(recruiter)
+    matrix = (await auth_client.get("/api/settings/section-access")).json()
+    for s in matrix["sections"]:
+        if s["code"] == "invitations":
+            s["levels"]["recruiter"] = "manage"
+    r = await auth_client.put(
+        "/api/settings/section-access",
+        json={
+            "sections": [
+                {"code": s["code"], "hidden": s["hidden"], "levels": s["levels"]}
+                for s in matrix["sections"]
+            ]
+        },
+    )
+    assert r.status_code == 400 and r.json()["code"] == "section_access_role_ceiling"
+    assert "invitations" not in (
+        await client.get("/api/auth/me", headers=h)
+    ).json()["sections"]
+    assert _refused(await client.get("/api/invitations", headers=h))
     assert _refused(
         await client.post("/api/invitations", json=_invite(own.id), headers=h)
-    )
-
-    await _save(auth_client, levels={"invitations": {"recruiter": "manage"}})
-    assert (await client.get("/api/auth/me", headers=h)).json()["sections"][
-        "invitations"
-    ] == "manage"
-    assert (
-        await client.post("/api/invitations", json=_invite(own.id), headers=h)
-    ).status_code == 201
-    # No row in the inviter table: the floor is what a manager hands out.
-    assert _refused(
-        await client.post(
-            "/api/invitations", json=_invite(own.id, "manager"), headers=h
-        ),
-        TIER,
-    )
-    assert _refused(
-        await client.post(
-            "/api/invitations", json=_invite(own.id, "recruiter"), headers=h
-        ),
-        TIER,
     )
 
 

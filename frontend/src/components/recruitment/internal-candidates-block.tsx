@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Building2, Loader2, UserPlus } from "lucide-react";
 
+import { EmployeeName } from "@/components/employees/employee-name";
 import { ApiError, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -210,26 +211,18 @@ export function InternalCandidatesBlock({
             >
               <span className="flex flex-wrap items-center gap-2">
                 {/* HRP-667 REDO: the name opens the employee's profile —
-                    but only for a viewer the API says may read it. The
-                    shortlist itself is the same for everyone who may open
-                    the vacancy (HRP-703); a name nobody could follow is
-                    plain text, not a link to a 403. */}
-                {item.can_view_profile ? (
-                  <Link
-                    href={`/employees/${item.employee_id}`}
-                    className="font-medium text-primary underline-offset-2 hover:underline"
-                    data-testid={`vacancy-internal-candidate-${item.employee_id}-name`}
-                  >
-                    {item.employee_name ?? t("internalCandidatesUnnamed")}
-                  </Link>
-                ) : (
-                  <span
-                    className="font-medium"
-                    data-testid={`vacancy-internal-candidate-${item.employee_id}-name`}
-                  >
-                    {item.employee_name ?? t("internalCandidatesUnnamed")}
-                  </span>
-                )}
+                    but only for a viewer the API says may open it (HRP-829
+                    REDO: the card rule, EmployeeName). The shortlist itself
+                    is the same for everyone who may open the vacancy
+                    (HRP-703); a name nobody could follow is plain text. */}
+                <EmployeeName
+                  employeeId={item.employee_id}
+                  className="font-medium"
+                  linkClassName="text-primary underline-offset-2 hover:underline"
+                  testId={`vacancy-internal-candidate-${item.employee_id}-name`}
+                >
+                  {item.employee_name ?? t("internalCandidatesUnnamed")}
+                </EmployeeName>
                 <Badge
                   variant="outline"
                   className={cn("border text-[10px]", BADGE_OUTLINE.indigo)}
@@ -243,27 +236,16 @@ export function InternalCandidatesBlock({
                 )}
               </span>
               <span className="flex items-center gap-2">
-                {/* HRP-693: `not_matched` is the matcher's word for "a
-                    person somebody added by hand who does not clear the
-                    bar". A bare dash read as a broken score; say what the
-                    row actually is. */}
-                {item.status === "not_matched" && (
-                  <Badge
-                    variant="outline"
-                    className={cn("border text-[10px]", BADGE_OUTLINE.amber)}
-                    data-testid={`vacancy-internal-candidate-manual-${item.employee_id}`}
-                  >
-                    {t("internalCandidateManualBadge")}
-                  </Badge>
-                )}
+                {/* HRP-693 REDO (QA 20.10): every row reads the percentage
+                    the talent market computes, however the person got on
+                    the list - no "added manually" label; a dash only where
+                    the card scores nobody. */}
                 {item.match_score !== null ? (
                   <span className="tabular-nums text-muted-foreground">
                     {t("internalCandidatesMatch", { percent: item.match_score })}
                   </span>
                 ) : (
-                  item.status !== "not_matched" && (
-                    <span className="text-muted-foreground">{"—"}</span>
-                  )
+                  <span className="text-muted-foreground">{"—"}</span>
                 )}
                 {/* HRP-711: the shortlist was read-only, so a recruiter who
                     wanted one of these people had to retype a colleague the

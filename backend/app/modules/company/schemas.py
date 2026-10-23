@@ -22,6 +22,8 @@ class TenantRead(BaseModel):
     onboarding_completed: bool = False
     # i18n (F0): tenant-default interface locale; None → deployment default.
     default_locale: str | None = None
+    # HRP-1066: ISO 3166-1 alpha-2 country; None = not specified.
+    region: str | None = None
     # HRP-623: whether colleagues see the grade on a directory card.
     directory_show_grades: bool = False
     # W6: the hourly rate the Coverage ROI is priced at, and its currency.
@@ -42,6 +44,24 @@ class TenantUpdate(BaseModel):
 
 COMPANY_SIZES = ["1-10", "11-50", "51-200", "201-500", "501-1000", "1001-5000", "5000+"]
 
+# HRP-1066: the ISO 3166-1 alpha-2 codes a company region may take. The
+# frontend Region select offers a copy (frontend/src/lib/regions.ts, held in
+# step by regions-parity.test.ts); country names come from Intl there.
+REGIONS = frozenset(
+    """
+    AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ
+    BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR
+    CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR
+    GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU
+    ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ
+    LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ
+    MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF
+    PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI
+    SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR
+    TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW
+    """.split()  # noqa: SIM905 - as a list literal it would run to 249 lines
+)
+
 
 class CompanyProfileUpdate(BaseModel):
     industry: str | None = Field(default=None, max_length=255)
@@ -53,6 +73,8 @@ class CompanyProfileUpdate(BaseModel):
     # Interface locale from AVAILABLE_LOCALES (validated in the service);
     # written by the onboarding "Language" step and company settings.
     default_locale: str | None = Field(default=None, max_length=10)
+    # HRP-1066: a code from REGIONS (checked in the service); null clears it.
+    region: str | None = Field(default=None, pattern="^[A-Z]{2}$")
     # HRP-623: admin-only toggle for grades on directory cards.
     directory_show_grades: bool | None = None
     # W6: the Coverage ROI rate. An explicit null clears it; the currency
@@ -146,6 +168,9 @@ class DivisionRead(BaseModel):
 
 class DivisionTree(DivisionRead):
     children: list[DivisionTree] = []
+    # HRP-942: people in the division and everything under it - active and
+    # on leave, the statuses the directory lists.
+    employee_count: int = 0
 
 
 class DivisionScopeItem(BaseModel):
@@ -208,6 +233,8 @@ class SectionAccessSectionRead(BaseModel):
     hidden: bool
     admin_locked: bool
     never_hidden: bool
+    # HRP-831: role code -> the most that role may get here; absent = manage.
+    ceilings: dict[str, SectionLevel]
     defaults: dict[str, SectionLevel]
     levels: dict[str, SectionLevel]
 

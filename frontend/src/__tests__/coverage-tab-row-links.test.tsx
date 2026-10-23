@@ -2,8 +2,8 @@
 //
 // HRP-864: what a coverage row lets the reader follow. The names of the
 // executor, the matched person ("Backup: ...") and the accountable are links
-// to the employee card - the card answers a reader who may not open it, so
-// the row checks nothing. A step title in a summary bucket scrolls to the
+// to the employee card where the reader may open it - HRP-829 REDO: the
+// card rule's answer (GET /employees/card-access), text otherwise. A step title in a summary bucket scrolls to the
 // step's row. An agent type opens what an agent of that type does; a pack the
 // catalog does not describe stays plain text.
 
@@ -21,10 +21,19 @@ vi.mock("@/lib/api/work", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/work")>()),
   workApi: { getCoverage },
 }));
-vi.mock("@/context/auth-context", () => ({ useAuth: () => ({ user: null }) }));
+vi.mock("@/context/auth-context", () => ({
+  useAuth: () => ({ user: { id: "u-1", roles: ["employee"], sections: { employees: "view" } } }),
+}));
+// HRP-829 REDO: the cards the reader may open.
+let openCards = ["e-1", "e-2"];
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  api: { get: vi.fn(() => Promise.resolve(openCards)) },
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const { CoverageTab } = await import("@/components/coverage/coverage-tab");
+const { resetCardAccess } = await import("@/components/employees/employee-name");
 
 const STEP: CoverageStep = {
   step_id: "s-1",
@@ -71,6 +80,8 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  resetCardAccess();
+  openCards = ["e-1", "e-2"];
   getCoverage.mockReset();
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -99,6 +110,9 @@ async function render(coverage: Coverage) {
         />
       </NextIntlClientProvider>,
     );
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
   });
 }
 
@@ -143,8 +157,17 @@ it("leaves a person without an id as plain text", async () => {
     }),
   );
 
-  expect(byId("coverage-link-human-s-1")).toBeNull();
+  expect(byId("coverage-link-human-s-1")!.tagName).not.toBe("A");
   expect(byId("coverage-human-s-1")!.textContent).toContain("Backup: Jane Doe");
+});
+
+it("leaves a person whose card does not open as plain text", async () => {
+  openCards = ["e-2"];
+  await render(coverageOf(STEP));
+
+  expect(byId("coverage-link-human-s-1")!.tagName).not.toBe("A");
+  expect(byId("coverage-human-s-1")!.textContent).toContain("Backup: Jane Doe");
+  expect(byId("coverage-link-accountable-s-1")!.getAttribute("href")).toBe("/employees/e-2");
 });
 
 it("scrolls from a summary bucket to the step's row", async () => {

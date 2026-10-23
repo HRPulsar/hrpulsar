@@ -10,7 +10,7 @@ from app.core.access_scope import (
     assert_employee_read_scope,
     assert_may_write_person,
     get_current_employee,
-    is_employee_in_read_scope,
+    get_visible_employee_ids,
 )
 from app.core.errors import AppError
 from app.core.sections import matrix_levels, require_section
@@ -206,6 +206,20 @@ async def list_available_users(
     )
 
 
+@router.get("/employees/card-access", response_model=list[uuid.UUID])
+async def card_access(
+    # ponytail: one page's names per call; the UI batches by 100.
+    ids: list[uuid.UUID] = Query(default=[], max_length=200),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """HRP-829 REDO (QA 14.10): which of these employees' cards the caller
+    may open. Every employee name in the UI asks here - one batch per page -
+    and is a link only for an id in the answer: the same rule as
+    ``GET /employees/{employee_id}`` itself (``service.readable_card_ids``)."""
+    return sorted(await service.readable_card_ids(db, current_user, ids))
+
+
 # Registered before ``/employees/{employee_id}``: the other order makes
 # FastAPI try to parse "me" as a UUID and answer 422.
 @router.get("/employees/me", response_model=EmployeeRead)
@@ -243,21 +257,29 @@ async def get_employee(
     Callers inside the HRP-616 read scope (own card, admin / HR, a manager's
     subtree) keep the full record; everyone else gets the directory row.
     Sub-resources stay behind ``read_scope_user``.
+
+    HRP-829 REDO: whether the card opens at all is ``readable_card_ids`` -
+    the rule every employee-name link follows - so a name shown as text
+    is not a card one reaches by typing its URL. A card one may not open
+    (``none`` on employees, someone who left outside the read scope)
+    answers as an id that does not exist.
     """
+    # The read scope once: it decides both whether the card opens and
+    # which schema it answers in.
+    visible = await get_visible_employee_ids(db, current_user)
+    if employee_id not in await service.readable_card_ids(
+        db, current_user, [employee_id], visible=visible
+    ):
+        raise AppError("employee_not_found", 404)
     # HRP-660: the card names the employee's problems, so the scope check
     # runs first — the directory row hides them anyway, and computing them
     # for a caller who will not see them is pure waste.
-    in_scope = await is_employee_in_read_scope(db, current_user, employee_id)
+    in_scope = visible is None or employee_id in visible
     row = await service.get_employee(
         db, current_user.tenant_id, employee_id, with_issues=in_scope
     )
     if in_scope:
         return row
-    # HRP-623 REDO: the directory lists active and on-leave colleagues only;
-    # the trimmed card would otherwise say that someone left. Same answer as
-    # an id that does not exist.
-    if row["status"] not in service.DIRECTORY_STATUSES:
-        raise AppError("employee_not_found", 404)
     return (await service.directory_rows(db, current_user.tenant_id, [row]))[0]
 
 

@@ -66,6 +66,7 @@ def test_the_gate_skips_exactly_the_known_token_links_and_personal_paths():
         "/api/analytics/my-loop",
         "/api/analytics/my-loop/ai-summary",
         "/api/exams",
+        "/api/exams/todo-count",  # HRP-823: the To do tab's count
         "/api/exams/{exam_id}/questions",
         "/api/exams/{exam_id}/review",
         "/api/exams/{exam_id}/answer",

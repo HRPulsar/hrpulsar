@@ -25,6 +25,7 @@ from tests.unit.test_hrp186_manager_assessment import (
     _make_extra_user,
     _make_profile,
     _make_vacancy,
+    _score_critical,
 )
 
 
@@ -276,6 +277,7 @@ class TestColleagueSheetVisibility:
         self, db: AsyncSession, tenant, user, admin_role
     ):
         rd_id, colleague, _cv = await self._two_evaluators(db, tenant, user)
+        await _score_critical(db, tenant, user, rd_id)
         await service.update_round_status(db, tenant.id, user.id, rd_id, "complete")
         visible = await service.list_assessments_for_round(
             db, tenant.id, rd_id, viewer_user_id=user.id

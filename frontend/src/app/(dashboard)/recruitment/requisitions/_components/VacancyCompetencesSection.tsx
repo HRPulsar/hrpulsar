@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import type {
   CompetenceGroupTree,
+  SkillLevel,
   Vacancy,
   VacancyCompetenceLink,
   VacancyProfile,
@@ -19,6 +20,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { skillLevelLabel } from "@/lib/reference-labels";
 import { CompetenceTreePicker } from "@/components/competence/competence-tree-picker";
 import { useCompetenceTree } from "@/hooks/use-competence-tree";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -62,6 +71,7 @@ export function VacancyCompetencesSection({
 }: VacancyCompetencesSectionProps) {
   const t = useTranslations("recruitment");
   const tc = useTranslations("common");
+  const tRef = useTranslations("reference");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draftData, setDraftData] = useState<Record<string, unknown> | null>(
@@ -104,6 +114,34 @@ export function VacancyCompetencesSection({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerIds, setPickerIds] = useState<Set<string>>(() => new Set());
   const [savingLibrary, setSavingLibrary] = useState(false);
+  // HRP-1087: the dialog picks competences, then the level the vacancy asks
+  // for each - the same two steps as the talent-market card's Required
+  // competences (HRP-128), where these rows end up with that level.
+  const [pickerStep, setPickerStep] = useState<1 | 2>(1);
+  const [pickerLevels, setPickerLevels] = useState<Record<string, string>>({});
+  const [skillLevels, setSkillLevels] = useState<SkillLevel[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .get<SkillLevel[]>("/skill-levels")
+      .then((rows) => {
+        if (alive && Array.isArray(rows)) {
+          setSkillLevels([...rows].sort((a, b) => a.sort_index - b.sort_index));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const levelLabel = useCallback(
+    (id: string | undefined) => {
+      const level = id ? skillLevels.find((l) => l.id === id) : undefined;
+      return level ? skillLevelLabel(tRef, level) : null;
+    },
+    [skillLevels, tRef],
+  );
 
   const sessionBlocksActions =
     activeSession?.status === "running" || sessionHasPendingResult(activeSession);
@@ -150,8 +188,18 @@ export function VacancyCompetencesSection({
       return;
     }
     setPickerIds(new Set(libraryRows.map((r) => r.competence_id)));
+    // The level each row already carries - the one the card matches on.
+    setPickerLevels(
+      Object.fromEntries(
+        libraryRows.map((r) => [r.competence_id, r.skill_level_ids[0] ?? ""]),
+      ),
+    );
+    setPickerStep(1);
     setPickerOpen(true);
   }
+
+  const pickedIds = [...pickerIds];
+  const levelsReady = pickedIds.every((id) => pickerLevels[id]);
 
   async function saveLibrary() {
     // Second lock on the same door: the payload below is only as complete
@@ -167,11 +215,17 @@ export function VacancyCompetencesSection({
       const rows = await api.patch<VacancyCompetenceLink[]>(
         `/recruitment/vacancies/${vacancy.id}/competences`,
         {
-          competences: [...pickerIds].map((id) => ({
-            competence_id: id,
-            skill_level_ids: existing.get(id)?.skill_level_ids ?? [],
-            source: existing.get(id)?.source ?? "library",
-          })),
+          competences: pickedIds.map((id) => {
+            const kept = existing.get(id)?.skill_level_ids ?? [];
+            const level = pickerLevels[id]!;
+            return {
+              competence_id: id,
+              // An untouched level keeps every level the row carries (a
+              // seeded row may hold one per grade); a new pick replaces them.
+              skill_level_ids: level === kept[0] ? kept : [level],
+              source: existing.get(id)?.source ?? "library",
+            };
+          }),
         },
       );
       setLibraryRows(rows);
@@ -402,6 +456,16 @@ export function VacancyCompetencesSection({
                   data-testid={`vacancy-library-competence-${row.competence_id}`}
                 >
                   {titleByCompetenceId.get(row.competence_id) ?? "—"}
+                  {/* HRP-1087: the level the vacancy asks - for a seeded row
+                      the specialization x grade matrix's. */}
+                  {levelLabel(row.skill_level_ids[0]) && (
+                    <span
+                      className="ml-1 text-muted-foreground"
+                      data-testid={`vacancy-library-competence-level-${row.competence_id}`}
+                    >
+                      · {levelLabel(row.skill_level_ids[0])}
+                    </span>
+                  )}
                 </Badge>
               ))}
             </div>
@@ -454,33 +518,97 @@ export function VacancyCompetencesSection({
           className="max-h-[85vh] overflow-y-auto sm:max-w-xl"
         >
           <DialogHeader>
-            <DialogTitle>{t("vacancyLibraryDialogTitle")}</DialogTitle>
+            <DialogTitle>
+              {t("vacancyLibraryDialogStep", { step: pickerStep })}
+            </DialogTitle>
             <DialogDescription>
-              {t("vacancyLibraryDialogHint")}
+              {pickerStep === 1
+                ? t("vacancyLibraryDialogHint")
+                : t("vacancyLibraryLevelsHint")}
             </DialogDescription>
           </DialogHeader>
-          <CompetenceTreePicker
-            tree={tree}
-            selectedIds={pickerIds}
-            onChange={setPickerIds}
-            testIdPrefix="vacancy-competences-library-picker"
-          />
+          {pickerStep === 1 ? (
+            <CompetenceTreePicker
+              tree={tree}
+              selectedIds={pickerIds}
+              onChange={setPickerIds}
+              testIdPrefix="vacancy-competences-library-picker"
+            />
+          ) : (
+            <div className="space-y-2" data-testid="vacancy-competences-library-levels">
+              {pickedIds.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  {t("vacancyLibraryLevelsEmpty")}
+                </p>
+              )}
+              {pickedIds.map((id) => (
+                <div
+                  key={id}
+                  className="flex items-center gap-3 rounded-md border p-2 text-sm"
+                >
+                  <div className="flex-1 truncate">
+                    {titleByCompetenceId.get(id) ?? "—"}
+                  </div>
+                  <Select
+                    value={pickerLevels[id] ?? ""}
+                    onValueChange={(v) =>
+                      setPickerLevels((prev) => ({ ...prev, [id]: v }))
+                    }
+                  >
+                    <SelectTrigger
+                      className="w-40"
+                      data-testid={`vacancy-competences-library-level-${id}`}
+                    >
+                      <SelectValue placeholder={t("vacancyLibraryLevelPlaceholder")}>
+                        {(value) =>
+                          levelLabel(typeof value === "string" ? value : undefined) ??
+                          t("vacancyLibraryLevelPlaceholder")
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {skillLevels.map((lv) => (
+                        <SelectItem key={lv.id} value={lv.id}>
+                          {skillLevelLabel(tRef, lv)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+          )}
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setPickerOpen(false)}
+              onClick={() =>
+                pickerStep === 1 ? setPickerOpen(false) : setPickerStep(1)
+              }
               disabled={savingLibrary}
               data-testid="vacancy-competences-library-cancel-btn"
             >
-              {tc("cancel")}
+              {pickerStep === 1 ? tc("cancel") : tc("back")}
             </Button>
-            <Button
-              onClick={saveLibrary}
-              disabled={savingLibrary}
-              data-testid="vacancy-competences-library-save-btn"
-            >
-              {savingLibrary ? t("actionSaving") : t("save")}
-            </Button>
+            {pickerStep === 1 ? (
+              <Button
+                onClick={() => setPickerStep(2)}
+                data-testid="vacancy-competences-library-next-btn"
+              >
+                {tc("next")}
+              </Button>
+            ) : (
+              // Disabled buttons swallow hover, so the reason rides on the
+              // wrapper (checklist p.4).
+              <span title={levelsReady ? undefined : t("vacancyLibraryLevelsRequired")}>
+                <Button
+                  onClick={saveLibrary}
+                  disabled={savingLibrary || !levelsReady}
+                  data-testid="vacancy-competences-library-save-btn"
+                >
+                  {savingLibrary ? t("actionSaving") : t("save")}
+                </Button>
+              </span>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

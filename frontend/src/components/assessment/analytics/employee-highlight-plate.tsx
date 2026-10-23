@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AlertTriangle, ChevronRight, Star } from "lucide-react";
 import { useTranslations } from "next-intl";
 
+import { EmployeeName } from "@/components/employees/employee-name";
 import { MatchPercentChip } from "@/components/assessment/match-percent-chip";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -220,7 +221,9 @@ export function EmployeeHighlightPlate({
                   <EmployeeAvatar employee={employee} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">
-                      {employee.full_name}
+                      <EmployeeName employeeId={employee.employee_id} linkClassName="hover:underline">
+                        {employee.full_name}
+                      </EmployeeName>
                     </div>
                     {secondary && (
                       <div className="truncate text-xs text-muted-foreground">

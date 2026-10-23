@@ -67,6 +67,76 @@ class TestDivisions:
         assert len(root.children) == 1
         assert root.children[0].name == "Child"
 
+    async def test_tree_counts_the_people_of_each_branch_in_one_query(
+        self, db: AsyncSession, tenant
+    ):
+        # HRP-942: a node counts its own staff plus everything under it -
+        # active and on leave, not people who left - and the whole tree costs
+        # one count query, not one per node.
+        from datetime import UTC, date, datetime
+
+        from app.core.security import hash_password
+        from app.modules.auth.models import User
+        from app.modules.employee.models import Employee
+        from sqlalchemy import event
+
+        root = await service.create_division(db, tenant.id, DivisionCreate(name="R"))
+        child = await service.create_division(
+            db, tenant.id, DivisionCreate(name="C", parent_id=root["id"])
+        )
+        leaf = await service.create_division(
+            db, tenant.id, DivisionCreate(name="L", parent_id=child["id"])
+        )
+        await service.create_division(db, tenant.id, DivisionCreate(name="Empty"))
+        for division_id, status in [
+            (root["id"], "active"),
+            (child["id"], "active"),
+            (child["id"], "terminated"),
+            (child["id"], "inactive"),
+            (leaf["id"], "on_leave"),
+            (None, "active"),
+        ]:
+            u = User(
+                email=f"e-{uuid.uuid4().hex[:8]}@test.com",
+                password_hash=hash_password("testpass123"),
+                first_name="Some",
+                last_name="One",
+                tenant_id=tenant.id,
+                email_verified_at=datetime.now(UTC),
+            )
+            db.add(u)
+            await db.flush()
+            db.add(
+                Employee(
+                    user_id=u.id,
+                    tenant_id=tenant.id,
+                    division_id=division_id,
+                    status=status,
+                    hire_date=date(2024, 1, 1),
+                )
+            )
+        await db.commit()
+
+        statements: list[str] = []
+        engine = db.bind.sync_engine
+
+        def record(_conn, _cursor, statement, *_args):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            tree = await service.get_division_tree(db, tenant.id)
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+
+        by_name = {n.name: n for n in tree}
+        r = by_name["R"]
+        assert (r.employee_count, r.children[0].employee_count) == (3, 2)
+        assert r.children[0].children[0].employee_count == 1
+        assert by_name["Empty"].employee_count == 0
+        counts = [s for s in statements if "count(employees.id)" in s]
+        assert len(counts) == 1
+
     async def test_a_division_never_moves_under_its_own_subtree(
         self, db: AsyncSession, tenant
     ):

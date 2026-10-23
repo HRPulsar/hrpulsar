@@ -167,6 +167,7 @@ function Branch({ node, depth, expanded, toggle }: BranchProps) {
                   competenceId={id}
                   competenceTitle={title}
                   breakdown={row.level_breakdown}
+                  bar={row.passing_score}
                   testIdPrefix="employee-competences-current-row"
                 />
               </div>

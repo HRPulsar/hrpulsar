@@ -60,6 +60,9 @@ vi.mock("@/lib/api", () => ({
           average: scored.length ? 3 : null,
           average_weight: null,
           divergence_threshold: 1,
+          // HRP-1075: the server's completion rule, over every sheet.
+          can_complete: scored.includes("c-crit"),
+          unscored_critical_ids: scored.includes("c-crit") ? [] : ["c-crit"],
           competences: scored.map((id) => ({
             competence_id: id,
             average: 3,
@@ -146,17 +149,17 @@ describe("Mark as complete on a round only external evaluators scored (HRP-1022)
     const btn = byId("assessment-round-complete-btn");
     expect(btn).not.toBeNull();
     expect(btn!.disabled).toBe(false);
-    // No sheet of one's own - nothing to fill in.
-    expect(byId("score-list-stub")).toBeNull();
+    // No sheet of one's own - the round reads once, read-only (HRP-1081).
+    expect(container.querySelectorAll('[data-testid="score-list-stub"]')).toHaveLength(1);
   });
 
-  it("shows no progress row to a viewer who neither evaluates nor runs rounds", async () => {
-    // A hiring manager at view reads no aggregate, so the row would say 0/N.
+  it("shows the progress row, not the button, to a viewer who does not run rounds", async () => {
+    // HRP-1081: a hiring manager at view reads the round's data as well.
     viewer = { id: "u-hm", roles: ["hiring_manager"], sections: { recruitment: "view" } };
     try {
       scored = ["c-crit"];
       await render();
-      expect(byId("assessment-progress-counter")).toBeNull();
+      expect(byId("assessment-progress-counter")!.textContent).toContain("1 / 2");
       expect(byId("assessment-round-complete-btn")).toBeNull();
     } finally {
       viewer = RECRUITER;

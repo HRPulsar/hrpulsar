@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
+import { EmployeeName } from "@/components/employees/employee-name";
 import { api } from "@/lib/api";
 import { flattenTree } from "@/lib/utils";
 import { formatDate } from "@/lib/date-format";
@@ -78,7 +79,7 @@ function DivisionNode({
   return (
     <div data-testid={`company-division-${division.id}`}>
       <div
-        className="group flex items-center gap-2 rounded-md px-3 py-2 hover:bg-muted transition-colors"
+        className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-muted transition-colors"
         style={{ paddingLeft: `${depth * 24 + 12}px` }}
       >
         {division.children.length > 0 ? (
@@ -111,17 +112,67 @@ function DivisionNode({
             d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z"
           />
         </svg>
-        <Link href={`/company/divisions/${division.id}`} className="flex-1 text-sm font-medium hover:text-primary hover:underline">
-          {division.name}
-        </Link>
-        {division.description && (
-          <span className="text-xs text-muted-foreground">
-            {division.description}
-          </span>
-        )}
-        {(canEdit(division.id) || canDelete) && (
+        {/* HRP-942: the description sits under the name, the head and the
+            headcount on the right, and the menu shows without a hover. */}
+        <div className="min-w-0 flex-1">
+          <Link href={`/company/divisions/${division.id}`} className="text-sm font-medium hover:text-primary hover:underline">
+            {division.name}
+          </Link>
+          {division.description && (
+            <p
+              className="line-clamp-2 text-xs text-muted-foreground"
+              data-testid={`company-division-${division.id}-description`}
+            >
+              {division.description}
+            </p>
+          )}
+        </div>
+        <div
+          className="hidden max-w-64 shrink-0 text-right text-xs text-muted-foreground md:block"
+          data-testid={`company-division-${division.id}-heads`}
+        >
+          {division.manager_name && (
+            <p className="truncate">
+              {t.rich("treeManager", {
+                name: division.manager_name,
+                link: (chunks) => (
+                  <EmployeeName
+                    employeeId={division.manager_id}
+                    linkClassName="hover:text-foreground hover:underline"
+                    testId={`company-division-${division.id}-manager`}
+                  >
+                    {chunks}
+                  </EmployeeName>
+                ),
+              })}
+            </p>
+          )}
+          {division.deputy_manager_name && (
+            <p className="truncate">
+              {t.rich("treeDeputy", {
+                name: division.deputy_manager_name,
+                link: (chunks) => (
+                  <EmployeeName
+                    employeeId={division.deputy_manager_id}
+                    linkClassName="hover:text-foreground hover:underline"
+                    testId={`company-division-${division.id}-deputy`}
+                  >
+                    {chunks}
+                  </EmployeeName>
+                ),
+              })}
+            </p>
+          )}
+        </div>
+        <span
+          className="shrink-0 whitespace-nowrap text-right text-xs text-muted-foreground"
+          data-testid={`company-division-${division.id}-employee-count`}
+        >
+          {t("drilldownEmployeeCount", { count: division.employee_count ?? 0 })}
+        </span>
+        {canEdit(division.id) || canDelete ? (
           <DropdownMenu>
-            <DropdownMenuTrigger data-testid={`company-division-${division.id}-actions`} render={<Button variant="ghost" size="icon-xs" className="opacity-0 group-hover:opacity-100 transition-opacity" />}>
+            <DropdownMenuTrigger data-testid={`company-division-${division.id}-actions`} render={<Button variant="ghost" size="icon-xs" />}>
               <MoreHorizontal className="h-4 w-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -149,6 +200,8 @@ function DivisionNode({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+        ) : (
+          <span aria-hidden className="size-6 shrink-0" />
         )}
       </div>
       {division.children.map((child) => (

@@ -246,6 +246,7 @@ export function AccessDialog({
                     under it, status chip when they are not active. */}
                 {data.owner ? (
                   <EmployeeSummaryLine
+                    employeeId={data.owner.employee_id}
                     employee={{
                       user_name: data.owner.name,
                       position_title: data.owner.position_title,

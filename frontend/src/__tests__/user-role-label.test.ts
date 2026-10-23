@@ -11,6 +11,7 @@ import {
   resolveAssignableRoleCode,
   resolveDisplayRoleCode,
   resolveRoleLabel,
+  roleCodeLabel,
 } from "@/lib/user-role-label";
 
 // Stand-in for next-intl's `t` — echoes the key so assertions stay readable.
@@ -111,5 +112,27 @@ describe("resolveRoleLabel (HRP-196)", () => {
   it("prettifies codes that have no catalog key", () => {
     expect(resolveRoleLabel(["mentor"], translate)).toBe("mentor");
     expect(resolveRoleLabel(["team_lead"], translate)).toBe("team lead");
+  });
+});
+
+describe("roleCodeLabel (HRP-1064, HRP-1065)", () => {
+  const roles = [
+    { code: "manager", name: "Manager" },
+    { code: "mentor", name: "Mentor of the month" },
+  ];
+
+  it("translates a system role, never its stored English name", () => {
+    expect(roleCodeLabel("manager", roles, translate)).toBe("t:roleManager");
+    expect(roleCodeLabel("hiring_manager", roles, translate)).toBe(
+      "t:roleHiringManager",
+    );
+  });
+
+  it("gives a tenant's custom role its own name", () => {
+    expect(roleCodeLabel("mentor", roles, translate)).toBe("Mentor of the month");
+  });
+
+  it("keeps a code nobody knows as it is", () => {
+    expect(roleCodeLabel("ghost", roles, translate)).toBe("ghost");
   });
 });

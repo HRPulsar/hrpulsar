@@ -39,6 +39,9 @@ def _flatten(tree: dict, prefix: str = "") -> dict[str, str]:
         key = f"{prefix}{k}"
         if isinstance(v, dict):
             out.update(_flatten(v, key + "."))
+        elif isinstance(v, list):
+            # A word list (HRP-1085: transcript role labels) is one leaf.
+            out[key] = "\n".join(v)
         else:
             out[key] = v
     return out

@@ -218,7 +218,7 @@ test.describe("Admin section access", () => {
     await expectPermissionToast(page);
   });
 
-  test("the admin block follows the matrix: view opens the page, manage sends, none closes it (HRP-831)", async ({
+  test("the admin block follows the matrix: import opens at view, invitations stay locked for the employee (HRP-831)", async ({
     page,
     request,
   }) => {
@@ -228,50 +228,42 @@ test.describe("Admin section access", () => {
       .filter({ hasText: /section access saved/i })
       .first();
     await completeOnboarding({ page, accessToken: adminAccess });
-    const setEmployeeLevel = async (section: string, level: string) => {
+    const openMatrix = async () => {
       await setAuthTokens(page, adminAccess, adminRefresh);
       await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
+    };
+    const setEmployeeLevel = async (section: string, level: string) => {
+      await openMatrix();
       const select = page.getByTestId(`section-access-select-${section}-employee`);
       await select.selectOption(level);
       await expect(select).toHaveValue(level);
       await page.getByTestId("section-access-btn-save").click();
       await expect(saved).toBeVisible();
     };
-    const invite = () =>
-      request.post(`${API_BASE}/invitations`, {
-        headers: employeeAuth,
-        data: { email: `matrix-${Date.now()}@example.com`, name: "From the matrix", role_code: "employee" },
-      });
 
-    // `view`: the page opens on the registry, nothing sends.
-    await setEmployeeLevel("invitations", "view");
-    await setAuthTokens(page, employeeAccess, employeeRefresh);
-    await page.goto("/settings/invitations");
-    await expect(page.getByTestId("invitations-hint-title")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId("invitations-btn-invite")).toHaveCount(0);
-    expect((await invite()).status()).toBe(403);
+    // QA 15.10: the Employee role invites nobody - its invitations cell is
+    // `none` for good, locked with a hint like the admin's company cell;
+    // on roles it stops at `view`.
+    await openMatrix();
+    await expect(page.getByTestId("section-access-select-invitations-employee")).toBeDisabled();
+    await expect(page.getByTestId("section-access-select-invitations-employee")).toHaveValue("none");
+    await expect(page.getByTestId("section-access-ceiling-invitations-employee")).toBeVisible();
+    await expect(
+      page.getByTestId("section-access-select-roles-employee").locator('option[value="manage"]'),
+    ).toBeDisabled();
+    await expect(
+      page.getByTestId("section-access-select-roles-employee").locator('option[value="view"]'),
+    ).toBeEnabled();
 
-    // `manage`: the API takes only a division the caller heads, and this
-    // employee heads none - the fence, not the gate; the page hides the
-    // button for the same reason (nowhere to send).
-    await setEmployeeLevel("invitations", "manage");
-    await setAuthTokens(page, employeeAccess, employeeRefresh);
-    await page.goto("/settings/invitations");
-    await expect(page.getByTestId("invitations-hint-title")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId("invitations-btn-invite")).toHaveCount(0);
-    const fenced = await invite();
-    expect(fenced.status()).toBe(403);
-    expect((await fenced.json()).code).toBe("outside_division_scope");
-
-    // The other three open the same way: `view` reads, the default closes.
+    // The other sections of the block open the way the matrix says: `view`
+    // reads, the default closes.
     await setEmployeeLevel("import", "view");
     expect((await request.get(`${API_BASE}/import/jobs`, { headers: employeeAuth })).status()).toBe(200);
     await setEmployeeLevel("import", "none");
     expect((await request.get(`${API_BASE}/import/jobs`, { headers: employeeAuth })).status()).toBe(403);
 
-    // `none` (the default): the page bounces and so does the API.
-    await setEmployeeLevel("invitations", "none");
+    // Invitations: the page bounces and so does the API.
     await setAuthTokens(page, employeeAccess, employeeRefresh);
     await page.goto("/settings/invitations");
     await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
@@ -368,6 +360,10 @@ test.describe("Section access matrix (HRP-820)", () => {
   let adminRefresh: string;
   let employeeAccess: string;
   let employeeRefresh: string;
+  // HRP-829 REDO: the employees column a role below the manager cannot
+  // reach past `view` runs on the manager's instead.
+  let managerAccess: string;
+  let managerRefresh: string;
 
   test.beforeAll(async ({ browser }) => {
     const page = await browser.newPage();
@@ -380,6 +376,12 @@ test.describe("Section access matrix (HRP-820)", () => {
     );
     employeeAccess = employee.accessToken;
     employeeRefresh = employee.refreshToken;
+    const manager = await provisionTenantMember(
+      { page, accessToken: adminAccess },
+      { roleCode: "manager", firstName: "Matrix", lastName: "Manager" },
+    );
+    managerAccess = manager.accessToken;
+    managerRefresh = manager.refreshToken;
     await page.close();
   });
 
@@ -463,6 +465,10 @@ test.describe("Section access matrix (HRP-820)", () => {
     await page.goto("/exams");
     await expect(page.getByTestId("exams-heading")).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId("exams-btn-create")).toHaveCount(0);
+    // HRP-823 (QA 13.10): one's own two tabs, no mass exams tab.
+    await expect(page.getByTestId("exams-tab-all")).toHaveCount(0);
+    await expect(page.getByTestId("exams-tab-mine")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("exams-tab-todo")).toBeVisible();
   });
 
   test("the talent market follows the matrix: manage opens the board, none closes it (HRP-824)", async ({
@@ -484,6 +490,10 @@ test.describe("Section access matrix (HRP-820)", () => {
     await page.goto("/talent-market");
     await expect(page.getByTestId("talent-market-heading")).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId("talent-market-btn-create")).toHaveCount(0);
+    // HRP-824 (QA 13.10): the candidate's two tabs, no board tab.
+    await expect(page.getByTestId("talent-market-tab-all")).toHaveCount(0);
+    await expect(page.getByTestId("talent-market-tab-mine")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("talent-market-tab-appointed")).toBeVisible();
     const refused = await request.post(`${API_BASE}/talent-market`, {
       headers: employeeAuth,
       data: { title: "From the matrix", card_type: "talent" },
@@ -502,6 +512,7 @@ test.describe("Section access matrix (HRP-820)", () => {
     await setAuthTokens(page, employeeAccess, employeeRefresh);
     await page.goto("/talent-market");
     await expect(page.getByTestId("talent-market-btn-create")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("talent-market-tab-all")).toHaveAttribute("aria-selected", "true");
     const created = await request.post(`${API_BASE}/talent-market`, {
       headers: employeeAuth,
       data: { title: "From the matrix", card_type: "talent" },
@@ -555,12 +566,21 @@ test.describe("Section access matrix (HRP-820)", () => {
     await page.goto("/development");
     await expect(page.getByTestId("development-heading")).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId("development-btn-create")).toBeDisabled();
+    // HRP-825 (QA 13.10): one's own two tabs, no plans tab; a link to To do
+    // (the plan e-mails') opens it.
+    await expect(page.getByTestId("development-tab-all")).toHaveCount(0);
+    await expect(page.getByTestId("development-tab-mine")).toHaveAttribute("aria-selected", "true");
+    await page.goto("/development?tab=todo");
+    await expect(page.getByTestId("development-tab-todo")).toHaveAttribute("aria-selected", "true", {
+      timeout: 15000,
+    });
 
     // Hand authoring to the employee role - no role change anywhere.
     await setEmployeeLevel("manage");
     await setAuthTokens(page, employeeAccess, employeeRefresh);
     await page.goto("/development");
     await expect(page.getByTestId("development-btn-create")).toBeEnabled({ timeout: 15000 });
+    await expect(page.getByTestId("development-tab-all")).toHaveAttribute("aria-selected", "true");
 
     // Take it away: the page bounces and one's own plans close with it.
     await setEmployeeLevel("none");
@@ -599,12 +619,17 @@ test.describe("Section access matrix (HRP-820)", () => {
     await page.goto("/assessments");
     await expect(page.getByTestId("assessments-heading")).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId("assessments-btn-create")).toHaveCount(0);
+    // HRP-826 (QA 13.10): one's own two tabs, no section tab.
+    await expect(page.getByTestId("assessments-tab-all")).toHaveCount(0);
+    await expect(page.getByTestId("assessments-tab-mine")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("assessments-tab-todo")).toBeVisible();
 
     // Hand the section to the employee role - no role change anywhere.
     await setEmployeeLevel("manage");
     await setAuthTokens(page, employeeAccess, employeeRefresh);
     await page.goto("/assessments");
     await expect(page.getByTestId("assessments-btn-create")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("assessments-tab-all")).toHaveAttribute("aria-selected", "true");
 
     // Take it away: the page bounces and the API closes with it.
     await setEmployeeLevel("none");
@@ -723,17 +748,24 @@ test.describe("Section access matrix (HRP-820)", () => {
     page,
     request,
   }) => {
+    // Three saves of the matrix and four sign-ins.
+    test.slow();
     const employeeAuth = { Authorization: `Bearer ${employeeAccess}` };
     const saved = page
       .locator("[data-sonner-toast]")
       .filter({ hasText: /section access saved/i })
       .first();
     await completeOnboarding({ page, accessToken: adminAccess });
-    const setEmployeeLevel = async (level: string) => {
+    const setEmployeesLevel = async (role: string, level: string) => {
       await setAuthTokens(page, adminAccess, adminRefresh);
       await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
-      const select = page.getByTestId("section-access-select-employees-employee");
+      // REDO QA 14.10: nothing below the manager goes past `view` here.
+      await expect(
+        page.getByTestId("section-access-select-employees-employee").locator('option[value="manage"]'),
+      ).toBeDisabled();
+      await expect(page.getByTestId("section-access-ceiling-employees-employee")).toBeVisible();
+      const select = page.getByTestId(`section-access-select-employees-${role}`);
       await select.selectOption(level);
       await expect(select).toHaveValue(level);
       await page.getByTestId("section-access-btn-save").click();
@@ -756,46 +788,148 @@ test.describe("Section access matrix (HRP-820)", () => {
     await expect(page.getByTestId("employees-multi-issues")).toHaveCount(0);
     await expect(page.getByTestId("employees-btn-create")).toHaveCount(0);
 
-    // Hand the section to the employee role: the HR record opens. Heading
-    // no division, the member has nowhere to file anyone, so no Add.
-    await setEmployeeLevel("manage");
-    await setAuthTokens(page, employeeAccess, employeeRefresh);
+    // The raise runs on the manager column (REDO QA 14.10): lowered to
+    // `view` the division head reads the directory, handed `manage` back
+    // the HR record opens.
+    await setEmployeesLevel("manager", "view");
+    await setAuthTokens(page, managerAccess, managerRefresh);
+    await page.goto("/employees");
+    await expect(page.getByTestId("employees-table")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("employees-multi-issues")).toHaveCount(0);
+    await setEmployeesLevel("manager", "manage");
+    await setAuthTokens(page, managerAccess, managerRefresh);
     await page.goto("/employees");
     await expect(page.getByTestId("employees-multi-issues")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId("employees-btn-create")).toHaveCount(0);
 
-    // Take it away: the pages bounce, the section's own reads close, the
-    // people pickers every other section reads do not.
-    await setEmployeeLevel("none");
+    // Take it away: the pages bounce, the section's own reads close - the
+    // card too, one's own included (REDO QA 14.10) - the people pickers
+    // every other section reads do not.
+    await setEmployeesLevel("employee", "none");
     await setAuthTokens(page, employeeAccess, employeeRefresh);
     await page.goto("/employees");
     await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
     await expectPermissionToast(page);
-    for (const path of ["/employees", `/employees/${ownId}`, "/employees/me"]) {
+    for (const path of ["/employees", "/employees/me"]) {
       const read = await request.get(`${API_BASE}${path}`, { headers: employeeAuth });
       expect(read.status(), path).toBe(200);
     }
+    const ownCard = await request.get(`${API_BASE}/employees/${ownId}`, { headers: employeeAuth });
+    expect(ownCard.status()).toBe(404);
     const history = await request.get(`${API_BASE}/employees/${ownId}/education`, {
       headers: employeeAuth,
     });
     expect(history.status()).toBe(403);
   });
 
+  test("an employee's name links where the card opens: text at none and for someone who left (HRP-829 REDO)", async ({
+    page,
+    request,
+  }) => {
+    test.slow();
+    const admin = { Authorization: `Bearer ${adminAccess}` };
+    const setEmployeesLevel = async (role: string, level: string) => {
+      const matrix = await (await request.get(`${API_BASE}/settings/section-access`, { headers: admin })).json();
+      const sections = (matrix.sections as { code: string; hidden: boolean; levels: Record<string, string> }[]).map(
+        (s) => ({ code: s.code, hidden: s.hidden, levels: s.code === "employees" ? { ...s.levels, [role]: level } : s.levels }),
+      );
+      const saved = await request.put(`${API_BASE}/settings/section-access`, { headers: admin, data: { sections } });
+      expect(saved.status(), await saved.text()).toBe(200);
+    };
+    // Two colleagues outside the manager's subtree, each heading a division
+    // the company tree names them on; one of them has left.
+    const stamp = Date.now();
+    const home = await (
+      await request.post(`${API_BASE}/divisions`, { headers: admin, data: { name: `Name links ${stamp}` } })
+    ).json();
+    const member = (lastName: string) =>
+      provisionTenantMember(
+        { page, accessToken: adminAccess },
+        { roleCode: "employee", divisionId: home.id, firstName: "Head", lastName },
+      );
+    const stays = await member("Stays");
+    const left = await member("Left");
+    const headed = async (name: string, managerId: string | null) => {
+      const r = await request.post(`${API_BASE}/divisions`, {
+        headers: admin,
+        data: { name: `${name} ${stamp}`, manager_id: managerId },
+      });
+      expect(r.status(), await r.text()).toBe(201);
+      return (await r.json()).id as string;
+    };
+    const staysDiv = await headed("Headed by Stays", stays.employeeId);
+    const leftDiv = await headed("Headed by Left", left.employeeId);
+    const gone = await request.put(`${API_BASE}/employees/${left.employeeId}`, {
+      headers: admin,
+      data: { status: "terminated" },
+    });
+    expect(gone.status(), await gone.text()).toBe(200);
+
+    const staysName = page.getByTestId(`company-division-${staysDiv}-manager`);
+    const leftName = page.getByTestId(`company-division-${leftDiv}-manager`);
+    const openTree = async (access: string, refresh: string) => {
+      await setAuthTokens(page, access, refresh);
+      await page.goto("/company");
+      await expect(staysName).toBeVisible({ timeout: 15000 });
+    };
+
+    // `view` (the employee role's default): a link to the active colleague,
+    // text for the one who left - both answered by the same request.
+    await setEmployeesLevel("employee", "view");
+    await openTree(employeeAccess, employeeRefresh);
+    await expect(staysName).toHaveAttribute("href", `/employees/${stays.employeeId}`);
+    await expect(leftName).toContainText("Head Left");
+    await expect(leftName).not.toHaveAttribute("href", /.*/);
+
+    // A manager: the colleague who left sits outside their subtree - text.
+    await openTree(managerAccess, managerRefresh);
+    await expect(staysName).toHaveAttribute("href", `/employees/${stays.employeeId}`);
+    await expect(leftName).not.toHaveAttribute("href", /.*/);
+
+    // The admin level opens every card, the one who left included.
+    await openTree(adminAccess, adminRefresh);
+    await expect(leftName).toHaveAttribute("href", `/employees/${left.employeeId}`);
+
+    // `none`: every name is text, and nobody asks.
+    await setEmployeesLevel("employee", "none");
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/employees/card-access")) asked.push(r.url());
+    });
+    await openTree(employeeAccess, employeeRefresh);
+    await page.waitForLoadState("networkidle");
+    await expect(staysName).not.toHaveAttribute("href", /.*/);
+    expect(asked).toEqual([]);
+    // Nor does the card open by its URL.
+    const card = await request.get(`${API_BASE}/employees/${stays.employeeId}`, {
+      headers: { Authorization: `Bearer ${employeeAccess}` },
+    });
+    expect(card.status()).toBe(404);
+    await setEmployeesLevel("employee", "view");
+  });
+
   test("recruitment follows the matrix: view reads, manage runs hiring, none closes it and its /v1 routes (HRP-830)", async ({
     page,
     request,
   }) => {
-    const employeeAuth = { Authorization: `Bearer ${employeeAccess}` };
+    // The Employee role is `none` on recruitment for good (HRP-830, the
+    // HRP-831 ceiling), so the walk runs on the hiring manager's column -
+    // `view` by default. At `manage` they run hiring on the vacancies they
+    // are named on (HRP-830 REDO), so the vacancy they create names them.
+    const hiringManager = await provisionTenantMember(
+      { page, accessToken: adminAccess },
+      { roleCode: "hiring_manager", firstName: "Matrix", lastName: "Hiring" },
+    );
+    const hmAuth = { Authorization: `Bearer ${hiringManager.accessToken}` };
     const saved = page
       .locator("[data-sonner-toast]")
       .filter({ hasText: /section access saved/i })
       .first();
     await completeOnboarding({ page, accessToken: adminAccess });
-    const setEmployeeLevel = async (level: string) => {
+    const setLevel = async (level: string) => {
       await setAuthTokens(page, adminAccess, adminRefresh);
       await page.goto("/settings/roles/section-access");
       await expect(page.getByTestId("section-access-table")).toBeVisible({ timeout: 15000 });
-      const select = page.getByTestId("section-access-select-recruitment-employee");
+      const select = page.getByTestId("section-access-select-recruitment-hiring_manager");
       await select.selectOption(level);
       await expect(select).toHaveValue(level);
       await page.getByTestId("section-access-btn-save").click();
@@ -803,37 +937,43 @@ test.describe("Section access matrix (HRP-820)", () => {
     };
     const createVacancy = () =>
       request.post(`${API_BASE}/recruitment/vacancies`, {
-        headers: employeeAuth,
-        data: { title: "From the matrix" },
+        headers: hmAuth,
+        data: { title: "From the matrix", hiring_manager_id: hiringManager.userId },
       });
 
-    // `view`: the section opens on the caller's own vacancies - none yet -
-    // and nothing writes.
-    await setEmployeeLevel("view");
-    await setAuthTokens(page, employeeAccess, employeeRefresh);
+    await setAuthTokens(page, adminAccess, adminRefresh);
+    await page.goto("/settings/roles/section-access");
+    await expect(page.getByTestId("section-access-select-recruitment-employee")).toBeDisabled({
+      timeout: 15000,
+    });
+    await expect(page.getByTestId("section-access-ceiling-recruitment-employee")).toBeVisible();
+
+    // `view` (the default): the section opens on the caller's own
+    // vacancies - none yet - and nothing writes.
+    await setAuthTokens(page, hiringManager.accessToken, hiringManager.refreshToken);
     await page.goto("/recruitment/requisitions");
     await expect(page.getByTestId("recruitment-vacancy-count")).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId("recruitment-btn-create-vacancy")).toHaveCount(0);
     expect((await createVacancy()).status()).toBe(403);
 
     // `manage`: the same call goes through, and the button is there.
-    await setEmployeeLevel("manage");
-    await setAuthTokens(page, employeeAccess, employeeRefresh);
+    await setLevel("manage");
+    await setAuthTokens(page, hiringManager.accessToken, hiringManager.refreshToken);
     await page.goto("/recruitment/requisitions");
     await expect(page.getByTestId("recruitment-btn-create-vacancy")).toBeVisible({ timeout: 15000 });
     const created = await createVacancy();
     expect(created.status()).toBe(201);
     const vacancyId = (await created.json()).id as string;
 
-    // `none` (the default): the page bounces, and so do the hiring rounds
-    // under /v1, which the gate did not see before this ticket.
-    await setEmployeeLevel("none");
-    await setAuthTokens(page, employeeAccess, employeeRefresh);
+    // `none`: the page bounces, and so do the hiring rounds under /v1,
+    // which the gate did not see before this ticket.
+    await setLevel("none");
+    await setAuthTokens(page, hiringManager.accessToken, hiringManager.refreshToken);
     await page.goto("/recruitment/requisitions");
     await expect(page).toHaveURL(/\/dashboard$/, { timeout: 15000 });
     await expectPermissionToast(page);
     for (const path of [`/recruitment/vacancies/${vacancyId}`, "/v1/tenants/me/assessment-scales"]) {
-      const read = await request.get(`${API_BASE}${path}`, { headers: employeeAuth });
+      const read = await request.get(`${API_BASE}${path}`, { headers: hmAuth });
       expect(read.status(), path).toBe(403);
     }
   });

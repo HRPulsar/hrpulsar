@@ -20,6 +20,7 @@ let roles: string[] = ["recruiter"];
 // HRP-830: the PATCH is `manage` on recruitment, whatever the role.
 let recruitmentLevel = "manage";
 let competencesGetFails = false;
+let rowLevels: string[] = ["lvl-1"];
 
 const apiGet = vi.fn((url: string) => {
   if (url.includes("/competences")) {
@@ -30,11 +31,16 @@ const apiGet = vi.fn((url: string) => {
             id: "link-1",
             vacancy_id: "vac-1",
             competence_id: "comp-1",
-            skill_level_ids: ["lvl-1"],
+            skill_level_ids: rowLevels,
             source: "library",
           },
         ]);
   }
+  if (url === "/skill-levels")
+    return Promise.resolve([
+      { id: "lvl-2", title: "Expert", sort_index: 2, i18n_key: null, is_active: true, tenant_id: "t" },
+      { id: "lvl-1", title: "Advanced", sort_index: 1, i18n_key: null, is_active: true, tenant_id: "t" },
+    ]);
   // The generation-status banner polls for an active session.
   return Promise.resolve(null);
 });
@@ -150,5 +156,56 @@ describe("Library competences — a failed read never becomes an empty save", ()
     expect(btn!.disabled).toBe(true);
     expect(btn!.title).toContain("needs Manage on Recruitment");
     recruitmentLevel = "manage";
+  });
+});
+
+// HRP-1087: a library competence shows the level the vacancy asks for, and
+// the picker takes it in a second step before saving.
+describe("Library competences carry their level (HRP-1087)", () => {
+  const byId = (id: string) =>
+    document.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null;
+
+  async function toLevels() {
+    await act(async () => {
+      pickerButton()!.click();
+    });
+    await act(async () => {
+      byId("vacancy-competences-library-next-btn")!.click();
+    });
+  }
+
+  it("shows the stored level on the competence", async () => {
+    roles = ["recruiter"];
+    competencesGetFails = false;
+    rowLevels = ["lvl-1"];
+    await render();
+    expect(byId("vacancy-library-competence-level-comp-1")!.textContent).toContain("Advanced");
+  });
+
+  it("keeps an untouched level on save", async () => {
+    rowLevels = ["lvl-1", "lvl-2"];
+    await render();
+    await toLevels();
+    expect(byId("vacancy-competences-library-levels")).not.toBeNull();
+    const save = byId("vacancy-competences-library-save-btn")!;
+    expect(save.disabled).toBe(false);
+    await act(async () => {
+      save.click();
+    });
+    expect(apiPatch).toHaveBeenCalledWith("/recruitment/vacancies/vac-1/competences", {
+      competences: [{ competence_id: "comp-1", skill_level_ids: ["lvl-1", "lvl-2"], source: "library" }],
+    });
+    rowLevels = ["lvl-1"];
+  });
+
+  it("asks for a level before saving a competence without one", async () => {
+    rowLevels = [];
+    await render();
+    expect(byId("vacancy-library-competence-level-comp-1")).toBeNull();
+    await toLevels();
+    const save = byId("vacancy-competences-library-save-btn")!;
+    expect(save.disabled).toBe(true);
+    expect(save.parentElement!.getAttribute("title")).toContain("Pick a level");
+    rowLevels = ["lvl-1"];
   });
 });

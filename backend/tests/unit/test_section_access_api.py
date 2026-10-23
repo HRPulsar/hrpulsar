@@ -99,10 +99,42 @@ async def test_widening_is_kept(auth_client, db, tenant):
     # A cell above the default is stored as written: HRP-831 translated the
     # last section and HRP-832 dropped the clamp that narrowed the rest.
     matrix = (await auth_client.get(URL)).json()
-    r = await auth_client.put(URL, json=_body(matrix, invitations={"recruiter": "manage"}))
+    r = await auth_client.put(URL, json=_body(matrix, import_={"recruiter": "manage"}))
     assert r.status_code == 200, r.text
-    assert {s["code"]: s for s in r.json()["sections"]}["invitations"]["levels"]["recruiter"] == "manage"
+    assert {s["code"]: s for s in r.json()["sections"]}["import"]["levels"]["recruiter"] == "manage"
     assert await _counts(db, tenant.id) == (1, 0, 1)
+
+
+async def test_a_level_above_the_roles_ceiling_is_refused(auth_client, db, tenant):
+    # HRP-831 (QA 15.10): invitations stay ``none`` below ``manager``, roles
+    # stay at most ``view`` below the admin. The screen gets the ceilings to
+    # lock those cells; the save refuses them whatever the screen sends.
+    matrix = (await auth_client.get(URL)).json()
+    by_code = {s["code"]: s for s in matrix["sections"]}
+    assert by_code["invitations"]["ceilings"] == {"recruiter": "none", "hiring_manager": "none", "employee": "none"}
+    assert by_code["roles"]["ceilings"] == dict.fromkeys(("hr", "manager", "recruiter", "hiring_manager", "employee"), "view")
+    assert by_code["exams"]["ceilings"] == {}
+    assert by_code["recruitment"]["ceilings"] == {"employee": "none"}
+    # HRP-829 REDO (QA 14.10): ``manage`` on employees stops at ``manager``.
+    assert by_code["employees"]["ceilings"] == dict.fromkeys(("recruiter", "hiring_manager", "employee"), "view")
+    for change in (
+        {"invitations": {"employee": "view"}},
+        {"invitations": {"recruiter": "manage"}},
+        {"invitations": {"hiring_manager": "view"}},
+        {"roles": {"hr": "manage"}},
+        {"roles": {"employee": "manage"}},
+        {"recruitment": {"employee": "view"}},  # HRP-830
+        {"employees": {"recruiter": "manage"}},  # HRP-829
+        {"employees": {"hiring_manager": "manage"}},
+        {"employees": {"employee": "manage"}},
+    ):
+        r = await auth_client.put(URL, json=_body(matrix, **change))
+        assert r.status_code == 400 and r.json()["code"] == "section_access_role_ceiling", change
+    assert await _counts(db, tenant.id) == (0, 0, 0)
+    # Up to the ceiling is fine.
+    r = await auth_client.put(URL, json=_body(matrix, roles={"hr": "view", "employee": "view"}))
+    assert r.status_code == 200, r.text
+    assert await _counts(db, tenant.id) == (2, 0, 1)
 
 
 async def test_unknown_section_or_role(auth_client):
@@ -127,19 +159,28 @@ async def test_admin_cannot_lock_themselves_out(auth_client):
     assert r.status_code == 400 and r.json()["code"] == "section_access_cannot_hide"
 
 
-async def test_rows_the_registry_now_forbids_are_dropped_on_read(auth_client, db, tenant):
+async def test_rows_the_registry_now_forbids_are_dropped_on_read(auth_client, client, db, tenant):
     # Review 01.10: a hidden row stored before its section became
     # never_hidden (or an admin override before admin_locked) was honoured
     # by the gate and sent back by the screen into a save that refuses it.
     db.add_all([
         TenantSectionSetting(tenant_id=tenant.id, section="import", hidden=True),
         TenantSectionAccess(tenant_id=tenant.id, section="roles", role_code="admin", level="view"),
+        # HRP-831: saved before the role got a ceiling on the section.
+        TenantSectionAccess(tenant_id=tenant.id, section="invitations", role_code="employee", level="manage"),
+        TenantSectionAccess(tenant_id=tenant.id, section="roles", role_code="hr", level="manage"),
     ])
     await db.commit()
     matrix = (await auth_client.get(URL)).json()
     by_code = {s["code"]: s for s in matrix["sections"]}
     assert by_code["import"]["hidden"] is False
     assert by_code["roles"]["levels"]["admin"] == "manage"
+    assert by_code["invitations"]["levels"]["employee"] == "none"
+    assert by_code["roles"]["levels"]["hr"] == "none"
+    _, token = await _user_with_role(db, tenant, "employee")
+    headers = {"Authorization": f"Bearer {token}"}
+    assert "invitations" not in (await client.get("/api/auth/me", headers=headers)).json()["sections"]
+    assert (await client.get("/api/invitations", headers=headers)).status_code == 403
     r = await auth_client.put(URL, json={"sections": [
         {"code": s["code"], "hidden": s["hidden"], "levels": s["levels"]} for s in matrix["sections"]
     ]})

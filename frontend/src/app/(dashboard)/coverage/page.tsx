@@ -235,6 +235,7 @@ export default function CoveragePage() {
                 <TableCell data-testid={`coverage-row-${c.id}-owner`}>
                   {c.owner ? (
                     <EmployeeSummaryLine
+                      employeeId={c.owner.employee_id}
                       employee={{
                         user_name: c.owner.name,
                         position_title: c.owner.position_title,

@@ -267,3 +267,29 @@ class TestPublicLinkLocale:
             strict=True,
         ):
             assert f"{path}?lang={locale}" in html
+
+    @pytest.mark.parametrize(
+        ("locale", "body_end"),
+        [
+            ("en", 'QA Engineer</strong>".</p>'),
+            ("de", 'QA Engineer</strong>" zu bewerten.</p>'),
+        ],
+    )
+    def test_evaluator_invite_no_longer_promises_accountless_access(
+        self, locales_de_en, locale, body_end
+    ):
+        """HRP-1061: any tenant user can be invited as an external
+        evaluator, so neither invite letter says no account is needed."""
+        from app.core.email_templates import (
+            render_manager_assessment_invite_email,
+            render_recruitment_invite_email,
+        )
+
+        for render in (
+            render_manager_assessment_invite_email,
+            render_recruitment_invite_email,
+        ):
+            html = render("tok", "Ada", "QA Engineer", locale=locale)[1]
+            assert body_end in html
+            assert "no account is required" not in html
+            assert "ein Konto ist nicht erforderlich" not in html
