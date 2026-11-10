@@ -12,6 +12,7 @@ import { ImpersonationBanner } from "@/components/impersonation-banner";
 import { AIGenerationBanner } from "@/components/ai-generation-banner";
 import { DemoBanner } from "@/components/dashboard/demo-banner";
 import { DemoFeedbackPopup } from "@/components/dashboard/demo-feedback-popup";
+import { DemoGuide } from "@/components/dashboard/demo-guide";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TenantBrandStyle } from "@/components/tenant-brand-style";
 import { WebSocketProvider } from "@/lib/ws";
@@ -57,6 +58,7 @@ export default function DashboardLayout({
                 <AIGenerationBanner />
                 <DemoBanner />
                 <Header />
+                <DemoGuide />
                 <main className="flex-1 overflow-auto p-4 sm:p-6">
                   <SectionGate>{children}</SectionGate>
                 </main>

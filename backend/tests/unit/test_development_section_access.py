@@ -81,9 +81,10 @@ async def test_the_owners_half_writes_at_view_and_authoring_does_not(
         assert r.status_code == 403 and r.json()["code"] == GATE, path
 
 
-async def test_a_manager_lowered_to_view_stops_running_plans(auth_client, client, db, tenant):
-    # "Sees drafts, walks the full graph" was "admin-level or manager"; the
-    # manager role is the level now, the admin tier stays.
+async def test_a_manager_lowered_to_view_reads_plans_and_runs_none(auth_client, client, db, tenant):
+    # "Sees drafts" is reading the section's list: ``manage``, or ``view``
+    # for admin, hr and manager (QA 27.10). "Walks the full graph" is
+    # running plans - an admin-level role or ``manage``, as in 2.5.4.
     manager, emp = await _person(db, tenant, "manager")
     pid = (await _plan_for(client, manager, emp)).json()["id"]
     listed = await client.get("/api/pdp", headers=manager)
@@ -91,17 +92,16 @@ async def test_a_manager_lowered_to_view_stops_running_plans(auth_client, client
 
     await _save(auth_client, levels={"development": {"manager": "view", "hr": "view"}})
 
-    assert (await client.get("/api/pdp", headers=manager)).json() == []
-    moved = await client.post(
-        f"/api/pdp/{pid}/status", json={"status_code": "sent"}, headers=manager
-    )
+    assert [p["id"] for p in (await client.get("/api/pdp", headers=manager)).json()] == [pid]
+    hr, _ = await _person(db, tenant, "hr")
+    assert pid in [p["id"] for p in (await client.get("/api/pdp", headers=hr)).json()]
+    moved = await client.post(f"/api/pdp/{pid}/status", json={"status_code": "sent"}, headers=manager)
     assert moved.status_code == 403 and moved.json()["code"] == "pdp_status_change_forbidden"
     refused = await _plan_for(client, manager, emp)
     assert refused.status_code == 403 and refused.json()["code"] == GATE
-
-    # hr at `view` keeps the admin tier: whole tenant, drafts included.
-    hr, _ = await _person(db, tenant, "hr")
-    assert pid in [p["id"] for p in (await client.get("/api/pdp", headers=hr)).json()]
+    # hr at `view` keeps the admin tier's status graph (Maxim, on QA 27.10).
+    moved = await client.post(f"/api/pdp/{pid}/status", json={"status_code": "cancelled"}, headers=hr)
+    assert moved.status_code == 200, moved.text
 
 
 async def test_taking_the_section_away_closes_it_own_plan_included(

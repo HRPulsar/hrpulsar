@@ -8,11 +8,23 @@ from pydantic import BaseModel, EmailStr, Field
 # "demo" — the delayed popup shown inside a demo sandbox (HRP-587).
 FeedbackSource = Literal["platform", "demo"]
 
+# Demo popup only (HRP-1158): what the visitor had just done when the card
+# asked. The five value moments, plus "timer" for the card shown to those
+# who only browsed.
+FeedbackContext = Literal[
+    "pdp_created",
+    "pdp_from_assessment",
+    "assessment_created",
+    "decomposition_applied",
+    "hire_need_created",
+    "timer",
+]
+
 
 class FeedbackCreate(BaseModel):
     """One feedback submission. Every field is optional on its own — the
     service rejects a submission with no rating, text, clarity answer,
-    contact email or phone."""
+    context answer, contact email or phone."""
 
     rating: Literal["up", "down"] | None = None
     message: str | None = Field(default=None, max_length=2000)
@@ -25,3 +37,8 @@ class FeedbackCreate(BaseModel):
     contact_name: str | None = Field(default=None, max_length=100)
     contact_phone: str | None = Field(default=None, max_length=40)
     source: FeedbackSource = "platform"
+    context: FeedbackContext | None = None
+    # The object the card asked about ("Q3 plan for Will Gapp").
+    context_title: str | None = Field(default=None, max_length=200)
+    # The card's one-click answer to its question about that object.
+    answer: Literal["yes", "partly", "no"] | None = None

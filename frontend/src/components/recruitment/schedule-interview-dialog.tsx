@@ -206,14 +206,18 @@ export function ScheduleInterviewDialog({
     };
   }, [open, cvId]);
 
+  const editedId = interview?.id;
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    // HRP-971: for a candidacy, without those its vacancy is fenced from.
+    // HRP-971: for a candidacy, without those its vacancy is fenced from -
+    // except whoever already sits on the interview being edited (HRP-1015).
+    const query = new URLSearchParams();
+    if (cvId) query.set("candidate_vacancy_id", cvId);
+    if (cvId && editedId) query.set("interview_id", editedId);
+    const qs = query.toString();
     api
-      .get<InterviewerOption[]>(
-        `/recruitment/interviewers${cvId ? `?candidate_vacancy_id=${cvId}` : ""}`,
-      )
+      .get<InterviewerOption[]>(`/recruitment/interviewers${qs ? `?${qs}` : ""}`)
       .then((rows) => {
         if (!cancelled) setPeople(Array.isArray(rows) ? rows : []);
       })
@@ -223,7 +227,7 @@ export function ScheduleInterviewDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, cvId]);
+  }, [open, cvId, editedId]);
 
   // HRP-386 REDO: Title is mandatory — no default value, no hint.
   const titleValue = title.trim();

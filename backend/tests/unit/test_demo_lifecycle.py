@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from app.config import settings
 from app.modules.company.models import Division, Tenant
+from app.modules.signup.models import SignupRequest
 from sqlalchemy import create_engine, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -142,6 +143,146 @@ async def test_purge_never_touches_non_demo_tenants(
 
     remaining = await db.execute(select(Tenant).where(Tenant.id == real.id))
     assert remaining.scalar_one_or_none() is not None
+
+
+async def _expired_sandbox_with_signup(
+    db: AsyncSession,
+    *,
+    status: str | None,
+    keep: bool = True,
+    age: timedelta = timedelta(hours=1),
+) -> Tenant:
+    """A demo tenant past its TTL and, unless ``status`` is None, the
+    save-access signup that points at it."""
+    now = datetime.now(UTC)
+    tenant = await _make_tenant(
+        db,
+        is_demo=True,
+        expires_at=now - timedelta(minutes=5),
+        last_active_at=now - timedelta(hours=5),
+    )
+    if status is not None:
+        db.add(
+            SignupRequest(
+                email=f"keep-{uuid.uuid4().hex[:8]}@example.com",
+                status=status,
+                source="demo",
+                demo_tenant_id_snapshot=tenant.id,
+                keep_demo_data=keep,
+                created_at=now - age,
+                updated_at=now - age,
+            )
+        )
+        await db.commit()
+    return tenant
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["pending_email_verify", "pending_moderation"])
+async def test_purge_holds_sandbox_with_pending_keep_data_signup(
+    db: AsyncSession, sync_test_engine, monkeypatch, status
+):
+    """HRP-1161: the visitor asked to keep the data — the sandbox waits for
+    the moderator, without taking a live-session slot meanwhile."""
+    import app.modules.demo.service as demo_service
+    import app.modules.demo.tasks as tasks
+
+    now = datetime.now(UTC)
+    live_before = await demo_service._count_live_demo_tenants(db, now=now)
+    held = await _expired_sandbox_with_signup(
+        db, status=status, age=tasks.KEEP_DATA_HOLD - timedelta(hours=1)
+    )
+    assert await demo_service._count_live_demo_tenants(db, now=now) == live_before
+
+    monkeypatch.setattr(tasks, "_sync_engine", lambda: sync_test_engine)
+    tasks.purge_expired_demo_tenants()
+
+    remaining = await db.execute(select(Tenant).where(Tenant.id == held.id))
+    assert remaining.scalar_one_or_none() is not None
+
+
+@pytest.mark.asyncio
+async def test_purge_holds_sandbox_a_stale_pending_signup_was_repointed_to(
+    db: AsyncSession, sync_test_engine, monkeypatch
+):
+    """A visitor whose earlier request is still pending saves again from a
+    new sandbox: the row is reused, so the hold counts from that save, not
+    from the row's creation (review of HRP-1161)."""
+    import app.modules.demo.tasks as tasks
+    from app.modules.signup import service as signup_service
+    from app.modules.signup.schemas import SignupRequestFields
+
+    async def _ok(_token, *, remote_ip=None):
+        return True
+
+    async def _noop(_remote_ip):
+        return None
+
+    monkeypatch.setattr(signup_service, "_verify_turnstile", _ok)
+    monkeypatch.setattr(signup_service, "_enforce_rate_limit", _noop)
+    monkeypatch.setattr(
+        "app.core.email.send_signup_verify_email", lambda *_a, **_k: True
+    )
+
+    old_sandbox = await _expired_sandbox_with_signup(
+        db, status="pending_email_verify", age=timedelta(days=9)
+    )
+    email = (
+        await db.execute(
+            select(SignupRequest.email).where(
+                SignupRequest.demo_tenant_id_snapshot == old_sandbox.id
+            )
+        )
+    ).scalar_one()
+    now = datetime.now(UTC)
+    new_sandbox = await _make_tenant(
+        db,
+        is_demo=True,
+        expires_at=now - timedelta(minutes=5),
+        last_active_at=now - timedelta(hours=5),
+    )
+    row = await signup_service.create_signup_request(
+        db,
+        SignupRequestFields(email=email),
+        remote_ip=None,
+        source="demo",
+        demo_tenant_id_snapshot=new_sandbox.id,
+        keep_demo_data=True,
+    )
+    assert row.created_at < now - tasks.KEEP_DATA_HOLD  # the same, old row
+
+    monkeypatch.setattr(tasks, "_sync_engine", lambda: sync_test_engine)
+    tasks.purge_expired_demo_tenants()
+
+    kept = await db.execute(select(Tenant).where(Tenant.id == new_sandbox.id))
+    assert kept.scalar_one_or_none() is not None
+    # The sandbox the row no longer points at goes as usual.
+    gone = await db.execute(select(Tenant).where(Tenant.id == old_sandbox.id))
+    assert gone.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "keep", "age"),
+    [
+        pytest.param(None, True, timedelta(hours=1), id="no-signup"),
+        pytest.param("rejected", True, timedelta(hours=1), id="rejected"),
+        pytest.param("pending_moderation", True, timedelta(days=8), id="hold-over"),
+        pytest.param("pending_moderation", False, timedelta(hours=1), id="no-keep"),
+    ],
+)
+async def test_purge_drops_sandbox_no_signup_holds(
+    db: AsyncSession, sync_test_engine, monkeypatch, status, keep, age
+):
+    import app.modules.demo.tasks as tasks
+
+    tenant = await _expired_sandbox_with_signup(db, status=status, keep=keep, age=age)
+
+    monkeypatch.setattr(tasks, "_sync_engine", lambda: sync_test_engine)
+    tasks.purge_expired_demo_tenants()
+
+    remaining = await db.execute(select(Tenant).where(Tenant.id == tenant.id))
+    assert remaining.scalar_one_or_none() is None
 
 
 @pytest.mark.asyncio

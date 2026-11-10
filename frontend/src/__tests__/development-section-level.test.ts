@@ -22,8 +22,19 @@ describe("development plans follow the section level (HRP-825)", () => {
   });
 
   it("offers the full status graph only to who runs plans, as the API does", () => {
+    // The admin tier keeps driving plans at `view`, as in 2.5.4 (Maxim, on
+    // QA 27.10); a manager at `view` only reads.
     expect(planPage).toContain("const runsPlans = canManage || adminTier;");
     expect(planPage).toMatch(/: runsPlans\s*\? pdpNextStatuses\(pdp\.status\)\s*: \[\];/);
+  });
+
+  it("offers the comment box to who runs plans, the owner and the reviewer", () => {
+    expect(planPage).toContain("const canComment = !isTerminal && (runsPlans || isOwner || isAssignedReviewer);");
+    expect(planPage).toContain("{canComment && (");
+  });
+
+  it("shows the plans' own tab to whoever reads the section's list", () => {
+    expect(listPage).toContain('const lists = readsSectionList("development");');
   });
 
   it("offers Create plan from an assessment only to who may author one", () => {

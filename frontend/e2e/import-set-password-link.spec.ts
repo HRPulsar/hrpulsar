@@ -5,6 +5,7 @@ import {
   registerUser,
   SAAS_E2E,
   setAuthTokens,
+  setDemoSession,
   uniqueEmail,
 } from "./helpers";
 
@@ -97,14 +98,7 @@ test.describe("HRP-806 — import sends set-password links", () => {
     expect(start.ok(), `demo/start failed: ${start.status()}`).toBeTruthy();
     const { access_token } = await start.json();
 
-    // Same storage dance as demo-persona.spec.ts.
-    await page.goto("/login");
-    await page.evaluate((token: string) => {
-      localStorage.setItem("access_token", token);
-      localStorage.removeItem("refresh_token");
-      document.cookie = "has_token=1; path=/; SameSite=Lax";
-      document.cookie = "demo_session=1; path=/; SameSite=Lax";
-    }, access_token);
+    await setDemoSession(page, access_token);
 
     await page.goto("/settings/import");
     await expect(page.getByTestId("import-demo-email-limit-note")).toBeVisible({

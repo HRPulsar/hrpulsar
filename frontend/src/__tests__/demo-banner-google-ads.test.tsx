@@ -99,8 +99,9 @@ async function submitSaveAccess() {
   };
   act(() => {
     input("demo-save-access-input-email", "jane@example.com");
+    // The name is optional since HRP-1161 — still the first text field.
     const name = document.querySelector<HTMLInputElement>(
-      'input[type="text"][required]',
+      'input[type="text"]',
     )!;
     const setter = Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,

@@ -4,6 +4,8 @@
 // opens a tab the caller sees and falls back to the first visible one
 // otherwise (a `view` caller following a link to the manage tab); a click
 // replaces the URL with the tab alone; "To do (N)" shows the backend's count.
+// QA 26-27.10: the section's own tab of exams, assessments and development
+// shows at `manage` and, read-only, at `view` for admin, hr and manager.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -14,9 +16,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import enMessages from "../../messages/en.json";
 
-const { nav, getSpy } = vi.hoisted(() => ({
+const { nav, getSpy, auth } = vi.hoisted(() => ({
   nav: { search: "", replace: vi.fn() },
   getSpy: vi.fn((url: string) => Promise.resolve({ url, count: 4 })),
+  auth: { user: null as { roles: string[]; sections: Record<string, string> } | null },
 }));
 
 vi.mock("next/navigation", () => ({
@@ -26,8 +29,10 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({ api: { get: (url: string) => getSpy(url) } }));
+vi.mock("@/context/auth-context", () => ({ useAuth: () => auth }));
 
 const { SectionTabs, useSectionTab, useTodoCount } = await import("@/components/section-tabs");
+const { usePermissions } = await import("@/hooks/use-permissions");
 
 function Probe({ ids }: { ids: string[] }) {
   const tab = useSectionTab(ids);
@@ -108,21 +113,53 @@ describe("the four section lists share it", () => {
   const page = (name: string) =>
     readFileSync(resolve(__dirname, `../app/(dashboard)/${name}/page.tsx`), "utf8");
 
-  it.each([
-    ["exams", "exams", '["all", "mine", "todo"] : ["mine", "todo"]'],
-    ["assessments", "assessments", '["all", "mine", "todo"] : ["mine", "todo"]'],
-    ["development", "development", '["all", "mine", "todo"] : ["mine", "todo"]'],
-    ["talent-market", "talent-market", '["all", "mine", "appointed"] : ["mine", "appointed"]'],
-  ])("%s shows its manage tab only at manage", (name, section, ids) => {
-    const src = page(name);
-    expect(src).toContain(`const manage = canManageSection("${section}");`);
-    expect(src).toContain(`useSectionTab(manage ? ${ids})`);
-    expect(src).toContain("<SectionTabs");
+  it.each(["exams", "assessments", "development"])(
+    "%s shows its own tab to whoever reads the section's list",
+    (name) => {
+      const src = page(name);
+      expect(src).toContain(`const lists = readsSectionList("${name}");`);
+      expect(src).toContain('useSectionTab(lists ? ["all", "mine", "todo"] : ["mine", "todo"])');
+      expect(src).toContain("<SectionTabs");
+    },
+  );
+
+  it("talent-market shows its manage tab only at manage", () => {
+    const src = page("talent-market");
+    expect(src).toContain('const manage = canManageSection("talent-market");');
+    expect(src).toContain('useSectionTab(manage ? ["all", "mine", "appointed"] : ["mine", "appointed"])');
   });
 
   it.each(["assessments", "development"])("%s mirrors the resolved tab, not the raw param", (name) => {
     const src = page(name);
     expect(src).toContain('if (searchParams.has("tab")) params.set("tab", tab);');
     expect(src).not.toContain('searchParams.get("tab")');
+  });
+});
+
+describe("readsSectionList (QA 26-27.10)", () => {
+  function Levels({ code }: { code: "exams" }) {
+    const { readsSectionList } = usePermissions();
+    return <span data-testid="reads">{String(readsSectionList(code))}</span>;
+  }
+
+  async function reads(roles: string[], level?: string) {
+    auth.user = { roles, sections: level ? { exams: level } : {} };
+    await act(async () => {
+      root.render(<Levels code="exams" />);
+    });
+    return container.querySelector('[data-testid="reads"]')?.textContent;
+  }
+
+  it.each([
+    [["admin"], "view", "true"],
+    [["hr", "employee"], "view", "true"],
+    [["manager", "employee"], "view", "true"],
+    [["recruiter", "employee"], "view", "false"],
+    [["hiring_manager", "employee"], "view", "false"],
+    [["employee"], "view", "false"],
+    [["employee"], "manage", "true"],
+    [["hr"], undefined, "false"],
+  ])("%j at %s reads the list: %s", async (roles, level, expected) => {
+    expect(await reads(roles, level)).toBe(expected);
   });
 });

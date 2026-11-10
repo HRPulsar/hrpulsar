@@ -210,6 +210,7 @@ AUDIT_EXEMPT: set[str] = {
     "app.modules.recruitment.settings_service:delete_llm_provider",
     # HRP-986: the connection check changes no state - nothing to audit.
     "app.modules.recruitment.settings_service:probe_llm_provider",
+    "app.modules.recruitment.settings_service:probe_transcription_provider",
     "app.modules.recruitment.settings_service:create_transcription_provider",
     "app.modules.recruitment.settings_service:update_transcription_provider",
     "app.modules.recruitment.settings_service:delete_transcription_provider",

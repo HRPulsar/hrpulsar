@@ -16,7 +16,6 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
-  ExternalLink,
   FileText,
   ListChecks,
   Scale,
@@ -63,7 +62,14 @@ import {
   shareOutOfRange,
 } from "@/components/coverage/hours-fields";
 import { RegisterAgentInline } from "@/components/coverage/register-agent-inline";
-import { PackChip, PersonLink, StepJump, around, stepRowId } from "@/components/coverage/row-links";
+import {
+  PackChip,
+  PersonLink,
+  StepJump,
+  VacancyLink,
+  around,
+  stepRowId,
+} from "@/components/coverage/row-links";
 import { SkillDialog } from "@/components/coverage/skill-dialog";
 import { StepOverrideMenu } from "@/components/coverage/step-override-menu";
 import { BADGE_COLOR, BADGE_OUTLINE } from "@/lib/badge-tones";
@@ -388,8 +394,7 @@ export function CoverageTab({
       {hireStep && (
         <HireFromStepDialog
           containerId={containerId}
-          stepId={hireStep.step_id}
-          title={hireStep.title}
+          steps={[{ id: hireStep.step_id, title: hireStep.title }]}
           onClose={() => setHireStep(null)}
           onCreated={load}
         />
@@ -489,7 +494,6 @@ function MatchRow({
   onGrounds: () => void;
 }) {
   const tc = useTranslations("common");
-  const canViewRecruitment = usePermissions().canViewSection("recruitment");
   const testId = `coverage-match-row-${row.step_id}`;
   // HRP-863: a step out of scope is in no bucket - nothing to override.
   // The agent type is only offered in a mode where an agent produces the
@@ -711,21 +715,17 @@ function MatchRow({
             {row.verdict === "gap" && row.gap_label && (
               <span className="inline-flex items-center gap-1">
                 <User className="size-4" />
-                {t("gapVerdictText", { label: t(`gapLabel_${row.gap_label}`) })}
+                {/* HRP-801 (QA 23.10, a): no Hire / Agency after it - the
+                    route is chosen when the need is opened. */}
+                {t("gapVerdictNobody")}
                 {/* Already handed over: link to the draft rather than
                     offer a second vacancy for the same step. */}
                 {row.hire_need?.vacancy_id ? (
-                  // HRP-830: the vacancy lives in Recruitment.
-                  canViewRecruitment && (
-                    <Link
-                      href={`/recruitment/requisitions/${row.hire_need.vacancy_id}`}
-                      className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
-                      data-testid={`coverage-link-vacancy-${row.step_id}`}
-                    >
-                      <ExternalLink className="size-3.5" />
-                      {t("openVacancy")}
-                    </Link>
-                  )
+                  <VacancyLink
+                    need={row.hire_need}
+                    label={t("goToVacancy")}
+                    testId={`coverage-link-vacancy-${row.step_id}`}
+                  />
                 ) : (
                   canOpenHireNeed && (
                     <Button

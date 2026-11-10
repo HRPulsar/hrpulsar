@@ -126,6 +126,15 @@ TRANSLATABLE_KEYS = frozenset(
 )
 
 
+# HRP-767: a learning material's ``link`` goes through the catalog too, so a
+# locale can point the same material at a resource in its own language (the
+# ru demo opens Russian books, courses, articles and videos). Unlike the keys
+# above it is optional: a URL without a catalog entry keeps the source link,
+# so links never join the coverage guard — :func:`localizable_links` lets the
+# guard accept the entries a catalog does carry.
+LINK_KEY = "link"
+
+
 # Inline literals from ``seed.py`` that go through :func:`translate`
 # directly (interview titles, notes templates). Kept here so the
 # coverage guard sees them alongside the fixture strings.
@@ -223,6 +232,8 @@ def _walk_value(key: Any, value: Any, loc: str) -> Any:
     # their own content, not the English source's.
     if key == "language" and value == "en":
         return loc
+    if key == LINK_KEY and isinstance(value, str):
+        return translate(value, loc)
     if key in TRANSLATABLE_KEYS:
         if isinstance(value, str):
             return translate(value, loc)
@@ -374,6 +385,13 @@ def candidate_identity_strings() -> set[str]:
             out.add(spec["email"])
             out.update(spec[key] for key in ("phone", "linkedin") if spec.get(key))
     return out
+
+
+def localizable_links() -> set[str]:
+    """Source URLs a catalog may override (see :data:`LINK_KEY`)."""
+    from app.modules.demo.seed_data_competences import MATERIALS
+
+    return {m[LINK_KEY] for m in MATERIALS if m[LINK_KEY]}
 
 
 def collect_translatable_strings() -> set[str]:

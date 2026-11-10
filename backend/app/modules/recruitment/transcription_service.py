@@ -114,6 +114,13 @@ class TranscriptionProvider(ABC):
         gibberish.
         """
 
+    async def check(self) -> None:
+        """HRP-986: the cheapest authenticated call this provider's API has
+        - no audio is transcribed and nothing (or next to nothing) is
+        billed. Returns on success; raises ``httpx.HTTPStatusError`` /
+        ``httpx.TransportError`` like :meth:`transcribe` does."""
+        raise NotImplementedError
+
 
 def _media_type(path: str) -> str:
     return mimetypes.guess_type(path)[0] or "application/octet-stream"
@@ -210,29 +217,13 @@ class OpenAIWhisperProvider(TranscriptionProvider):
             # language itself, and a wrong hint is worse than none.
             if language:
                 data["language"] = language
-            base_url = (self._base_url or OPENAI_BASE_URL).rstrip("/")
-            # HRP-985: a tenant-set address goes through the same SSRF
-            # layer as an LLM base_url — on saas it is re-resolved, checked
-            # and pinned on every request; None elsewhere (onprem, OpenAI).
-            client = (
-                url_guard.tenant_endpoint_http_client(
-                    base_url,
-                    error_code="llm_base_url_not_public",
-                    timeout=httpx.Timeout(600.0, connect=30.0),
-                )
-                if self._base_url
-                else None
-            ) or httpx.AsyncClient(timeout=600)
-            # A local server may run without auth.
-            headers = (
-                {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
-            )
+            base_url = self._root()
             async with (
-                client as http,
+                self._client(httpx.Timeout(600.0, connect=30.0)) as http,
                 http.stream(
                     "POST",
                     f"{base_url}/audio/transcriptions",
-                    headers=headers,
+                    headers=self._headers(),
                     data=data,
                     files=files,
                 ) as response,
@@ -253,6 +244,35 @@ class OpenAIWhisperProvider(TranscriptionProvider):
             raise ValueError("Whisper response is not a JSON object")
 
         return _whisper_payload_to_result(body, provider=self.provider_name)
+
+    async def check(self) -> None:
+        # The model list: free on OpenAI, and what an OpenAI-compatible
+        # server answers at the same API root as /audio/transcriptions.
+        async with self._client(httpx.Timeout(30.0)) as http:
+            (
+                await http.get(f"{self._root()}/models", headers=self._headers())
+            ).raise_for_status()
+
+    def _root(self) -> str:
+        return (self._base_url or OPENAI_BASE_URL).rstrip("/")
+
+    def _headers(self) -> dict[str, str]:
+        # A local server may run without auth.
+        return {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+
+    def _client(self, timeout: httpx.Timeout) -> httpx.AsyncClient:
+        # HRP-985: a tenant-set address goes through the same SSRF layer as
+        # an LLM base_url — on saas it is re-resolved, checked and pinned on
+        # every request; None elsewhere (onprem, OpenAI).
+        return (
+            url_guard.tenant_endpoint_http_client(
+                self._root(),
+                error_code="llm_base_url_not_public",
+                timeout=timeout,
+            )
+            if self._base_url
+            else None
+        ) or httpx.AsyncClient(timeout=timeout)
 
 
 # A verbose_json transcript of a 25 MB upload is a few MB; the cap keeps a
@@ -335,6 +355,16 @@ class DeepgramProvider(TranscriptionProvider):
             body = response.json()
 
         return _deepgram_payload_to_result(body, provider=self.provider_name)
+
+    async def check(self) -> None:
+        # Listing the key's projects is free.
+        async with httpx.AsyncClient(timeout=30) as http:
+            (
+                await http.get(
+                    "https://api.deepgram.com/v1/projects",
+                    headers={"Authorization": f"Token {self._api_key}"},
+                )
+            ).raise_for_status()
 
 
 def _deepgram_payload_to_result(
@@ -473,6 +503,17 @@ class AssemblyAIProvider(TranscriptionProvider):
                 await asyncio.sleep(self._POLL_INTERVAL_SECONDS)
 
         return _assemblyai_payload_to_result(body, provider=self.provider_name)
+
+    async def check(self) -> None:
+        # Listing one past transcript is free.
+        async with httpx.AsyncClient(timeout=30) as http:
+            (
+                await http.get(
+                    f"{self._BASE_URL}/transcript",
+                    params={"limit": 1},
+                    headers={"authorization": self._api_key},
+                )
+            ).raise_for_status()
 
 
 def _assemblyai_payload_to_result(
@@ -648,6 +689,29 @@ class YandexSpeechKitProvider(TranscriptionProvider):
             raw = recognized.text
 
         return _yandex_payload_to_result(raw, provider=self.provider_name)
+
+    # SpeechKit has no free authenticated read: the synchronous short-audio
+    # API on a tenth of a second of silence proves the key, the folder and
+    # the STT role in one call, billed as one 15-second unit - the smallest
+    # amount SpeechKit bills.
+    _CHECK_URL = "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
+
+    async def check(self) -> None:
+        if not self._folder_id:
+            raise AppError("transcription_provider_test_folder_missing", 422)
+        async with httpx.AsyncClient(timeout=30) as http:
+            (
+                await http.post(
+                    self._CHECK_URL,
+                    params={
+                        "folderId": self._folder_id,
+                        "format": "lpcm",
+                        "sampleRateHertz": "8000",
+                    },
+                    headers={"Authorization": f"Api-Key {self._api_key}"},
+                    content=bytes(1600),  # 0.1 s of 8 kHz 16-bit silence
+                )
+            ).raise_for_status()
 
 
 def _read_file(path: str) -> bytes:
@@ -844,6 +908,29 @@ def _build(
     return built
 
 
+def row_provider(row: TranscriptionProviderConfig) -> TranscriptionProvider | None:
+    """The provider one config row runs on its own credentials - its key, or
+    a Whisper server address without one; ``None`` for a row that leans on
+    the platform key or names a provider the chain cannot run.
+
+    The chain's "own credentials" half and the connection check (HRP-986)
+    both resolve a row here, so the check calls what the chain will call.
+    """
+    if row.provider not in _CHAIN_ORDER:
+        return None
+    own_key = decrypt_row_key(row, kind="transcription_provider")
+    if own_key:
+        # BYOK is never restricted by the processor list (HRP-1005 R4).
+        return _build(row.provider, own_key, row.settings, source="byok")
+    if row.provider == "whisper" and str(
+        (row.settings or {}).get("base_url") or ""
+    ).strip():
+        # The tenant's own OpenAI-compatible server without auth: its
+        # audio stays there, never on the platform key (HRP-985).
+        return _build(row.provider, "", row.settings, source="local")
+    return None
+
+
 def _platform_order() -> tuple[str, ...]:
     """``_CHAIN_ORDER`` with ``TRANSCRIPTION_PROVIDER_DEFAULT`` moved first.
 
@@ -899,21 +986,12 @@ def get_transcription_chain_sync(
     platform_fallback = True
     for name in _CHAIN_ORDER:
         row = by_provider.get(name)
-        if row is None:
+        built = row_provider(row) if row is not None else None
+        if row is None or built is None:
             continue
-        own_key = decrypt_row_key(row, kind="transcription_provider")
-        if own_key:
-            # BYOK is never restricted by the processor list (HRP-1005 R4).
-            chain.append(_build(name, own_key, row.settings, source="byok"))
-            own.add(name)
-        elif (
-            name == "whisper"
-            and str((row.settings or {}).get("base_url") or "").strip()
-        ):
-            # The tenant's own OpenAI-compatible server without auth: its
-            # audio stays there, never on the platform key (HRP-985).
-            chain.append(_build(name, "", row.settings, source="local"))
-            own.add(name)
+        chain.append(built)
+        own.add(name)
+        if built.credential_source == "local":
             # Review B3: nor on any other platform key - unless the tenant
             # opted in on this row (``allow_platform_fallback``).
             platform_fallback = bool(

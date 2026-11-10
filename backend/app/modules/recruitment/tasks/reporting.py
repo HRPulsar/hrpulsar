@@ -81,6 +81,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
     )
     from app.modules.recruitment.score_normalization import (
         clamp_unit_score,
+        match_percent,
         scale_percent,
     )
     from app.modules.storage.models import File
@@ -755,10 +756,10 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
             per_cv_aggregates: dict[uuid.UUID, dict] = {}
             for cv in selected_cvs:
                 manager_sum = 0.0
-                manager_percent_sum = 0.0
+                manager_cell_percents: list[float | None] = []
                 manager_scored = 0
                 ai_sum = 0.0
-                ai_percent_sum = 0.0
+                ai_cell_percents: list[float | None] = []
                 ai_raw_sum = 0.0
                 ai_scored = 0
                 ai_not_covered = 0
@@ -770,8 +771,8 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     if human_vals:
                         manager_score = round(sum(human_vals) / len(human_vals), 2)
                         manager_sum += manager_score
-                        manager_percent_sum += (
-                            scale_percent(manager_score, matrix_scale.levels) or 0.0
+                        manager_cell_percents.append(
+                            scale_percent(manager_score, matrix_scale.levels)
                         )
                         manager_scored += 1
                     ai_entry = _ai_entry_for(cv.id, ckey)
@@ -805,8 +806,8 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                             )
                             ai_sum += ai_score
                             ai_raw_sum += clamp_unit_score(ai_entry["score"]) or 0.0
-                            ai_percent_sum += (
-                                scale_percent(ai_score, matrix_scale.levels) or 0.0
+                            ai_cell_percents.append(
+                                scale_percent(ai_score, matrix_scale.levels)
                             )
                             ai_scored += 1
                         elif ai_status == "not_covered":
@@ -834,18 +835,12 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                         }
                     )
 
-                # HRP-774 — every percent is the mean of the cells' "% of
-                # scale" (``scale_percent``), the matrix's own rule; the
-                # old ``sum / (max × N)`` ignored the scale's level weights.
-                # HRP-523 REDO — two different manager percentages, for two
-                # different questions. ``manager_percent`` keeps the full
-                # denominator (an unrated competence counts as 0): it is the
-                # coverage-aware figure the Summary and Matrix totals
-                # display. ``manager_scored_percent`` divides by what the
-                # manager actually rated, and only that one feeds the
-                # recommendation — otherwise a candidate scored top marks on
-                # 3 of 10 competences reads as 30% and gets "Not recommended"
-                # for the manager's unfinished work rather than their answers.
+                # HRP-774 REDO — the printed percents are ``match_percent``
+                # over the cells' "% of scale", the matrix's own rule: the
+                # mean over the rated competences only, an unrated one drops
+                # out instead of counting as 0. ``manager_scored_percent``
+                # (level / max over what the manager rated) only feeds the
+                # recommendation, as before.
                 # ponytail: verdict still uses the pre-HRP-774 level/max
                 # percent; switch to the displayed percent once the threshold
                 # is decided (HRP-774). Level / max on the rebased marks equals
@@ -854,11 +849,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 per_cv_aggregates[cv.id] = {
                     "manager_total": manager_sum,
                     "manager_scored": manager_scored,
-                    "manager_percent": (
-                        round(manager_percent_sum / len(comp_keys), 1)
-                        if manager_scored > 0
-                        else None
-                    ),
+                    "manager_percent": match_percent(manager_cell_percents),
                     "manager_scored_percent": (
                         round(manager_sum / (max_score * manager_scored) * 100, 1)
                         if manager_scored > 0 and max_score > 0
@@ -867,11 +858,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     "ai_total": ai_sum,
                     "ai_scored": ai_scored,
                     "ai_not_covered": ai_not_covered,
-                    "ai_percent": (
-                        round(ai_percent_sum / ai_covered, 1)
-                        if ai_scored > 0 and ai_covered > 0
-                        else None
-                    ),
+                    "ai_percent": match_percent(ai_cell_percents),
                     "verdict_ai_percent": (
                         round(ai_raw_sum / ai_covered * 100, 1)
                         if ai_scored > 0 and ai_covered > 0
@@ -886,17 +873,24 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
             # Manager / AI percentages at or above this count as "high"
             # for the recommendation rule below.
             strong_percent = 70.0
+
+            def _score_text(total: float, scored: int, percent: float | None) -> str:
+                """HRP-774 REDO: "sum/max (percent)" over the rated cells only,
+                plus "n/N rated" on a partial sheet - the canvas totals' own
+                counter, so the reader sees how many the percent covers."""
+                inner = [f"{percent}%"] if percent is not None else []
+                if scored < len(comp_keys):
+                    inner.append(f"{scored}/{len(comp_keys)} rated")
+                text = f"{round(total, 1)}/{round(max_score * scored, 1)}"
+                return f"{text} ({'; '.join(inner)})" if inner else text
+
             for cv in selected_cvs:
                 agg = per_cv_aggregates[cv.id]
                 manager_text = (
-                    (
-                        f"{round(agg['manager_total'], 1)}/"
-                        f"{round(max_score * len(comp_keys), 1)}"
-                        + (
-                            f" ({agg['manager_percent']}%)"
-                            if agg["manager_percent"] is not None
-                            else ""
-                        )
+                    _score_text(
+                        agg["manager_total"],
+                        agg["manager_scored"],
+                        agg["manager_percent"],
                     )
                     if agg["manager_scored"] > 0
                     else "—"
@@ -918,14 +912,8 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     readiness_text = "No data"
 
                 if agg["ai_scored"] > 0:
-                    ai_text = (
-                        f"{round(agg['ai_total'], 1)}/"
-                        f"{round(max_score * (len(comp_keys) - agg['ai_not_covered']), 1)}"
-                        + (
-                            f" ({agg['ai_percent']}%)"
-                            if agg["ai_percent"] is not None
-                            else ""
-                        )
+                    ai_text = _score_text(
+                        agg["ai_total"], agg["ai_scored"], agg["ai_percent"]
                     )
                     if agg["ai_not_covered"]:
                         ai_text += "*"
@@ -985,7 +973,7 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                 if agg["ai_not_covered"] and has_divergence:
                     note = (
                         f"AI {round(agg['ai_total'], 1)}/"
-                        f"{round(max_score * (len(comp_keys) - agg['ai_not_covered']), 1)}"
+                        f"{round(max_score * agg['ai_scored'], 1)}"
                         f" — diverges from the manager on "
                         f"{agg['divergence_count']} competence(s); "
                         f"{agg['ai_not_covered']} competence(s) were not "
@@ -1026,14 +1014,13 @@ def generate_report_task(self, export_id: str, tenant_id: str) -> dict:
                     "id": cv.candidate_id,
                     "name": _cv_display_name(cv),
                     "ai_full_data": readiness_by_cv[cv.id] == "resume_and_transcript",
-                    "manager_denominator": round(max_score * len(comp_keys), 1),
+                    # HRP-774 REDO: the max of what was rated, as the
+                    # percent beside it - "3/4 (66%)", never "3/8 (66%)".
+                    "manager_denominator": round(
+                        max_score * per_cv_aggregates[cv.id]["manager_scored"], 1
+                    ),
                     "ai_denominator": round(
-                        max_score
-                        * max(
-                            len(comp_keys) - per_cv_aggregates[cv.id]["ai_not_covered"],
-                            0,
-                        ),
-                        1,
+                        max_score * per_cv_aggregates[cv.id]["ai_scored"], 1
                     ),
                     "manager_percent": per_cv_aggregates[cv.id]["manager_percent"],
                     "ai_percent": per_cv_aggregates[cv.id]["ai_percent"],

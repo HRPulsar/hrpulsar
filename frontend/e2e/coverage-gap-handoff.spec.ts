@@ -11,6 +11,9 @@ import { API_BASE, registerUser, setAuthTokens } from "./helpers";
  * W6 (§5.10): the same tab has a second section for the work an agent type
  * could take that nobody has automated - and that section is not offered
  * for hiring, on the screen or on the server.
+ *
+ * HRP-801 (QA 23.10): the selection opens the same hire window as a row,
+ * and the vacancy names the process it was opened from.
  */
 test.describe("Coverage — gap to hire need", () => {
   test("gap step → hire need → draft vacancy in Recruitment", async ({ page }) => {
@@ -73,6 +76,11 @@ test.describe("Coverage — gap to hire need", () => {
     await page.getByTestId(`coverage-gap-row-${step.id}-checkbox`).click();
     await expect(page.getByTestId("coverage-gap-btn-hire-need")).toBeEnabled();
     await page.getByTestId("coverage-gap-btn-hire-need").click();
+    await expect(page.getByTestId("coverage-modal-hire")).toBeVisible();
+    // Straight outside: the draft stays in Recruitment whatever the library
+    // holds ("look inside first" would land on the talent market).
+    await page.getByTestId("coverage-hire-route-external").click();
+    await page.getByTestId("coverage-btn-hire-submit").click();
 
     const link = page.getByTestId(`coverage-gap-row-${step.id}-link-vacancy`);
     await expect(link).toBeVisible({ timeout: 15000 });
@@ -88,5 +96,10 @@ test.describe("Coverage — gap to hire need", () => {
     await expect(page.getByTestId(`vacancy-list-row-${vacancyId}`)).toContainText(
       container.title,
     );
+
+    await page.goto(`/recruitment/requisitions/${vacancyId}`);
+    const origin = page.getByTestId("hire-need-origin-link");
+    await expect(origin).toHaveText(container.title, { timeout: 10000 });
+    await expect(origin).toHaveAttribute("href", `/coverage/${container.id}`);
   });
 });

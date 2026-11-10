@@ -6,9 +6,10 @@ means "the user is not linked to any employee" and lists should return nothing.
 """
 
 import uuid
+from collections.abc import Callable
 from typing import Any
 
-from fastapi import status
+from fastapi import Depends, status
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +37,34 @@ def is_employee_only(current_user: User) -> bool:
     Used to apply stricter visibility (e.g. hide Draft assessments — HRP-40).
     """
     return not _is_admin(current_user) and not _is_manager(current_user)
+
+
+async def reads_section(db: AsyncSession, current_user: User, code: str) -> bool:
+    """Reads a section's own list - the first tab of exams, assessments and
+    development - and what it opens: ``manage``, or ``view`` for a role
+    whose read scope reaches past its own row (``admin``, ``hr``,
+    ``manager``), read-only (HRP-823/825/826, QA 26-27.10). Whose rows it
+    lists stays the read scope's answer (``get_visible_employee_ids``,
+    ``authored_only``); writing stays ``manage``."""
+    level = (await matrix_levels(db, current_user))[code]
+    return level == "manage" or (level == "view" and not is_employee_only(current_user))
+
+
+def require_section_reads(code: str) -> Callable:
+    """``reads_section`` as a route dependency: 403 otherwise, the gate's
+    own code."""
+    from app.database import get_db
+    from app.modules.auth.dependencies import get_current_user
+
+    async def section_reader(
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> User:
+        if not await reads_section(db, current_user, code):
+            raise AppError("auth_insufficient_permissions", status.HTTP_403_FORBIDDEN)
+        return current_user
+
+    return section_reader
 
 
 async def directory_show_grades(db: AsyncSession, tenant_id: uuid.UUID) -> bool:

@@ -69,7 +69,12 @@ async def submit_feedback(
     message = (payload.message or "").strip()
     phone = (payload.contact_phone or "").strip()
     if not (
-        payload.rating or message or payload.clarity or payload.contact_email or phone
+        payload.rating
+        or message
+        or payload.clarity
+        or payload.answer
+        or payload.contact_email
+        or phone
     ):
         raise AppError("feedback_empty", status.HTTP_400_BAD_REQUEST)
     await _enforce_rate_limit(user.id)
@@ -91,6 +96,9 @@ async def submit_feedback(
             "rating": payload.rating,
             "message": message,
             "clarity": payload.clarity,
+            "context": payload.context,
+            "context_title": (payload.context_title or "").strip(),
+            "answer": payload.answer,
             "contact_email": payload.contact_email,
             "contact_name": (payload.contact_name or "").strip(),
             "contact_phone": phone,

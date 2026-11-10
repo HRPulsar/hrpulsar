@@ -9,8 +9,10 @@ every query.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 
 import httpx
 from fastapi import status
@@ -30,7 +32,7 @@ from app.modules.recruitment.models import (
     ScaleConfig,
     TranscriptionProviderConfig,
 )
-from app.modules.recruitment.transcription_service import _CHAIN_ORDER
+from app.modules.recruitment.transcription_service import _CHAIN_ORDER, row_provider
 from app.modules.storage.models import File
 
 log = logging.getLogger(__name__)
@@ -308,36 +310,53 @@ async def probe_llm_provider(
             "llm_provider_test_not_dispatchable",
             status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
+
+    async def _call() -> None:
+        # A cut-off answer is still an answer: the tiny budget cut it short.
+        with contextlib.suppress(llm_client.LLMOutputTruncatedError):
+            await llm_client.generate(
+                "Reply with OK.",
+                model=cfg.model,
+                max_tokens=_PROBE_MAX_TOKENS,
+                credentials=target,
+            )
+
+    # The call spends the tenant's key: the AI call log attributes it to
+    # the tenant, the admin and the row (nothing binds the request).
+    with ai_usage_hooks.call_context(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        action="recruitment.llm_provider_probe",
+        entity_type="llm_provider",
+        entity_id=cfg.id,
+    ):
+        return await _probe(_call, "LLM", cfg.id, cfg.provider, cfg.model)
+
+
+async def _probe(
+    call: Callable[[], Awaitable[None]],
+    kind: str,
+    config_id: uuid.UUID,
+    provider: str,
+    model: str,
+) -> dict:
+    """Run one connection check: ``{"status": "ok"}``, or the failure
+    reduced to a code with the details in the log (HRP-986)."""
     try:
-        # The call spends the tenant's key: the AI call log attributes it
-        # to the tenant, the admin and the row (nothing binds the request).
-        with ai_usage_hooks.call_context(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            action="recruitment.llm_provider_probe",
-            entity_type="llm_provider",
-            entity_id=cfg.id,
-        ):
-            async with asyncio.timeout(_PROBE_TIMEOUT_S):
-                await llm_client.generate(
-                    "Reply with OK.",
-                    model=cfg.model,
-                    max_tokens=_PROBE_MAX_TOKENS,
-                    credentials=target,
-                )
-    except llm_client.LLMOutputTruncatedError:
-        pass  # The model answered; the tiny budget only cut the answer short.
+        async with asyncio.timeout(_PROBE_TIMEOUT_S):
+            await call()
     except AppError:
         raise
     except Exception as exc:  # noqa: BLE001 - every failure becomes a code
         # The type only: the provider's message may echo the request.
         log.warning(
-            "LLM provider probe failed: config=%s provider=%s error=%s",
-            cfg.id,
-            cfg.provider,
+            "%s provider probe failed: config=%s provider=%s error=%s",
+            kind,
+            config_id,
+            provider,
             type(exc).__name__,
         )
-        raise _probe_error(exc, cfg.model) from None
+        raise _probe_error(exc, model) from None
     return {"status": "ok"}
 
 
@@ -356,11 +375,16 @@ def _probe_error(exc: Exception, model: str) -> AppError:
     ):
         return AppError("llm_provider_test_unreachable", status.HTTP_502_BAD_GATEWAY)
     # OpenAI/Anthropic carry the HTTP status as ``status_code``, Gemini as
-    # ``code`` (OpenAI's own ``code`` is a string and is skipped).
+    # ``code`` (OpenAI's own ``code`` is a string and is skipped), httpx on
+    # its ``response`` (the transcription providers' raise_for_status).
     http_status = next(
         (
             value
-            for value in (getattr(exc, "status_code", None), getattr(exc, "code", None))
+            for value in (
+                getattr(exc, "status_code", None),
+                getattr(exc, "code", None),
+                getattr(getattr(exc, "response", None), "status_code", None),
+            )
             if isinstance(value, int)
         ),
         None,
@@ -487,6 +511,34 @@ async def delete_transcription_provider(
         raise AppError("transcription_provider_not_found", status.HTTP_404_NOT_FOUND)
     await db.delete(cfg)
     await db.commit()
+
+
+async def probe_transcription_provider(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    config_id: uuid.UUID,
+) -> dict:
+    """Connection check for one transcription row (HRP-986), the LLM
+    probe's twin: the row is resolved the way the chain resolves it - its
+    own key, or its own Whisper server - and the provider's cheapest
+    authenticated call goes out; a row on the platform key is not sent."""
+    cfg = await db.get(TranscriptionProviderConfig, config_id)
+    if not cfg or cfg.tenant_id != tenant_id:
+        raise AppError("transcription_provider_not_found", status.HTTP_404_NOT_FOUND)
+    if cfg.provider not in _CHAIN_ORDER:
+        raise AppError(
+            "transcription_provider_not_supported",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    provider = row_provider(cfg)
+    if provider is None:
+        raise AppError(
+            "llm_provider_test_not_dispatchable",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    return await _probe(
+        provider.check, "Transcription", cfg.id, cfg.provider, provider.model
+    )
 
 
 def transcription_provider_to_read(cfg: TranscriptionProviderConfig) -> dict:

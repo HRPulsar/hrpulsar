@@ -13,7 +13,7 @@ import { test, expect } from "./fixtures";
  * pool is unavailable (mirrors the marketing demo-cta spec).
  */
 
-import { API_BASE, SAAS_E2E } from "./helpers";
+import { API_BASE, SAAS_E2E, setDemoSession } from "./helpers";
 
 test.skip(!SAAS_E2E, "demo sandbox endpoints only exist in saas mode");
 
@@ -29,16 +29,7 @@ test.describe("Demo persona switcher", () => {
     expect(start.ok(), `demo/start failed: ${start.status()}`).toBeTruthy();
     const { access_token } = await start.json();
 
-    // Mirror lib/demo.ts::persistDemoSession — seed storage from a loaded
-    // page so the cookies ride along on the /dashboard request (the same
-    // dance as helpers.setAuthTokens).
-    await page.goto("/login");
-    await page.evaluate((token: string) => {
-      localStorage.setItem("access_token", token);
-      localStorage.removeItem("refresh_token");
-      document.cookie = "has_token=1; path=/; SameSite=Lax";
-      document.cookie = "demo_session=1; path=/; SameSite=Lax";
-    }, access_token);
+    await setDemoSession(page, access_token);
 
     await page.goto("/dashboard");
     await expect(page.getByTestId("demo-banner")).toBeVisible({
@@ -80,13 +71,7 @@ test.describe("Demo employee persona surfaces", () => {
     expect(start.ok(), `demo/start failed: ${start.status()}`).toBeTruthy();
     const { access_token } = await start.json();
 
-    await page.goto("/login");
-    await page.evaluate((token: string) => {
-      localStorage.setItem("access_token", token);
-      localStorage.removeItem("refresh_token");
-      document.cookie = "has_token=1; path=/; SameSite=Lax";
-      document.cookie = "demo_session=1; path=/; SameSite=Lax";
-    }, access_token);
+    await setDemoSession(page, access_token);
 
     await page.goto("/dashboard");
     await page.getByTestId("demo-banner-view-employee").click();

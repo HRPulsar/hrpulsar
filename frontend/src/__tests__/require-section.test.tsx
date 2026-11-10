@@ -72,7 +72,8 @@ describe("SectionGate (HRP-820)", () => {
 
   it("asks for manage where the page needs it (HRP-823)", async () => {
     sections = { exams: "view" };
-    // The mass exam's page wraps itself in RequireSection level="manage":
+    // The mass exam's page asks for "manage" from whoever reads no list
+    // (QA 26.10: anyone but admin, hr and manager):
     // `view` on the section is the taker's half and opens nothing there.
     await act(async () => {
       root.render(

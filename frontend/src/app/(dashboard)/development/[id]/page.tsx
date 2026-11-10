@@ -655,6 +655,9 @@ export default function PDPDetailPage() {
   // other viewer who is not the owner - a manager the tenant lowered to
   // `view`, a named reviewer - gets no status actions, only 403s.
   const runsPlans = canManage || adminTier;
+  // Whoever runs plans comments; anyone else on the plans they own or
+  // review - a manager at `view` reads (QA 27.10), as the API answers.
+  const canComment = !isTerminal && (runsPlans || isOwner || isAssignedReviewer);
   const nextStatuses: PDPStatus[] = ownerOnlySubmitFlow
     ? ownerCanSubmitForReview
       ? ["review"]
@@ -1295,7 +1298,7 @@ export default function PDPDetailPage() {
           )}
           {/* HRP-17: hide the composer on terminal plans — comments are
               read-only once the plan is done or cancelled. */}
-          {!isTerminal && (
+          {canComment && (
             <div className="space-y-2">
               {commentFile && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1330,7 +1333,7 @@ export default function PDPDetailPage() {
               </div>
             </div>
           )}
-          {isTerminal && pdp.comments.length === 0 && (
+          {!canComment && pdp.comments.length === 0 && (
             <p className="py-4 text-center text-sm text-muted-foreground">{t("noComments")}</p>
           )}
         </CardContent>

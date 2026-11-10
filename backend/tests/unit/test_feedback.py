@@ -64,6 +64,45 @@ async def test_demo_popup_fields_are_carried(auth_client: AsyncClient, captured_
     assert payload["contact_email"] == "visitor@example.com"
 
 
+async def test_context_card_answer_is_carried(
+    auth_client: AsyncClient, captured_events
+):
+    """HRP-1158: the value-moment card — an answer alone is a submission,
+    and the context names what the visitor had just made."""
+    res = await auth_client.post(
+        "/api/feedback",
+        json={
+            "source": "demo",
+            "context": "pdp_from_assessment",
+            "context_title": "  Q3 plan for Will Gapp  ",
+            "answer": "partly",
+        },
+    )
+    assert res.status_code == 204
+    payload = captured_events[0]
+    assert payload["context"] == "pdp_from_assessment"
+    assert payload["context_title"] == "Q3 plan for Will Gapp"
+    assert payload["answer"] == "partly"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"context": "exam_created"},
+        {"answer": "maybe"},
+        {"context_title": "x" * 201},
+    ],
+)
+async def test_context_fields_are_validated(
+    auth_client: AsyncClient, captured_events, extra
+):
+    res = await auth_client.post(
+        "/api/feedback", json={"source": "demo", "answer": "yes"} | extra
+    )
+    assert res.status_code == 422
+    assert captured_events == []
+
+
 async def test_empty_submission_rejected(auth_client: AsyncClient, captured_events):
     res = await auth_client.post("/api/feedback", json={"message": "   "})
     assert res.status_code == 400

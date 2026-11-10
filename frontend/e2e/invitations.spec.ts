@@ -5,6 +5,7 @@ import {
   registerUser,
   SAAS_E2E,
   setAuthTokens,
+  setDemoSession,
 } from "./helpers";
 
 test.describe("Invitations — INV1 (Name + Division column + reordered columns)", () => {
@@ -110,14 +111,7 @@ test.describe("HRP-813 — demo invitations", () => {
       "demo-invite@example.com",
     );
 
-    // Same storage dance as demo-persona.spec.ts.
-    await page.goto("/login");
-    await page.evaluate((token: string) => {
-      localStorage.setItem("access_token", token);
-      localStorage.removeItem("refresh_token");
-      document.cookie = "has_token=1; path=/; SameSite=Lax";
-      document.cookie = "demo_session=1; path=/; SameSite=Lax";
-    }, access_token);
+    await setDemoSession(page, access_token);
 
     await page.goto("/settings/invitations");
     await expect(page.getByTestId("invitations-demo-limit-note")).toBeVisible({

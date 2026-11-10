@@ -529,8 +529,8 @@ def _render_matrix(
                 )
 
     # Total row — a live SUM per candidate column, formatted as the spec's
-    # "39/44 (89%)" so the denominator (which differs per AI column once
-    # not-covered competences drop out) is visible in the cell itself.
+    # "39/44 (89%)": the denominator is the max of what that column rated
+    # (HRP-774 REDO), so it is visible in the cell which cells count.
     # HRP-774: the percent is the payload's "% of scale" (level weights),
     # not SUM / denominator — Excel cannot see the weights.
     total_row = row_idx

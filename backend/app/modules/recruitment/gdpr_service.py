@@ -549,6 +549,9 @@ async def _perform_gdpr_export(
                 entity_id=request_row.id,
             )
             db.add(file_row)
+            # HRP-989: the id is assigned on flush - read before it, the
+            # request completed with no file to download or to delete.
+            await db.flush()
 
         request_row.status = "completed"
         request_row.file_id = file_row.id if file_row is not None else None
@@ -804,16 +807,49 @@ async def _delete_reports(
     return len(reports)
 
 
-def _drop_export_files(
-    exports: list[GDPRExportRequest], file_ids: set[uuid.UUID]
+async def _linked_export_files(
+    db: AsyncSession, tenant_id: uuid.UUID, export_ids: list[uuid.UUID]
+) -> list[File]:
+    """This tenant's ``files`` rows linked back to these export requests,
+    newest first - for exports completed before HRP-989 the only link to
+    their file (their ``file_id`` was never set)."""
+    if not export_ids:
+        return []
+    return list(
+        (
+            await db.execute(
+                select(File)
+                .where(
+                    File.tenant_id == tenant_id,
+                    File.entity_type == "gdpr_export",
+                    File.entity_id.in_(export_ids),
+                )
+                .order_by(File.created_at.desc())
+            )
+        ).scalars()
+    )
+
+
+async def _drop_export_files(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    exports: list[GDPRExportRequest],
+    file_ids: set[uuid.UUID],
 ) -> int:
-    dropped = 0
+    """Unlink these exports' files and add them to ``file_ids`` to delete.
+
+    A file is found by ``file_id`` and by :func:`_linked_export_files`, so
+    the JSON of an export stored without ``file_id`` does not outlive an
+    erasure or its expiry either.
+    """
+    found = {e.file_id for e in exports if e.file_id}
+    found |= {
+        f.id for f in await _linked_export_files(db, tenant_id, [e.id for e in exports])
+    }
     for e in exports:
-        if e.file_id:
-            file_ids.add(e.file_id)
-            e.file_id = None
-            dropped += 1
-    return dropped
+        e.file_id = None
+    file_ids |= found
+    return len(found)
 
 
 # ─── GDPR erase ──────────────────────────────────────────────────────
@@ -1305,7 +1341,9 @@ async def gdpr_erase(
             )
         ).scalars()
     )
-    affected["export_files"] = _drop_export_files(exports, file_ids)
+    affected["export_files"] = await _drop_export_files(
+        db, tenant_id, exports, file_ids
+    )
 
     affected.update(
         await _scrub_logs(
@@ -1552,15 +1590,26 @@ async def _expire_export_files(db: AsyncSession, now: datetime) -> int:
         (
             await db.execute(
                 select(GDPRExportRequest).where(
-                    GDPRExportRequest.file_id.is_not(None),
                     GDPRExportRequest.expires_at < now,
+                    or_(
+                        GDPRExportRequest.file_id.is_not(None),
+                        # HRP-989: exports stored before their link was.
+                        GDPRExportRequest.id.in_(
+                            select(File.entity_id).where(
+                                File.entity_type == "gdpr_export",
+                                File.tenant_id == GDPRExportRequest.tenant_id,
+                            )
+                        ),
+                    ),
                 )
             )
         ).scalars()
     )
     for tenant_id in {e.tenant_id for e in exports}:
         file_ids: set[uuid.UUID] = set()
-        _drop_export_files([e for e in exports if e.tenant_id == tenant_id], file_ids)
+        await _drop_export_files(
+            db, tenant_id, [e for e in exports if e.tenant_id == tenant_id], file_ids
+        )
         await _drop_storage(db, tenant_id, file_ids)
     await db.commit()
     return len(exports)
@@ -1647,9 +1696,13 @@ def export_to_read(req: GDPRExportRequest, file_url: str | None = None) -> dict:
 async def resolve_export_url(
     db: AsyncSession, tenant_id: uuid.UUID, req: GDPRExportRequest
 ) -> str | None:
-    if req.file_id is None:
-        return None
-    file_row = await db.get(File, req.file_id)
+    if req.file_id is not None:
+        file_row = await db.get(File, req.file_id)
+    else:
+        # HRP-989: an export completed before the fix has no ``file_id``;
+        # its file is still there, linked back to the request.
+        linked = await _linked_export_files(db, tenant_id, [req.id])
+        file_row = linked[0] if linked else None
     if file_row is None or file_row.tenant_id != tenant_id:
         return None
     return get_presigned_url(file_row.path, expires_in=EXPORT_PRESIGN_TTL_SECONDS)

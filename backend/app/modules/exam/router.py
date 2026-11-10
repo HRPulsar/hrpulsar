@@ -22,6 +22,7 @@ from app.core.access_scope import (
     authored_only,
     get_current_employee,
     get_visible_employee_ids,
+    require_section_reads,
 )
 from app.core.errors import AppError
 from app.core.sections import matrix_levels, require_section
@@ -54,13 +55,16 @@ from app.modules.exam.schemas import (
 router = APIRouter(tags=["exams"])
 
 # HRP-823: running the exams section is ``manage`` on the tenant's section
-# access matrix - writing a mass exam and reading one alike, because a mass
-# exam carries everyone's results and the section's ``view`` belongs to the
-# other reader here, the employee taking their own exam (``/exams`` below,
-# outside the matrix). A mass exam has no owning division to narrow reads
-# by; the per-employee results it lists are narrowed by the read scope.
-# The section gate answers for the writes (HRP-1018); the reads ask here.
+# access matrix. The section's ``view`` belongs to the other reader here,
+# the employee taking their own exam (``/exams`` below, outside the
+# matrix) - except for admin, hr and manager, who read the mass exams at
+# ``view`` too, read-only (QA 26.10): the list, one exam and its results.
+# A mass exam has no owning division, so whose exams that is stays
+# ``authored_only``'s answer at either level - the workspace's for the
+# admin level, one's own for a manager. The section gate refuses every
+# write below ``manage`` (HRP-1018); the reads ask here.
 _manage = require_section("exams", "manage")
+_reads = require_section_reads("exams")
 
 
 async def mass_exam_scope(
@@ -95,9 +99,10 @@ async def create_mass_exam(
 @router.get("/mass-exams", response_model=list[MassExamRead])
 async def list_mass_exams(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(_reads),
 ):
-    # HRP-640: below the admin level one's own mass exams only.
+    # HRP-640: below the admin level one's own mass exams only - at
+    # ``view`` as at ``manage`` (QA 26.10: a manager reads the ones they made).
     return await service.list_mass_exams(
         db, current_user.tenant_id, initiator_id=authored_only(current_user)
     )
@@ -124,7 +129,7 @@ async def download_import_template(
 async def get_mass_exam(
     mass_exam_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(_reads),
     _scope: None = Depends(mass_exam_scope),
 ):
     return await service.get_mass_exam_detail(db, current_user.tenant_id, mass_exam_id)
@@ -287,7 +292,7 @@ async def delete_pass_mark(
 async def get_mass_exam_results(
     mass_exam_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage),
+    current_user: User = Depends(_reads),
     _scope: None = Depends(mass_exam_scope),
 ):
     visible_ids = await get_visible_employee_ids(db, current_user)

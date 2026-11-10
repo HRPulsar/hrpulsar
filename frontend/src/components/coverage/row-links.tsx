@@ -2,11 +2,16 @@
 
 // HRP-864: what a coverage row lets the reader follow - a person's name to
 // the employee card, a step title in a summary bucket to the step's row, an
-// agent type to what an agent of that type does.
+// agent type to what an agent of that type does, a handed-over gap to its
+// vacancy (HRP-801).
 
 import type { ReactNode } from "react";
+import Link from "next/link";
+import { ExternalLink } from "lucide-react";
 import { EmployeeName } from "@/components/employees/employee-name";
 import { useTranslations } from "next-intl";
+import { usePermissions } from "@/hooks/use-permissions";
+import type { GapHireNeed } from "@/lib/api/work";
 import {
   Popover,
   PopoverContent,
@@ -99,5 +104,37 @@ export function PackChip({ code, label, testId }: { code: string | null; label: 
         <p className="mt-1 text-muted-foreground">{tRef(key)}</p>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** HRP-801 (QA 23.10): the vacancy a gap was handed to - its talent-market
+ * card where "look inside first" put it, the Recruitment draft otherwise,
+ * whichever of the two the reader may open; nothing when neither. */
+export function VacancyLink({
+  need,
+  label,
+  testId,
+}: {
+  need: GapHireNeed;
+  label: string;
+  testId: string;
+}) {
+  const { canViewSection } = usePermissions();
+  const href =
+    need.talent_card_id && canViewSection("talent-market")
+      ? `/talent-market/${need.talent_card_id}`
+      : need.vacancy_id && canViewSection("recruitment")
+        ? `/recruitment/requisitions/${need.vacancy_id}`
+        : null;
+  if (!href) return null;
+  return (
+    <Link
+      href={href}
+      className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline"
+      data-testid={testId}
+    >
+      <ExternalLink className="size-3.5" />
+      {label}
+    </Link>
   );
 }

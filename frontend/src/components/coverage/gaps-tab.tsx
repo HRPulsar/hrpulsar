@@ -1,9 +1,11 @@
 "use client";
 
 // HRP-759 / W6 (§5.10): the To do tab of a work container — everything
-// unclosed, in two sections. "Nobody does this" keeps the hire / agency
-// label and the handoff of a selection to Recruitment as one draft
-// vacancy; "work for an agent" is the work an agent type covers where
+// unclosed, in two sections. "Nobody does this" hands one step or a
+// selection to Recruitment as one draft vacancy, through the same window
+// the Coverage row opens (HRP-801, QA 23.10 e: the route - inside first,
+// outside, agency - is chosen there, not on a label per row); "work for an
+// agent" is the work an agent type covers where
 // something is still missing: `gap_kind` keeps a step here while no agent
 // is registered OR its skill file is not ready, so a step whose agent the
 // company already registered stays until the instruction is written
@@ -13,10 +15,9 @@
 // person who does it (HRP-809), skills or not.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Briefcase, ExternalLink, FileText, Sparkles, UserRound } from "lucide-react";
+import { Briefcase, FileText, Sparkles, UserRound } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,31 +25,22 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { LoadErrorState } from "@/components/load-error-state";
 import { AssignPersonDialog } from "@/components/coverage/assign-person-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { HireFromStepDialog } from "@/components/coverage/hire-from-step-dialog";
 import { RegisterAgentInline } from "@/components/coverage/register-agent-inline";
+import { VacancyLink } from "@/components/coverage/row-links";
 import { SkillDialog } from "@/components/coverage/skill-dialog";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 import { EECreditCostBadge } from "@/lib/ee-hooks";
 import { useCostConfirmation } from "@/hooks/use-cost-confirmation";
-import { usePermissions } from "@/hooks/use-permissions";
-import { ApiError } from "@/lib/api";
+import { ApiError, isCreditLimitResponse } from "@/lib/api";
 import {
   type AutomationMode,
   type Gap,
-  type GapLabel,
   type Primitive,
   SKILL_ACTION,
   type WorkStep,
   workApi,
 } from "@/lib/api/work";
-
-const GAP_LABELS: GapLabel[] = ["hire", "agency"];
 
 /** A capability's name in the interface language; the code never reaches
  * the screen unless the catalog does not know it. */
@@ -71,6 +63,12 @@ export const MODE_COLOR: Record<AutomationMode, string> = {
   blocked_physical: BADGE_COLOR.neutral,
 };
 
+/** A row the hire window may still take: nobody does it and no vacancy
+ * carries it yet. */
+function hireable(gap: Gap): boolean {
+  return gap.kind === "no_owner" && !gap.hire_need?.vacancy_id;
+}
+
 interface GapsTabProps {
   containerId: string;
   primitives: Primitive[];
@@ -78,7 +76,7 @@ interface GapsTabProps {
   canOpenHireNeed: boolean;
   /** HRP-810: the agent registry is the section's roles', not the owner's. */
   canRegisterAgent: boolean;
-  /** The label lives on the step: keep the Steps tab's copy in sync. */
+  /** An assignment changes the step: keep the Steps tab's copy in sync. */
   onStepsChanged: (updater: (prev: WorkStep[]) => WorkStep[]) => void;
 }
 
@@ -92,13 +90,14 @@ export function GapsTab({
 }: GapsTabProps) {
   const t = useTranslations("coverage");
   const tc = useTranslations("common");
-  const canViewRecruitment = usePermissions().canViewSection("recruitment");
   const [gaps, setGaps] = useState<Gap[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [skillStep, setSkillStep] = useState<Gap | null>(null);
   const [assignStep, setAssignStep] = useState<Gap | null>(null);
+  // HRP-801: the rows the hire window is open for - one, or the selection.
+  const [hireSteps, setHireSteps] = useState<Gap[] | null>(null);
   const [confirmBulk, setConfirmBulk] = useState(false);
   // The unit price, so the bulk confirmation can name the total rather
   // than let the company find out after N charges (§9).
@@ -110,16 +109,13 @@ export function GapsTab({
       const fresh = await workApi.listGaps(containerId);
       setGaps(fresh);
       setFailed(false);
-      // Only the "nobody does this" rows are selectable: a step that moved
-      // to the other section must leave the selection, not keep the button
-      // counting it while the handoff would send an empty list.
+      // Only the "nobody does this" rows not handed over yet are
+      // selectable: a step that moved to the other section, or got its
+      // vacancy, must leave the selection, not keep the button counting it
+      // while the handoff would be refused.
       setSelected(
         (prev) =>
-          new Set(
-            [...prev].filter((id) =>
-              fresh.some((g) => g.kind === "no_owner" && g.step_id === id),
-            ),
-          ),
+          new Set([...prev].filter((id) => fresh.some((g) => g.step_id === id && hireable(g)))),
       );
     } catch {
       setFailed(true);
@@ -127,6 +123,9 @@ export function GapsTab({
   }, [containerId]);
 
   useEffect(() => {
+    // The state writes happen after the await, not in the effect body;
+    // the rule cannot see through the async boundary (as on coverage-tab).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
 
@@ -142,13 +141,6 @@ export function GapsTab({
     (g) => g.skill_status !== "ready" && g.skill_status !== "generating",
   );
 
-  // One hire need carries one label, so a selection that mixes "hire" and
-  // "agency" has no right answer: the button waits rather than picking one
-  // and sending the work somewhere the company did not ask for.
-  const mixedLabels =
-    new Set(noOwner.filter((g) => selected.has(g.step_id)).map((g) => g.gap_label ?? "hire"))
-      .size > 1;
-
   function toggle(stepId: string, checked: boolean) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -156,39 +148,6 @@ export function GapsTab({
       else next.delete(stepId);
       return next;
     });
-  }
-
-  async function setLabel(gap: Gap, label: GapLabel) {
-    try {
-      const step = await workApi.updateStep(gap.step_id, { gap_label: label });
-      setGaps((prev) => prev?.map((g) => (g.step_id === gap.step_id ? { ...g, gap_label: label } : g)) ?? prev);
-      onStepsChanged((prev) => prev.map((s) => (s.id === step.id ? step : s)));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("saveFailed"));
-    }
-  }
-
-  async function openHireNeed() {
-    if (selected.size === 0 || mixedLabels) return;
-    const chosen = noOwner.filter((g) => selected.has(g.step_id));
-    // One need, one label - and the selection is never mixed (see above).
-    const label: GapLabel = chosen.every((g) => g.gap_label === "agency") ? "agency" : "hire";
-    setBusy(true);
-    try {
-      await workApi.createHireNeed(containerId, {
-        step_ids: chosen.map((g) => g.step_id),
-        label,
-        // Nothing to search for inside when the work goes to a provider.
-        internal_search_allowed: label === "hire",
-      });
-      setSelected(new Set());
-      await load();
-      toast.success(t("hireNeedCreated"));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("saveFailed"));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function generateAll() {
@@ -201,8 +160,9 @@ export function GapsTab({
     // Each POST only queues a task. One row the server refuses - a step
     // already generating, or one an agent of the tenant matched but the
     // catalog blocks - must not abandon the rows behind it, so the failure
-    // is collected and the loop goes on. Out of credits (402) is the
-    // exception: every request after it is a guaranteed refusal.
+    // is collected and the loop goes on. Out of credits is the exception -
+    // 402, or the demo sandbox's 429 quota (HRP-1172): every request after
+    // it is a guaranteed refusal.
     for (const gap of pendingSkills) {
       attempted += 1;
       try {
@@ -211,7 +171,7 @@ export function GapsTab({
       } catch (err) {
         refused += 1;
         lastError = err instanceof Error ? err.message : t("saveFailed");
-        if (err instanceof ApiError && err.status === 402) break;
+        if (err instanceof ApiError && isCreditLimitResponse(err.status, { code: err.code })) break;
       }
     }
     if (queued > 0) toast.success(t("bulkSkillQueued", { count: queued }));
@@ -256,24 +216,14 @@ export function GapsTab({
               <p className="mt-1 text-sm text-muted-foreground">{t("gapsHint")}</p>
             </div>
             {canOpenHireNeed && (
-              <div className="flex flex-col items-end gap-1">
-                <Button
-                  onClick={openHireNeed}
-                  disabled={busy || selected.size === 0 || mixedLabels}
-                  data-testid="coverage-gap-btn-hire-need"
-                >
-                  <Briefcase className="size-4" />
-                  {t("openHireNeed", { count: selected.size })}
-                </Button>
-                {mixedLabels && (
-                  <p
-                    className="max-w-64 text-right text-xs text-muted-foreground"
-                    data-testid="coverage-gap-mixed-labels"
-                  >
-                    {t("mixedGapLabelsHint")}
-                  </p>
-                )}
-              </div>
+              <Button
+                onClick={() => setHireSteps(noOwner.filter((g) => selected.has(g.step_id)))}
+                disabled={busy || selected.size === 0}
+                data-testid="coverage-gap-btn-hire-need"
+              >
+                <Briefcase className="size-4" />
+                {t("openHireNeed", { count: selected.size })}
+              </Button>
             )}
           </div>
 
@@ -287,6 +237,9 @@ export function GapsTab({
                       <Checkbox
                         className="mt-1"
                         checked={selected.has(gap.step_id)}
+                        // Handed over already: a second need is refused.
+                        disabled={!hireable(gap)}
+                        title={hireable(gap) ? undefined : t("gapHandedOverHint")}
                         onCheckedChange={(checked) => toggle(gap.step_id, checked === true)}
                         aria-label={t("selectGapAria", { title: gap.title })}
                         data-testid={`${testId}-checkbox`}
@@ -298,50 +251,42 @@ export function GapsTab({
                     <div className="flex-1 space-y-2">
                       <GapHeadline gap={gap} testId={testId} t={t} />
                       <Capabilities gap={gap} testId={testId} labelOf={labelOf} />
-                      {/* HRP-830: the vacancy lives in Recruitment. */}
-                      {gap.hire_need?.vacancy_id && canViewRecruitment && (
-                        <Link
-                          href={`/recruitment/requisitions/${gap.hire_need.vacancy_id}`}
-                          className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline"
-                          data-testid={`${testId}-link-vacancy`}
+                    </div>
+                    {/* HRP-801 (QA 23.10, e): the row's way out on the
+                        right, as on the Coverage row - the vacancy it was
+                        handed to, or the window that hands it over. */}
+                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
+                      {gap.hire_need?.vacancy_id ? (
+                        <VacancyLink
+                          need={gap.hire_need}
+                          label={t(gap.hire_need.label === "agency" ? "goToVacancyAgency" : "goToVacancy")}
+                          testId={`${testId}-link-vacancy`}
+                        />
+                      ) : (
+                        canOpenHireNeed && (
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="h-auto p-0"
+                            onClick={() => setHireSteps([gap])}
+                            data-testid={`${testId}-btn-hire`}
+                          >
+                            {t("openHireNeedOne")}
+                          </Button>
+                        )
+                      )}
+                      {canEdit && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setAssignStep(gap)}
+                          data-testid={`${testId}-btn-assign`}
                         >
-                          <ExternalLink className="size-3.5" />
-                          {t("openVacancy")}
-                        </Link>
+                          <UserRound className="size-4" />
+                          {t("assignExecutor")}
+                        </Button>
                       )}
                     </div>
-                    {canEdit && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setAssignStep(gap)}
-                        data-testid={`${testId}-btn-assign`}
-                      >
-                        <UserRound className="size-4" />
-                        {t("assignExecutor")}
-                      </Button>
-                    )}
-                    <Select
-                      value={gap.gap_label ?? "hire"}
-                      onValueChange={(value) => void setLabel(gap, value as GapLabel)}
-                      disabled={!canEdit}
-                    >
-                      <SelectTrigger
-                        className="w-32"
-                        aria-label={t("gapLabelAria")}
-                        title={canEdit ? undefined : t("gapLabelReadOnlyHint")}
-                        data-testid={`${testId}-select-label`}
-                      >
-                        <SelectValue>{t(`gapLabel_${gap.gap_label ?? "hire"}`)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {GAP_LABELS.map((label) => (
-                          <SelectItem key={label} value={label} data-testid={`${testId}-select-label-${label}`}>
-                            {t(`gapLabel_${label}`)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
                   </div>
                 </li>
               );
@@ -432,6 +377,18 @@ export function GapsTab({
           onSaved={(step) => {
             // The step is covered now: it leaves this list.
             onStepsChanged((prev) => prev.map((s) => (s.id === step.id ? step : s)));
+            void load();
+          }}
+        />
+      )}
+
+      {hireSteps && (
+        <HireFromStepDialog
+          containerId={containerId}
+          steps={hireSteps.map((g) => ({ id: g.step_id, title: g.title }))}
+          onClose={() => setHireSteps(null)}
+          onCreated={() => {
+            setSelected(new Set());
             void load();
           }}
         />

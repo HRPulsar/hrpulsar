@@ -20,6 +20,7 @@ import {
 import { VacancyAnalyticsTab } from "@/components/recruitment/vacancy-analytics-tab";
 import { VacancyAssessmentScaleBlock } from "@/components/recruitment/vacancy-assessment-scale";
 import { VacancyAttachments } from "@/components/recruitment/vacancy-attachments";
+import { HireNeedOriginLine } from "@/components/coverage/hire-need-origin";
 import { VacancyActionsMenu } from "../_components/VacancyActionsMenu";
 import { VacancyOverviewSection } from "../_components/VacancyOverviewSection";
 import { VacancyCompetencesSection } from "../_components/VacancyCompetencesSection";
@@ -197,6 +198,8 @@ export default function VacancyDetailPage() {
                   date: formatDate(vacancy.created_at),
                 })}
           </p>
+          {/* HRP-801: the Coverage process this vacancy was opened from. */}
+          <HireNeedOriginLine vacancyId={vacancy.id} className="mt-3 text-sm" />
         </div>
         {canManageSection("recruitment") && (
           <VacancyActionsMenu

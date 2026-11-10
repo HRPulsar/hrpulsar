@@ -518,6 +518,7 @@
     "demo_data_already_seeded": "Demo data is already seeded for this tenant",
     "demo_disabled": "Public sandbox is currently disabled.",
     "demo_end_requires_demo_session": "Only a live demo session can be ended",
+    "demo_guide_requires_demo_admin": "The start routes are only available to the admin persona of a live demo session",
     "demo_persona_not_available": "This demo persona is not available in the sandbox",
     "demo_rate_limited": "Too many demo attempts from this address; please try again later.",
     "demo_sandbox_capacity_reached": "Sandbox capacity reached; please try again in a few minutes.",
@@ -679,6 +680,7 @@
     "llm_provider_test_auth_failed": "The provider rejected the API key. Check the key and its access rights.",
     "llm_provider_test_model_not_found": "The server answered \"not found\". Check the model name '{model}' and that the server address includes the API path, such as /v1.",
     "llm_provider_test_failed": "The test request failed. Details are in the server log.",
+    "transcription_provider_test_folder_missing": "Yandex SpeechKit needs a folder ID next to the API key.",
     "llm_yandex_folder_missing": "Yandex Cloud folder id is not configured — set YANDEX_FOLDER_ID or use a full gpt:// model URI",
     "llm_yandex_key_missing": "Yandex API key is not configured — set YANDEX_API_KEY or add a workspace Yandex key",
     "logo_empty_file": "Empty file",
@@ -1134,6 +1136,9 @@
       "rejected": "Rejected",
       "withdrew": "Withdrew"
     }
+  },
+  "work_hire_need": {
+    "agency_title": "[Filled by an agency] {title}"
   },
   "work_bundle": {
     "title": "Agent setup guide: {title}",

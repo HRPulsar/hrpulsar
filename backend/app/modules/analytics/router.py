@@ -22,6 +22,7 @@ from app.core.access_scope import (
     get_current_employee,
     get_visible_division_ids,
     get_visible_employee_ids,
+    is_employee_only,
     pay_visible_employee_ids,
 )
 from app.core.errors import AppError
@@ -30,7 +31,7 @@ from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.analytics import hr_metrics as hr_metrics_service
 from app.modules.analytics import service
-from app.modules.assessment.scope import pdp_status_scope, runs_plans
+from app.modules.assessment.scope import pdp_status_scope, reads_plans
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 
@@ -82,7 +83,7 @@ async def pdp_stats(
         db,
         current_user.tenant_id,
         await get_visible_employee_ids(db, current_user),
-        hide_drafts=not await runs_plans(db, current_user),
+        hide_drafts=not await reads_plans(db, current_user),
     )
 
 
@@ -106,7 +107,7 @@ async def dev_loop(
         days=int(days),
         # HRP-844: drafts count only for whoever the development list
         # shows them to (``hide_drafts`` on GET /pdp).
-        include_drafts=await runs_plans(db, current_user),
+        include_drafts=await reads_plans(db, current_user),
     )
 
 
@@ -119,14 +120,26 @@ async def hr_metrics(
     """HRP-732: HR metrics over a period, each tagged with how exact it is.
 
     Same read scope as the rest of the page: a manager gets their subtree,
-    admin and HR the whole workspace.
+    admin and HR the whole workspace, anyone else their own row. ``scope``
+    names which one these figures cover, so the page's hints describe the
+    figures it shows rather than guess from the role (HRP-822, QA 22.10).
+
+    Turnover is a ceiling by role, not a level (QA 22.10): below admin, hr
+    and manager it is left out whatever the matrix says.
     """
-    return await hr_metrics_service.hr_metrics(
-        db,
-        current_user.tenant_id,
-        await get_visible_employee_ids(db, current_user),
-        days=int(days),
+    visible = await get_visible_employee_ids(db, current_user)
+    result = await hr_metrics_service.hr_metrics(
+        db, current_user.tenant_id, visible, days=int(days)
     )
+    if is_employee_only(current_user):
+        result["metrics"] = [m for m in result["metrics"] if m["code"] != "turnover"]
+    # The own row plus anyone else is a subtree; the own row alone (or no
+    # employee row at all) is one's own data.
+    if visible is None:
+        result["scope"] = "workspace"
+    else:
+        result["scope"] = "subtree" if len(visible) > 1 else "own"
+    return result
 
 
 @router.post("/analytics/dev-loop/ai-summary")
@@ -142,7 +155,7 @@ async def dev_loop_ai_summary(
         current_user.id,
         visible_employee_ids=await get_visible_employee_ids(db, current_user),
         client_fingerprint=body.data_version if body else None,
-        include_drafts=await runs_plans(db, current_user),
+        include_drafts=await reads_plans(db, current_user),
     )
 
 

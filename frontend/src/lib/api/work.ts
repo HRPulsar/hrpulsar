@@ -284,7 +284,7 @@ export interface CoverageStep {
   /** hours_per_run x runs_per_year; null when either is unset. */
   hours_per_year: number | null;
   /** The newest hire need of this step that still points at a vacancy. */
-  hire_need: { id: string; vacancy_id: string | null; label: GapLabel } | null;
+  hire_need: GapHireNeed | null;
   skill_status: SkillStatus;
   /** HRP-776: not accepted yet, or resting on an unconfirmed low-confidence code. */
   tentative: boolean;
@@ -401,7 +401,7 @@ export interface Gap {
     agent_name: string | null;
   } | null;
   skill_status: SkillStatus;
-  hire_need: { id: string; vacancy_id: string | null; label: GapLabel } | null;
+  hire_need: GapHireNeed | null;
 }
 
 /** HRP-863: an agent pack visible to the tenant, as `GET /ai-workforce/packs`
@@ -414,6 +414,16 @@ export interface AgentPack {
   tenant_id: string | null;
 }
 
+/** The hire need a step was handed to. HRP-801: `talent_card_id` is the
+ * vacancy's talent-market twin while it exists - "look inside first" lands
+ * there. */
+export interface GapHireNeed {
+  id: string;
+  vacancy_id: string | null;
+  label: GapLabel;
+  talent_card_id: string | null;
+}
+
 export interface HireNeed {
   id: string;
   container_id: string;
@@ -421,6 +431,17 @@ export interface HireNeed {
   step_ids: string[];
   label: GapLabel;
   created_at: string;
+  /** HRP-801: null when "look inside first" could not post the draft. */
+  talent_card_id: string | null;
+}
+
+/** HRP-801: the process a vacancy or its talent card was opened from;
+ * `can_open` - the reader may open its coverage. */
+export interface HireNeedOrigin {
+  container_id: string;
+  type: ContainerType;
+  title: string;
+  can_open: boolean;
 }
 
 /** 409 on apply: the draft would delete steps with a ready SKILL.md or the
@@ -504,6 +525,11 @@ export const workApi = {
       division_id?: string;
     },
   ) => api.post<HireNeed>(`/work/containers/${containerId}/gaps/hire-need`, body),
+  // HRP-801: "Based on {process}" on a vacancy and on its talent card.
+  vacancyOrigin: (vacancyId: string) =>
+    api.get<HireNeedOrigin | null>(`/work/origin/vacancies/${vacancyId}`),
+  talentCardOrigin: (cardId: string) =>
+    api.get<HireNeedOrigin | null>(`/work/origin/talent-cards/${cardId}`),
 
   generateSkill: (stepId: string) => api.post<StepSkill>(`/work/steps/${stepId}/skill`),
   getSkill: (stepId: string) => api.get<StepSkill>(`/work/steps/${stepId}/skill`),

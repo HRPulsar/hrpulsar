@@ -114,8 +114,11 @@ const roleColors: Record<string, string> = {
 };
 
 // Roles a participant can be added in — "self" is the assessee's own
-// answer sheet and is never picked from this list.
-const PARTICIPANT_ROLES = ["manager", "peer", "subordinate", "external"] as const;
+// answer sheet and is never picked from this list. HRP-1173: no "external"
+// - the dialog adds an employee through POST /assessments/{id}/participants,
+// which takes self|manager|peer|subordinate; an external reviewer is no
+// employee and has a route of its own.
+const PARTICIPANT_ROLES = ["manager", "peer", "subordinate"] as const;
 
 // HRP-190 / HRP-192: the Details action buttons read as verbs ("send",
 // "cancel"); keys live in the `assessments` namespace, unknown codes fall
@@ -154,19 +157,22 @@ export default function AssessmentDetailPage() {
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const { user: currentUser } = useAuth();
-  const { canManageCatalogues, canManageSection, canViewSection } = usePermissions();
+  const { canManageCatalogues, canManageSection, canViewSection, readsSectionList } =
+    usePermissions();
   // HRP-826: running assessments is the section's `manage`, not a role
-  // flag - platform_admin reaches it like every section. The Detailed
-  // results block asks for the same level on the API.
+  // flag - platform_admin reaches it like every section. Reading the
+  // results is the section's list's: `manage`, or `view` for admin, hr and
+  // manager, read-only (QA 27.10) - the API's `runs_assessments` and the
+  // Detailed results route ask the same.
   const canManage = canManageSection("assessments");
-  const canViewDetailedResults = canManage;
+  const canViewDetailedResults = readsSectionList("assessments");
   // HRP-243: an Employee-only caller sees the Results card only when
   // they are the assessee (the `self` participant) AND the assessment is
   // Done. Peers / subordinates never see results for assessments they
   // merely participated in. The backend mirrors this — it returns an
   // empty `results` array — but we also gate render-side so the
   // condition is explicit in the UI and trivial to test.
-  const isPrivileged = canManage;
+  const isPrivileged = canViewDetailedResults;
   const [assessment, setAssessment] = useState<AssessmentDetail | null>(null);
   const [employee, setEmployee] = useState<Employee | null>(null);
   const { tree: competenceTree } = useCompetenceTree();

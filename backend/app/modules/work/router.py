@@ -18,10 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import billing_hooks
 from app.core.access_scope import get_visible_employee_ids
 from app.core.errors import AppError
-from app.core.sections import require_section
+from app.core.sections import matrix_levels, require_section
 from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
+from app.modules.recruitment.scope import vacancy_scope
 from app.modules.work import access, bundle, coverage, service
 from app.modules.work.models import WorkContainer
 from app.modules.work.schemas import (
@@ -38,6 +39,7 @@ from app.modules.work.schemas import (
     CoverageRead,
     GapRead,
     HireNeedCreate,
+    HireNeedOrigin,
     HireNeedRead,
     ProcessPersonRead,
     ReclassifyRequest,
@@ -65,10 +67,7 @@ async def _reads(
     list's Owner column shows - both on every path a container comes out of,
     so no response silently drops them; the owners are read in one query."""
     owners = await service.owner_summaries(
-        db,
-        actor.tenant_id,
-        {r.owner_id for r in rows if r.owner_id is not None},
-        reveal_leave=actor.manage,
+        db, actor.tenant_id, {r.owner_id for r in rows if r.owner_id is not None}
     )
     return [
         ContainerRead.model_validate(row).model_copy(
@@ -187,9 +186,7 @@ async def get_container_access(
     actor: access.Actor = Depends(access.edit_container),
 ):
     """The owner's and the managers' panel: who else reads, and the history."""
-    return await service.get_container_access(
-        db, actor.tenant_id, container_id, reveal_leave=actor.manage
-    )
+    return await service.get_container_access(db, actor.tenant_id, container_id)
 
 
 @router.put("/containers/{container_id}/access", response_model=ContainerAccessRead)
@@ -205,7 +202,6 @@ async def set_container_access(
         container_id,
         data,
         user_id=actor.user_id,
-        reveal_leave=actor.manage,
     )
 
 
@@ -215,10 +211,8 @@ async def list_people(
     db: AsyncSession = Depends(get_db),
     actor: access.Actor = Depends(access.edit_container),
 ):
-    """Who the editor of this process can name: owner, rule, assignee.
-    Whether each can take a step is HR data (HRP-623): the section's
-    managers see it, an owner outside them is answered by the assignment."""
-    return await service.list_people(db, actor.tenant_id, reveal_status=actor.manage)
+    """Who the editor of this process can name: owner, rule, assignee."""
+    return await service.list_people(db, actor.tenant_id)
 
 
 # --- Steps ------------------------------------------------------------------
@@ -333,8 +327,8 @@ async def get_coverage(
     does not start a model run. A matched colleague and what an assignee
     lacks come from assessments, so they are named within the reader's HR
     scope: everyone for admin / hr, the managed subtree for a manager, the
-    reader themselves for anyone else (HRP-810, HRP-623). Leave is the
-    section's managers' to see, like on the owner (HRP-1020)."""
+    reader themselves for anyone else (HRP-810, HRP-623). Leave shows to
+    every reader, ``view`` as ``manage`` (HRP-1020 REDO)."""
     result = await coverage.compute(
         db,
         actor.tenant_id,
@@ -349,7 +343,7 @@ async def get_coverage(
     # HRP-862: the list shows these figures without computing anything. Before
     # the redaction on purpose - the summary carries no people to redact.
     await coverage.remember_summary(db, actor.tenant_id, container_id, result)
-    return coverage.redact_people(result, visible=visible, reveal_leave=actor.manage)
+    return coverage.redact_people(result, visible=visible)
 
 
 @router.get("/containers/{container_id}/gaps", response_model=list[GapRead])
@@ -386,9 +380,92 @@ async def create_hire_need(
     """A person opens the hire need (§6): the section's managers who also
     manage Recruitment. The owner does not: a draft vacancy is
     Recruitment's record (HRP-810)."""
-    return await service.create_hire_need(
+    need = await service.create_hire_need(
         db, actor.tenant_id, container_id, data, user_id=actor.user_id
     )
+    cards = await coverage.live_talent_cards(db, actor.tenant_id, {need.vacancy_id})
+    return HireNeedRead.model_validate(need).model_copy(
+        update={
+            "talent_card_id": cards.get(need.vacancy_id) if need.vacancy_id else None
+        }
+    )
+
+
+# HRP-801 (QA 23.10): "Based on {process}" on the vacancy and on its talent
+# card. ``recruitment`` and ``talent_market`` learn nothing about ``work``,
+# so their pages ask here. Both paths are shared reads (``SHARED_READS``):
+# the Coverage gate does not apply - whoever sees the vacancy or the card
+# sees where it came from, under that section's own guard.
+
+
+async def _origin(
+    db: AsyncSession, actor: access.Actor, user: User, container: WorkContainer | None
+) -> HireNeedOrigin | None:
+    """The title links only for a reader who may open the coverage: the
+    section open to them and this container among the ones they read."""
+    if container is None:
+        return None
+    can_open = (await matrix_levels(db, user))[access.SECTION] != "none"
+    if can_open:
+        try:
+            await access.ensure(db, actor, container.id, edit=False)
+        except AppError:
+            can_open = False
+    return HireNeedOrigin(
+        container_id=container.id,
+        type=container.type,  # type: ignore[arg-type]
+        title=container.title,
+        can_open=can_open,
+    )
+
+
+@router.get(
+    "/origin/vacancies/{vacancy_id}",
+    response_model=HireNeedOrigin | None,
+    # GET /recruitment/vacancies/{id}'s own guard: the section gate at
+    # ``view`` and the vacancy in the reader's recruitment scope.
+    dependencies=[Depends(require_section("recruitment")), Depends(vacancy_scope)],
+)
+async def get_vacancy_origin(
+    vacancy_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: access.Actor = Depends(access.current_actor),
+    current_user: User = Depends(get_current_user),
+):
+    container = await service.hire_need_origin(
+        db, actor.tenant_id, vacancy_id=vacancy_id
+    )
+    return await _origin(db, actor, current_user, container)
+
+
+@router.get(
+    "/origin/talent-cards/{card_id}",
+    response_model=HireNeedOrigin | None,
+    dependencies=[Depends(require_section("talent-market"))],
+)
+async def get_talent_card_origin(
+    card_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: access.Actor = Depends(access.current_actor),
+    current_user: User = Depends(get_current_user),
+):
+    """Answered as for a card without an origin unless the reader may open
+    the card - ``get_card_detail``'s own rule, asked only when there is an
+    origin to give."""
+    from app.modules.talent_market import card_service
+
+    container = await service.hire_need_origin(db, actor.tenant_id, card_id=card_id)
+    if container is None:
+        return None
+    # ponytail: reads the whole card to ask whether the caller may; a scope
+    # predicate exported by talent_market if this shows in profiles.
+    try:
+        await card_service.get_card_detail(
+            db, actor.tenant_id, card_id, current_user=current_user
+        )
+    except AppError:
+        return None
+    return await _origin(db, actor, current_user, container)
 
 
 # --- Step skills (HRP-760) ---------------------------------------------------

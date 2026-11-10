@@ -186,6 +186,10 @@ EXPECTED_GUARDS = {
     "get_coverage": "read_container",
     "list_gaps": "read_container",
     "create_hire_need": "manage_actor",
+    # HRP-801: the vacancy's and the card's own guards decide who asks;
+    # the actor only decides whether the title links.
+    "get_vacancy_origin": "current_actor",
+    "get_talent_card_origin": "current_actor",
     "generate_step_skill": "edit_step",
     "get_step_skill": "read_step",
     "download_step_skill": "read_step",
@@ -796,19 +800,16 @@ def test_redact_people_keeps_verdicts_and_assignees():
             {"verdict": "gap", "human": None, "human_backup": False},
         ]
     }
-    steps = coverage.redact_people(result, visible=set(), reveal_leave=True)["steps"]
+    steps = coverage.redact_people(result, visible=set())["steps"]
     assert steps[0]["human"] == {**assignee, "missing_codes": []}
     assert steps[1]["human"] is None and steps[1]["human_backup"] is False
     assert [s["verdict"] for s in steps] == ["human", "agent", "gap"]
 
 
-def test_redact_people_withholds_leave_unless_revealed():
-    # Review 01.10 (HRP-623): the assignee and the accountable carried
-    # their employee status to every reader; leave is HR data the directory
-    # withholds. Gone stays visible - nobody can do the step then. HRP-1020:
-    # whether leave shows is the section's ``manage``, not the HR scope.
-    from copy import deepcopy
-
+def test_redact_people_keeps_the_status():
+    # HRP-1020 REDO (QA 30.10): leave shows to every reader of the section,
+    # ``view`` as ``manage`` - with nobody in the reader's HR scope too. The
+    # scope still drops what comes from assessments, not the status.
     from app.modules.work import coverage
 
     def person(eid, status, label="assigned"):
@@ -823,28 +824,21 @@ def test_redact_people_withholds_leave_unless_revealed():
              "accountable": person("e4", "on_leave")},
         ]
     }
-    # The whole HR scope without ``manage``: at work.
-    steps = coverage.redact_people(deepcopy(result), visible=None, reveal_leave=False)["steps"]
-    assert steps[0]["human"]["status"] == "active"
-    assert steps[0]["accountable"]["status"] == "active"
-    assert steps[1]["human"]["status"] == "terminated"
-    assert steps[1]["accountable"]["status"] == "active"
-    # ``manage`` with nobody in the HR scope: on leave.
-    steps = coverage.redact_people(result, visible=set(), reveal_leave=True)["steps"]
+    steps = coverage.redact_people(result, visible=set())["steps"]
     assert steps[0]["human"]["status"] == "on_leave"
+    assert steps[0]["accountable"]["status"] == "on_leave"
+    assert steps[1]["human"]["status"] == "terminated"
     assert steps[1]["accountable"]["status"] == "on_leave"
 
 
-async def test_owner_leave_is_shown_only_when_revealed(db, tenant):
+async def test_owner_on_leave_reads_as_on_leave(db, tenant):
     from app.modules.work import service as work_service
 
     user, emp, _ = await _person(db, tenant, "employee")
     emp.status = "on_leave"
     await db.commit()
-    hidden = await work_service.owner_summaries(db, tenant.id, {user.id})
-    shown = await work_service.owner_summaries(db, tenant.id, {user.id}, reveal_leave=True)
-    assert hidden[user.id]["status"] == "active" and hidden[user.id]["active"] is True
-    assert shown[user.id]["status"] == "on_leave"
+    shown = await work_service.owner_summaries(db, tenant.id, {user.id})
+    assert shown[user.id]["status"] == "on_leave" and shown[user.id]["active"] is True
 
 
 def test_redact_people_keeps_a_colleague_within_the_reader_scope():
@@ -874,22 +868,22 @@ def test_redact_people_keeps_a_colleague_within_the_reader_scope():
         }
 
     # A manager whose subtree holds both reads them as admin / hr would.
-    steps = coverage.redact_people(payload(), visible={"e1", "e2"}, reveal_leave=True)["steps"]
+    steps = coverage.redact_people(payload(), visible={"e1", "e2"})["steps"]
     assert steps[0]["human"] == matched and steps[0]["human_backup"] is True
     assert steps[1]["human"] == assignee
     # Outside the subtree the match is dropped and the assignee's gaps hidden.
-    steps = coverage.redact_people(payload(), visible={"e9"}, reveal_leave=True)["steps"]
+    steps = coverage.redact_people(payload(), visible={"e9"})["steps"]
     assert steps[0]["human"] is None and steps[0]["human_backup"] is False
     assert steps[1]["human"] == {**assignee, "missing_codes": []}
 
 
 class TestReaderScope:
-    async def test_leave_status_is_for_the_managers_only(
+    async def test_an_owner_at_view_sees_who_is_on_leave(
         self, client, auth_client, db, tenant
     ):
-        """HRP-623: with the terminated already out of the list, ``assignable``
-        is the leave status. Admin / hr read it; an owner outside them sees
-        everyone as assignable, and the assignment itself refuses."""
+        """With the terminated already out of the list, ``assignable`` is the
+        leave status; HRP-1020 REDO: an owner the matrix leaves at ``view``
+        reads it as the section's managers do."""
         created = await auth_client.post(
             "/api/work/containers", json={"description": "Test process", "type": "process", "title": "Rota"}
         )
@@ -908,8 +902,7 @@ class TestReaderScope:
             f"/api/work/containers/{cid}/people", headers=owner_h
         )
         assert as_owner.status_code == 200, as_owner.text
-        assert all(p["assignable"] for p in as_owner.json())
-        assert str(away_emp.id) in {p["employee_id"] for p in as_owner.json()}
+        assert as_owner.json() == as_admin.json()
 
     async def test_only_a_manager_read_starts_a_mapping_run(
         self, client, auth_client, db, tenant
@@ -956,9 +949,9 @@ class TestReaderScope:
 
 
 class TestLeaveFollowsTheSectionLevel:
-    """HRP-1020: the Coverage screen shows an assignee on leave to whoever
-    manages the section in the matrix - the owner's and the people list's
-    rule - not to the HR roles."""
+    """HRP-1020 REDO (QA 30.10): the Coverage screen shows an assignee on
+    leave at ``view`` as at ``manage``, under any role - the people on the
+    rows stay the ones the reader saw before."""
 
     async def _away_on_a_step(self, auth_client, db, tenant) -> str:
         created = await auth_client.post(
@@ -988,27 +981,38 @@ class TestLeaveFollowsTheSectionLevel:
         (row,) = r.json()["steps"]
         return row["human"]["status"], row["accountable"]["status"]
 
-    async def test_manage_without_an_hr_role_sees_leave_outside_the_subtree(
+    async def test_a_manager_at_view_sees_leave_outside_the_subtree(
         self, client, auth_client, db, tenant
     ):
         cid = await self._away_on_a_step(auth_client, db, tenant)
         _, _, manager = await _person(db, tenant, "manager")
-        assert await self._statuses(client, cid, manager) == ("active", "active")
+        assert await self._statuses(client, cid, manager) == ("on_leave", "on_leave")
         await _save(auth_client, levels={"coverage": {"manager": "manage"}})
         assert await self._statuses(client, cid, manager) == ("on_leave", "on_leave")
 
-    async def test_admin_and_hr_lowered_to_view_no_longer_see_leave(
+    async def test_admin_and_hr_lowered_to_view_still_see_leave(
         self, client, auth_client, db, tenant
     ):
         cid = await self._away_on_a_step(auth_client, db, tenant)
         _, _, hr = await _person(db, tenant, "hr")
+        await _save(auth_client, levels={"coverage": {"admin": "view", "hr": "view"}})
         assert await self._statuses(client, cid, hr) == ("on_leave", "on_leave")
         assert await self._statuses(auth_client, cid) == ("on_leave", "on_leave")
-        await _save(auth_client, levels={"coverage": {"admin": "view", "hr": "view"}})
-        assert await self._statuses(client, cid, hr) == ("active", "active")
-        assert await self._statuses(auth_client, cid) == ("active", "active")
 
-    async def test_view_only_does_not_see_leave(self, client, auth_client, db, tenant):
+    async def test_an_employee_at_view_sees_leave_and_no_more_people(
+        self, client, auth_client, db, tenant
+    ):
         cid = await self._away_on_a_step(auth_client, db, tenant)
         _, _, employee = await _person(db, tenant, "employee")
-        assert await self._statuses(client, cid, employee) == ("active", "active")
+        r = await client.get(f"/api/work/containers/{cid}/coverage", headers=employee)
+        (row,) = r.json()["steps"]
+        assert row["human"]["status"] == "on_leave"
+        assert row["accountable"]["status"] == "on_leave"
+        # The status is the only thing that changed: what comes from
+        # assessments stays within the reader's HR scope (HRP-810).
+        assert row["human"]["label"] == "assigned" and row["human"]["missing_codes"] == []
+        # ``none`` never reads Coverage at all, so nobody below ``view`` is
+        # left to withhold leave from.
+        await _save(auth_client, levels={"coverage": {"employee": "none"}})
+        hidden = await client.get(f"/api/work/containers/{cid}/coverage", headers=employee)
+        assert hidden.status_code == 403

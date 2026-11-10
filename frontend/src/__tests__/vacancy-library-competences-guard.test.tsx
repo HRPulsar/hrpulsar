@@ -61,8 +61,23 @@ vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ user: { roles, sections: { recruitment: recruitmentLevel } } }),
 }));
 
+const LONG_TITLE =
+  "Designing integration contracts between procurement, finance and logistics systems";
 vi.mock("@/hooks/use-competence-tree", () => ({
-  useCompetenceTree: () => ({ tree: [], loading: false, reload: vi.fn() }),
+  useCompetenceTree: () => ({
+    tree: [
+      {
+        id: "grp-1",
+        title: "Analysis",
+        children: [],
+        competences: [{ id: "comp-1", title: LONG_TITLE }],
+        competences_count: 1,
+        is_used: false,
+      },
+    ],
+    loading: false,
+    reload: vi.fn(),
+  }),
 }));
 
 const toastError = vi.fn();
@@ -207,5 +222,35 @@ describe("Library competences carry their level (HRP-1087)", () => {
     expect(save.disabled).toBe(true);
     expect(save.parentElement!.getAttribute("title")).toContain("Pick a level");
     rowLevels = ["lvl-1"];
+  });
+
+  // Layout of step 2 (QA REDO 27.10): a long name stays on one line with the
+  // full text on hover, only the rows scroll, and the dialog keeps the
+  // height it had on step 1.
+  it("keeps step 2 inside the step-1 window", async () => {
+    rowLevels = ["lvl-1"];
+    await render();
+    await act(async () => {
+      pickerButton()!.click();
+    });
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!;
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get: () => 420,
+    });
+    try {
+      await act(async () => {
+        byId("vacancy-competences-library-next-btn")!.click();
+      });
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, "offsetHeight", height);
+    }
+    expect((dialog() as HTMLElement).style.height).toBe("420px");
+    const name = document.querySelector(
+      '[data-testid="vacancy-competences-library-levels"] [title]',
+    )!;
+    expect(name.getAttribute("title")).toBe(LONG_TITLE);
+    expect(name.className).toContain("truncate");
+    expect(byId("vacancy-competences-library-levels")!.className).toContain("overflow-y-auto");
   });
 });

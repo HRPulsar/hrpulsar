@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 import pytest
 from app.modules.demo.seed_data_assessments import PDPS
 from app.modules.demo.seed_data_competences import GRADE_COMPETENCE_LINKS, MATERIALS
+from app.modules.demo.seed_i18n import localize
 
 # The product's own site is never a learning resource for the demo
 # company: a "course" that opens our documentation is the reported bug.
@@ -146,3 +147,11 @@ def test_every_in_progress_demo_plan_offers_all_four_kinds_with_a_link(plan: dic
         f"{plan['title']!r} opens without a linked "
         f"{sorted(_ALL_KINDS - linked_kinds)} among its materials"
     )
+
+
+def test_de_keeps_the_source_links():
+    """HRP-767: links follow the catalog only where a locale maps them (the
+    ru demo opens Russian resources); de carries no such entry."""
+    assert [m["link"] for m in localize(MATERIALS, "de")] == [
+        m["link"] for m in MATERIALS
+    ]

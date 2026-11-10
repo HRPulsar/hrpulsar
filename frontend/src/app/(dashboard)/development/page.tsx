@@ -68,12 +68,13 @@ const emptyForm = {
 };
 
 export default function DevelopmentPage() {
-  // HRP-825 (QA 13.10): `manage` adds the section's own tab; every level
+  // HRP-825 (QA 13.10): the section's own tab shows at `manage`, and
+  // read-only at `view` for admin, hr and manager (QA 27.10); every level
   // gets one's own plans and the ones waiting on the caller.
   const tTabs = useTranslations("sectionTabs");
-  const { canManageSection } = usePermissions();
-  const manage = canManageSection("development");
-  const tab = useSectionTab(manage ? ["all", "mine", "todo"] : ["mine", "todo"]);
+  const { readsSectionList } = usePermissions();
+  const lists = readsSectionList("development");
+  const tab = useSectionTab(lists ? ["all", "mine", "todo"] : ["mine", "todo"]);
   const todo = useTodoCount("/pdp/todo-count", tab);
   return (
     <DevelopmentList
@@ -85,7 +86,7 @@ export default function DevelopmentPage() {
           testIdPrefix="development"
           active={tab}
           tabs={[
-            ...(manage ? [{ id: "all", label: tTabs("developmentAll") }] : []),
+            ...(lists ? [{ id: "all", label: tTabs("developmentAll") }] : []),
             { id: "mine", label: tTabs("developmentMine") },
             { id: "todo", label: todo.label },
           ]}

@@ -13,6 +13,8 @@ from app.database import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.demo.schemas import (
+    DemoGuideRequest,
+    DemoGuideResponse,
     DemoSaveAccessRequest,
     DemoSaveAccessResponse,
     DemoStartRequest,
@@ -21,12 +23,13 @@ from app.modules.demo.schemas import (
     DemoSwitchViewResponse,
 )
 from app.modules.demo.service import (
+    choose_demo_guide,
     create_demo_session,
     end_demo_session,
     switch_demo_view,
 )
 from app.modules.demo.utils import is_demo_tenant
-from app.modules.signup.schemas import SignupRequestCreate
+from app.modules.signup.schemas import SignupRequestFields
 from app.modules.signup.service import create_signup_request
 
 
@@ -113,7 +116,7 @@ async def save_demo_access(
             "demo_capture_requires_demo_session",
             status.HTTP_403_FORBIDDEN,
         )
-    create_payload = SignupRequestCreate(
+    create_payload = SignupRequestFields(
         email=payload.email,
         first_name=payload.first_name,
         last_name=payload.last_name,
@@ -153,6 +156,22 @@ async def switch_view(
         db, tenant_id=current_user.tenant_id, persona=payload.persona
     )
     return DemoSwitchViewResponse(**result)
+
+
+@router.post("/guide", response_model=DemoGuideResponse)
+async def choose_guide(
+    payload: DemoGuideRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DemoGuideResponse:
+    """The start route picked in the sandbox's "Where to start" (HRP-1159).
+
+    Admin persona of a live demo only (403 otherwise). Calling again
+    overwrites the choice. Answers with the completed assessment the plan
+    and assessment routes start from, when there is one.
+    """
+    assessment_id = await choose_demo_guide(db, user=current_user, path=payload.path)
+    return DemoGuideResponse(assessment_id=assessment_id)
 
 
 @router.post("/end", status_code=status.HTTP_204_NO_CONTENT)

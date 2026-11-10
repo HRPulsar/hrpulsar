@@ -21,7 +21,7 @@ Try HRPulsar Cloud before signing up — no account, no credit card.
 - One click on [hrpulsar.com](https://hrpulsar.com) starts a private sandbox with a realistic dataset: company structure, employees, assessments, and pre-analysed job interviews
 - Comes with free AI credits so you can run real analyses
 - Your sandbox is yours alone and is automatically cleaned up after the session ends
-- Ready to keep your data? Save access from inside the demo and our team will get you set up
+- Ready to keep your data? Leave your email from inside the demo — we keep your sandbox while our team reviews the request
 - Want a walkthrough? "Talk to us" in the demo banner, leave your email, and we'll get in touch
 
 ## Usage-Based Billing

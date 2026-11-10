@@ -10,15 +10,23 @@ from pydantic import BaseModel, EmailStr, Field
 SIGNUP_ROLE_CHOICES = ("hr", "recruiter", "manager", "founder", "other")
 
 
-class SignupRequestCreate(BaseModel):
-    """Landing-form payload posted by an anonymous visitor."""
+class SignupRequestFields(BaseModel):
+    """What ``create_signup_request`` stores. The demo save-access path
+    builds it directly: the name is optional there (HRP-1161)."""
 
     email: EmailStr
-    first_name: str = Field(..., min_length=1, max_length=100)
+    first_name: str | None = Field(None, max_length=100)
     last_name: str | None = Field(None, max_length=100)
     company_name: str | None = Field(None, max_length=255)
     role: str | None = Field(None, max_length=100)
     turnstile_token: str | None = None
+
+
+class SignupRequestCreate(SignupRequestFields):
+    """Landing-form payload posted by an anonymous visitor — the name
+    stays required."""
+
+    first_name: str = Field(..., min_length=1, max_length=100)
 
 
 class SignupRequestRead(BaseModel):

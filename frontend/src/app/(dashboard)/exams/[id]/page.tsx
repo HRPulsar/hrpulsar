@@ -7,6 +7,7 @@ import Link from "next/link";
 import { EmployeeName } from "@/components/employees/employee-name";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { RequireSection } from "@/components/require-section";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ApiError, api } from "@/lib/api";
 import { dictionaryItemLabel } from "@/lib/reference-labels";
 import type {
@@ -106,9 +107,11 @@ const IMPORT_ROW_ERROR_KEYS: Record<string, string> = {
 export default function ExamDetailGuarded() {
   // HRP-823: every call on this page is a mass exam one, so `view` on the
   // section is not enough to open it - the section gate in the layout only
-  // knows the page's section, not the level it needs.
+  // knows the page's section, not the level it needs. QA 26.10: admin, hr
+  // and manager read the mass exams at `view` too, read-only.
+  const { readsSectionList } = usePermissions();
   return (
-    <RequireSection code="exams" level="manage">
+    <RequireSection code="exams" level={readsSectionList("exams") ? "view" : "manage"}>
       <ExamDetailPage />
     </RequireSection>
   );
@@ -119,6 +122,8 @@ function ExamDetailPage() {
   const tc = useTranslations("common");
   const tRef = useTranslations("reference");
   const { id } = useParams<{ id: string }>();
+  // Below `manage` the page reads (QA 26.10): every edit asks for it.
+  const manage = usePermissions().canManageSection("exams");
   const [exam, setExam] = useState<MassExamDetail | null>(null);
   const [results, setResults] = useState<ExamResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -756,8 +761,8 @@ function ExamDetailPage() {
   const deadlineInPast = exam.ended_at ? isPastDeadline(exam.ended_at) : false;
   const hasPassMark = exam.pass_marks.length > 0;
   const isTerminal = exam.status === "done" || exam.status === "cancelled";
-  const canEditMeta = !isTerminal;
-  const canEditQuestions = exam.status === "draft";
+  const canEditMeta = manage && !isTerminal;
+  const canEditQuestions = manage && exam.status === "draft";
 
   // HRP-236 task 3: per-status action buttons in Details.
   // HRP-476: ``testId`` stays an English literal — data-testid must not be
@@ -907,22 +912,24 @@ function ExamDetailPage() {
                     ) : (
                       <span className="text-muted-foreground">—</span>
                     )}
-                    <button
-                      type="button"
-                      onClick={openDeadlineEditor}
-                      className="text-muted-foreground hover:text-foreground"
-                      aria-label={t("editDeadline")}
-                      data-testid="exam-deadline-edit"
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </button>
+                    {canEditMeta && (
+                      <button
+                        type="button"
+                        onClick={openDeadlineEditor}
+                        className="text-muted-foreground hover:text-foreground"
+                        aria-label={t("editDeadline")}
+                        data-testid="exam-deadline-edit"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    )}
                   </p>
                 </>
               )}
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            {actionButtons.map((btn) => (
+            {manage && actionButtons.map((btn) => (
               <Button
                 key={btn.code}
                 size="sm"
@@ -936,7 +943,7 @@ function ExamDetailPage() {
                 {btn.label}
               </Button>
             ))}
-            {exam.status === "draft" && (
+            {manage && exam.status === "draft" && (
               <Button size="sm" variant="outline" onClick={openAssignDialog}>
                 {t("assignEmployees")}
               </Button>
@@ -1097,7 +1104,7 @@ function ExamDetailPage() {
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle className="text-base">{t("passMark")}</CardTitle>
           {/* HRP-226 redo: pass mark editable on any non-terminal exam. */}
-          {!hasPassMark && !isTerminal && (
+          {!hasPassMark && canEditMeta && (
             <Button size="sm" variant="outline" onClick={openPassMarkAdd} data-testid="exam-passmark-add">
               <Plus className="mr-1 h-4 w-4" />
               {t("add")}
@@ -1142,7 +1149,7 @@ function ExamDetailPage() {
                       </Badge>
                     )}
                   </div>
-                  {!isTerminal && (
+                  {canEditMeta && (
                     <div className="flex items-center gap-1">
                       <Button
                         size="icon-xs"

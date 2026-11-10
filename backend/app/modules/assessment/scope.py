@@ -41,6 +41,7 @@ from app.core.access_scope import (
     ADMIN_ROLE_CODES,
     assert_authored,
     get_visible_employee_ids,
+    reads_section,
 )
 from app.core.errors import AppError
 from app.core.sections import matrix_levels
@@ -270,25 +271,27 @@ async def pdp_status_scope(
     _refuse()
 
 
-async def _admin_or_manage(db: AsyncSession, user: User, section: str) -> bool:
+async def runs_plans(db: AsyncSession, user: User) -> bool:
+    """Walks the full status graph of other people's plans: an admin-level
+    role or ``manage`` on ``development`` (HRP-825). Used to be
+    "admin-level or manager" - the level replaced the manager role, the
+    admin tier stays: it keeps driving plans at ``view`` as in 2.5.4
+    (Maxim, on QA 27.10). Who sees drafts is ``reads_plans``."""
     if any(r.code in ADMIN_ROLE_CODES for r in user.roles):
         return True
-    return (await matrix_levels(db, user))[section] == "manage"
+    return (await matrix_levels(db, user))["development"] == "manage"
 
 
-async def runs_plans(db: AsyncSession, user: User) -> bool:
-    """Sees other people's draft plans and walks the full status graph: an
-    admin-level role or ``manage`` on ``development`` (HRP-825). Used to be
-    "admin-level or manager" - the level replaced the manager role, the
-    admin tier stays."""
-    return await _admin_or_manage(db, user, "development")
+async def reads_plans(db: AsyncSession, user: User) -> bool:
+    """Sees other people's draft plans in the read scope: ``manage``, or
+    ``view`` for admin, hr and manager (``reads_section``, QA 27.10)."""
+    return await reads_section(db, user, "development")
 
 
 async def runs_assessments(db: AsyncSession, user: User) -> bool:
     """Sees drafts and results of the assessments in the caller's read
-    scope: an admin-level role or ``manage`` on ``assessments`` (HRP-826).
-    Used to be ``not is_employee_only`` - "admin-level or manager" - and
-    the level replaced the manager role the same way as ``runs_plans``.
-    Anyone else reads active assessments they take part in, without
-    results."""
-    return await _admin_or_manage(db, user, "assessments")
+    scope: ``manage`` on ``assessments``, or ``view`` for admin, hr and
+    manager, read-only (``reads_section``; HRP-826, QA 27.10). Only reads
+    ask this; writing asks ``manage`` on the route. Anyone else reads
+    active assessments they take part in, without results."""
+    return await reads_section(db, user, "assessments")

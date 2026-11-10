@@ -24,9 +24,12 @@ describe("assessments follow the section level (HRP-826)", () => {
     expect(permissions).not.toContain("canCreateAssessments");
   });
 
-  it("shows detailed results and scores only to who runs assessments", () => {
-    expect(assessmentPage).toContain("const canViewDetailedResults = canManage;");
-    expect(assessmentPage).toContain("const isPrivileged = canManage;");
+  it("shows detailed results and scores to whoever reads the section's list", () => {
+    // `manage`, or `view` for admin, hr and manager (QA 27.10) - the API's
+    // `runs_assessments`; calibrating stays `canManage`.
+    expect(assessmentPage).toContain('const canViewDetailedResults = readsSectionList("assessments");');
+    expect(assessmentPage).toContain("const isPrivileged = canViewDetailedResults;");
+    expect(assessmentPage).toContain("canManage={canManage && !isTerminal}");
     expect(assessmentPage).not.toContain('roles.includes("platform_admin")');
   });
 

@@ -74,12 +74,12 @@ class DemoSaveAccessRequest(BaseModel):
 
     A demo-session visitor captures their email so they can come back
     into a real account once a moderator approves the request. Same
-    fields as the public /signup-request form but with email + name
-    pre-filled by the SPA from the demo session.
+    fields as the public /signup-request form, except that the name is
+    optional (HRP-1161): the demo card asks for an email only.
     """
 
     email: EmailStr
-    first_name: str = Field(..., min_length=1, max_length=100)
+    first_name: str | None = Field(None, max_length=100)
     last_name: str | None = Field(None, max_length=100)
     company_name: str | None = Field(None, max_length=255)
     role: str | None = Field(None, max_length=100)
@@ -112,3 +112,24 @@ class DemoSwitchViewResponse(BaseModel):
     tenant_id: uuid.UUID
     expires_at: datetime
     persona: Literal["admin", "employee"]
+
+
+# The sandbox's start routes (HRP-1159); ``skip`` is "I'll look around".
+DemoGuidePath = Literal["coverage", "pdp", "assessment", "skip"]
+
+
+class DemoGuideRequest(BaseModel):
+    """Body of ``POST /api/demo/guide``: the route picked in "Where to start"."""
+
+    path: DemoGuidePath
+
+
+class DemoGuideResponse(BaseModel):
+    """The completed assessment the plan and assessment routes start from.
+
+    ``None`` for the other routes, and when the sandbox has no completed
+    assessment with growth zones and no plan left — the route then starts
+    from the Assessments list.
+    """
+
+    assessment_id: uuid.UUID | None = None

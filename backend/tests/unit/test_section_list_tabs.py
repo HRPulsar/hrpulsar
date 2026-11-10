@@ -6,6 +6,12 @@ the caller's own employee row whatever their level or read scope: a
 division head holding ``manage`` sees only their own there, not their
 subtree's. The "To do (N)" count is ``<list path>/todo-count``. Without a
 tab every list answers as before.
+
+The section's own tab - the list without a tab, ``/mass-exams`` for exams -
+reads at ``manage`` and, read-only, at ``view`` for admin, hr and manager
+(QA 26-27.10), as wide as at ``manage``: the workspace for the admin level,
+a manager's subtree (exams: the ones they made). Recruiter, hiring manager
+and employee keep only their own two tabs at ``view``.
 """
 
 import uuid
@@ -20,6 +26,7 @@ from app.modules.assessment.models import (
     Assessment,
     AssessmentGroup,
     AssessmentParticipant,
+    PDPItem,
 )
 from app.modules.company.models import Division
 from app.modules.employee.models import Employee
@@ -276,6 +283,108 @@ async def test_a_tab_never_reaches_into_another_tenant(
     # ...while the head's own counts see them.
     for path in ("/api/exams/todo-count", "/api/pdp/todo-count", "/api/assessments-grouped/todo-count"):
         assert (await client.get(path, headers=head.h)).json() == {"count": 1}, path
+
+
+async def test_the_sections_own_list_reads_at_view_for_admin_hr_and_manager(
+    auth_client, client, db, tenant, team, assessment_statuses, assessment_types
+):
+    head, member = team.head, team.member
+    hr = await _person(db, tenant, "hr")
+    outsider = await _person(db, tenant, "employee")  # outside the head's division
+    reader_codes = ("admin", "hr", "manager")
+    await _save(
+        auth_client,
+        levels={s: dict.fromkeys(reader_codes, "view") for s in ("exams", "development", "assessments")},
+    )
+
+    own_exam = MassExam(tenant_id=tenant.id, title="Head's", initiator_id=head.user.id, status="draft")
+    hr_exam = MassExam(tenant_id=tenant.id, title="HR's", initiator_id=hr.user.id, status="draft")
+    member_plan = PDP(tenant_id=tenant.id, title="Member", employee_id=member.emp.id, author_id=hr.user.id, status="draft")
+    outsider_plan = PDP(tenant_id=tenant.id, title="Outsider", employee_id=outsider.emp.id, author_id=hr.user.id, status="draft")
+    in_review = PDP(tenant_id=tenant.id, title="Review", employee_id=member.emp.id, author_id=hr.user.id, status="review")
+    # Reviewed by hr, so the head is neither its owner nor its reviewer.
+    reviewed_by_hr = PDP(
+        tenant_id=tenant.id, title="By HR", employee_id=member.emp.id, author_id=hr.user.id,
+        reviewer_id=hr.user.id, status="sent",
+    )
+    in_review.items.append(PDPItem(title="Read a book"))
+
+    def draft_assessment(person):
+        return Assessment(
+            tenant_id=tenant.id,
+            employee_id=person.emp.id,
+            type_id=assessment_types["self"].id,
+            status_id=assessment_statuses["draft"].id,
+            initiator_id=hr.user.id,
+        )
+
+    member_assessment, outsider_assessment = draft_assessment(member), draft_assessment(outsider)
+    db.add_all([own_exam, hr_exam, member_plan, outsider_plan, in_review, reviewed_by_hr, member_assessment, outsider_assessment])
+    await db.commit()
+
+    async def ids(path, h):
+        r = await client.get(path, headers=h)
+        assert r.status_code == 200, (path, r.text)
+        body = r.json()
+        rows = body["items"] if isinstance(body, dict) else body
+        return {str(row["assessment"]["id"]) if "assessment" in row else row["id"] for row in rows if row.get("kind", "single") == "single"}
+
+    # Admin and hr: the workspace, drafts included - as at ``manage``.
+    for reader in (hr.h, None):  # None: the client's own admin
+        assert {str(own_exam.id), str(hr_exam.id)} <= await ids("/api/mass-exams", reader)
+        assert {str(member_plan.id), str(outsider_plan.id)} <= await ids("/api/pdp", reader)
+        assert {str(member_assessment.id), str(outsider_assessment.id)} <= await ids("/api/assessments-grouped", reader)
+    # A manager: the mass exams they made, their subtree's plans and assessments.
+    assert await ids("/api/mass-exams", head.h) == {str(own_exam.id)}
+    plans = await ids("/api/pdp", head.h)
+    assert str(member_plan.id) in plans and str(outsider_plan.id) not in plans
+    assessments = await ids("/api/assessments-grouped", head.h)
+    assert str(member_assessment.id) in assessments and str(outsider_assessment.id) not in assessments
+
+    # What the list opens opens too - read-only.
+    for path in (
+        f"/api/mass-exams/{own_exam.id}",
+        f"/api/mass-exams/{own_exam.id}/results",
+        f"/api/pdp/{member_plan.id}",
+        f"/api/assessments/{member_assessment.id}",
+    ):
+        assert (await client.get(path, headers=head.h)).status_code == 200, path
+    assert (await client.get(f"/api/mass-exams/{hr_exam.id}", headers=hr.h)).status_code == 200
+    # One mutation per section still refuses at ``view``.
+    for method, path, body in (
+        ("patch", f"/api/mass-exams/{own_exam.id}", {"title": "Renamed"}),
+        ("patch", f"/api/pdp/{member_plan.id}", {"title": "Renamed"}),
+        ("patch", f"/api/assessments/{member_assessment.id}", {"title": "Renamed"}),
+    ):
+        r = await client.request(method, path, json=body, headers=head.h)
+        assert r.status_code == 403 and r.json()["code"] == "auth_insufficient_permissions", path
+    # Driving a plan is not the list's to give: a manager at ``view`` moves
+    # no status, while the admin tier keeps driving plans at ``view`` as in
+    # 2.5.4 (Maxim, on QA 27.10) - status, the review override, comments.
+    moved = await client.post(f"/api/pdp/{member_plan.id}/status", json={"status_code": "cancelled"}, headers=head.h)
+    assert moved.status_code == 403 and moved.json()["code"] == "pdp_status_change_forbidden"
+    moved = await client.post(f"/api/pdp/{outsider_plan.id}/status", json={"status_code": "cancelled"}, headers=hr.h)
+    assert moved.status_code == 200, moved.text
+    ticked = await client.post(
+        f"/api/pdp/{in_review.id}/items/{in_review.items[0].id}/pass", json={"is_passed": True}, headers=hr.h
+    )
+    assert ticked.status_code == 200, ticked.text
+    commented = await client.post(f"/api/pdp/{member_plan.id}/comments", json={"text": "Hi"}, headers=hr.h)
+    assert commented.status_code == 201, commented.text
+    # Below that a plan is commented on by its owner and its reviewer: a
+    # manager at ``view`` reads a subtree plan they do not review as it is.
+    refused = await client.post(f"/api/pdp/{reviewed_by_hr.id}/comments", json={"text": "Hi"}, headers=head.h)
+    assert refused.status_code == 403 and refused.json()["code"] == "auth_insufficient_permissions"
+    owned = await client.post(f"/api/pdp/{reviewed_by_hr.id}/comments", json={"text": "On it"}, headers=member.h)
+    assert owned.status_code == 201, owned.text
+
+    # Below the three roles ``view`` is one's own two tabs, nothing more.
+    for code in ("recruiter", "hiring_manager", "employee"):
+        other = await _person(db, tenant, code, division_id=member.emp.division_id)
+        r = await client.get("/api/mass-exams", headers=other.h)
+        assert r.status_code == 403 and r.json()["code"] == "auth_insufficient_permissions", code
+        assert str(member_plan.id) not in await ids("/api/pdp", other.h), code
+        assert str(member_assessment.id) not in await ids("/api/assessments-grouped", other.h), code
 
 
 def test_the_urls_the_tabs_call_are_the_routers():

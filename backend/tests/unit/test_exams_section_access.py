@@ -1,10 +1,11 @@
 """HRP-823: the exams section on the tenant's access matrix.
 
-Two halves, one menu entry. ``manage`` runs the mass exams - and reads
-them, because a mass exam carries everyone's results and ``view`` is what
-the other half of the entry means here: the employee taking an exam of
-their own. That half stays outside the matrix, so closing the section
-never strands an assignment the e-mail already linked to.
+Two halves, one menu entry. ``manage`` runs the mass exams. ``view`` is
+the other half of the entry: the employee taking an exam of their own -
+and, for admin, hr and manager, the mass exams read-only (QA 26.10; see
+``test_section_list_tabs``). The taker's half stays outside the matrix, so
+closing the section never strands an assignment the e-mail already linked
+to.
 """
 
 import uuid
@@ -67,13 +68,14 @@ async def _save(auth_client, levels):
 
 
 async def test_the_default_matrix_keeps_todays_answers(client, db, tenant):
-    # admin and manager run the section, nobody else reaches the mass
-    # exams - the role lists the routes carried until HRP-823, now read
-    # off the matrix instead.
-    for code in ("admin", "manager"):
+    # admin and manager run the section; hr reads the mass exams at its
+    # default ``view`` (QA 26.10) and writes none; nobody else reaches them.
+    for code in ("admin", "manager", "hr"):
         r = await client.get("/api/mass-exams", headers=await _headers(db, tenant, code))
         assert r.status_code == 200, code
-    for code in ("hr", "recruiter", "employee"):
+    hr = await _headers(db, tenant, "hr")
+    assert (await client.post("/api/mass-exams", json={"title": "x"}, headers=hr)).status_code == 403
+    for code in ("recruiter", "hiring_manager", "employee"):
         r = await client.get("/api/mass-exams", headers=await _headers(db, tenant, code))
         assert r.status_code == 403, code
         assert r.json()["code"] == "auth_insufficient_permissions"
@@ -83,7 +85,8 @@ async def test_handing_the_section_to_hr_opens_the_menu_and_the_writes(
     auth_client, client, db, tenant
 ):
     hr = await _headers(db, tenant, "hr")
-    assert (await client.get("/api/mass-exams", headers=hr)).status_code == 403
+    refused = await client.post("/api/mass-exams", json={"title": "x"}, headers=hr)
+    assert refused.status_code == 403
 
     await _save(auth_client, {"exams": {"hr": "manage"}})
 
@@ -111,17 +114,20 @@ async def test_taking_the_section_away_closes_it_for_a_role_that_ran_it(
     assert "exams" not in (await client.get("/api/auth/me", headers=manager)).json()["sections"]
 
 
-async def test_view_reads_no_mass_exam_it_could_not_read_before(
+async def test_view_reads_the_mass_exams_only_for_admin_hr_and_manager(
     auth_client, client, db, tenant
 ):
-    # `view` is the taker's half of the entry, not a read-only manager:
-    # `employee` defaults to it, so letting it list the mass exams would
-    # hand the workspace's exams to everyone the day the section was
-    # translated.
-    await _save(auth_client, {"exams": {"manager": "view"}})
+    # `view` is the taker's half of the entry, and for admin, hr and
+    # manager a read-only manager besides (QA 26.10). `employee` defaults
+    # to `view`, so the rest of the roles still read no mass exam - handing
+    # them the workspace's exams is what the role ceiling here prevents.
+    await _save(auth_client, {"exams": dict.fromkeys(("manager", "employee"), "view")})
     manager = await _headers(db, tenant, "manager")
-    assert (await client.get("/api/mass-exams", headers=manager)).status_code == 403
-    assert (await client.get("/api/exams", headers=manager)).status_code == 200
+    assert (await client.get("/api/mass-exams", headers=manager)).status_code == 200
+    assert (await client.post("/api/mass-exams", json={"title": "x"}, headers=manager)).status_code == 403
+    employee = await _headers(db, tenant, "employee")
+    assert (await client.get("/api/mass-exams", headers=employee)).status_code == 403
+    assert (await client.get("/api/exams", headers=employee)).status_code == 200
 
 
 async def test_an_assigned_exam_outlives_a_closed_section(auth_client, client, db, tenant):

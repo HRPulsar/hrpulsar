@@ -41,7 +41,7 @@ from app.core.security import (
     hash_password,
 )
 from app.modules.signup.models import SignupRequest
-from app.modules.signup.schemas import SignupRequestCreate
+from app.modules.signup.schemas import SignupRequestFields
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ async def _find_by_email(db: AsyncSession, email: str) -> SignupRequest | None:
 
 async def create_signup_request(
     db: AsyncSession,
-    data: SignupRequestCreate,
+    data: SignupRequestFields,
     *,
     remote_ip: str | None,
     source: str = "landing",

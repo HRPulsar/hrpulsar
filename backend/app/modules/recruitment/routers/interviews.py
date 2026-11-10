@@ -68,6 +68,8 @@ router = APIRouter(tags=["recruitment"])
 )
 async def list_interviewers(
     candidate_vacancy_id: uuid.UUID | None = Query(None),
+    # HRP-1015: the interview being edited - its interviewers stay listed.
+    interview_id: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(runs_hiring),
     # HRP-830 REDO review: the list minus the fenced users of a candidacy
@@ -75,9 +77,10 @@ async def list_interviewers(
     _query_scope: None = Depends(candidate_vacancy_query_scope),
 ):
     """HRP-386: tenant users offered in the Interviewer(s) multi-select;
-    for a candidacy, without those the fence keeps off it (HRP-971)."""
+    for a candidacy, without those the fence keeps off it (HRP-971) unless
+    they already sit on ``interview_id`` (HRP-1015)."""
     return await service.list_interviewer_options(
-        db, current_user.tenant_id, candidate_vacancy_id
+        db, current_user.tenant_id, candidate_vacancy_id, interview_id
     )
 
 

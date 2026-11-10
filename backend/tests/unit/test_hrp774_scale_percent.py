@@ -11,6 +11,8 @@ now the only level → percent rule, and every surface reads it.
 
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 
 import pytest
@@ -28,7 +30,12 @@ from app.modules.recruitment.schemas import (
     VacancyCreate,
     VacancyProfileUpdate,
 )
-from app.modules.recruitment.score_normalization import scale_percent, weighted_levels
+from app.modules.recruitment.score_normalization import (
+    match_percent,
+    scale_percent,
+    weighted_levels,
+)
+from openpyxl import load_workbook
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # A deliberately non-linear scale: 3 is worth 60, not 66 and not 75.
@@ -79,7 +86,11 @@ _COMPETENCES = [
 
 
 async def _scored_candidate(
-    db: AsyncSession, tenant, user, scores: dict[str, int]
+    db: AsyncSession,
+    tenant,
+    user,
+    scores: dict[str, int],
+    competences: list[dict] = _COMPETENCES,
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     """Vacancy on the non-linear scale, one candidate, one scored round."""
     scale = await manager_assessment_service.create_scale(
@@ -103,7 +114,7 @@ async def _scored_candidate(
         db,
         tenant.id,
         vacancy_id,
-        VacancyProfileUpdate(profile_data={"competences": _COMPETENCES}),
+        VacancyProfileUpdate(profile_data={"competences": competences}),
     )
     await manager_assessment_service.set_vacancy_scale(
         db, tenant.id, user.id, vacancy_id, uuid.UUID(str(scale["id"]))
@@ -189,16 +200,18 @@ class TestOneFormulaAcrossTheScreens:
         matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)
         assert matrix["candidates"][0]["manager_percent"] == 80.0
 
-    async def test_unscored_competences_still_count_as_zero_coverage(
+    async def test_unscored_competences_drop_out_of_the_mean(
         self, db: AsyncSession, tenant, user
     ) -> None:
+        """HRP-774 REDO: % match is the mean over the rated competences only;
+        the totals row pairs it with "1/2 scored"."""
         vacancy_id, _cv_id, _round_id = await _scored_candidate(
             db, tenant, user, {"python-skills": 4}
         )
         matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)
         candidate = matrix["candidates"][0]
-        # (100 + 0) / 2 — the totals row pairs this with "1/2 scored".
-        assert candidate["manager_percent"] == 50.0
+        assert matrix["total_competences"] == 2
+        assert candidate["manager_percent"] == 100.0
         assert candidate["manager_scored_competences"] == 1
 
     async def test_ai_side_reads_the_same_weights(
@@ -232,3 +245,107 @@ class TestOneFormulaAcrossTheScreens:
             assert cell["ai_score"] == 2.5
             assert cell["ai_percent"] == 45.0
         assert candidate["ai_percent"] == 45.0
+
+
+class TestMatchPercent:
+    """HRP-774 REDO: % match is the mean over the rated competences only."""
+
+    def test_unrated_cells_drop_out(self) -> None:
+        assert match_percent([60.0, None, 100.0]) == 80.0
+
+    def test_rounds_to_one_decimal(self) -> None:
+        assert match_percent([33.0, 66.0, 66.0]) == 55.0
+        assert match_percent([33.0, 66.0, 100.0]) == 66.3
+
+    def test_nothing_rated_is_not_assessed_rather_than_zero(self) -> None:
+        assert match_percent([None, None]) is None
+        assert match_percent([]) is None
+
+
+_THREE = [
+    *_COMPETENCES,
+    {"id": "system-design", "name": "System design", "group": "Hard"},
+]
+
+
+def _export_total(content: bytes, fmt: str) -> object:
+    if fmt == "csv":
+        rows = [r for r in csv.reader(io.StringIO(content.decode("utf-8-sig"))) if r]
+    else:
+        ws = load_workbook(io.BytesIO(content))["Canvas"]
+        rows = [
+            [c.value for c in r]
+            for r in ws.iter_rows(min_row=4)
+            if any(c.value is not None for c in r)
+        ]
+    assert rows[0][-1] == "Total"
+    assert len(rows) == 2, rows
+    return rows[1][-1]
+
+
+@pytest.mark.usefixtures("db")
+class TestRatedOnlyAcrossTheSurfaces:
+    """HRP-774 REDO: a profile of three, two of them rated (3 -> 60 and
+    4 -> 100 on this scale). Every surface prints (60 + 100) / 2 = 80, not
+    the old (60 + 100 + 0) / 3 = 53.3, with "2 of 3" beside it."""
+
+    async def test_matrix_candidates_column_and_round_header(
+        self, db: AsyncSession, tenant, user
+    ) -> None:
+        vacancy_id, _cv_id, round_id = await _scored_candidate(
+            db, tenant, user, {"python-skills": 3, "communication": 4}, _THREE
+        )
+        # Compact and full-screen canvas both render this payload.
+        matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)
+        candidate = matrix["candidates"][0]
+        assert matrix["total_competences"] == 3
+        assert candidate["manager_scored_competences"] == 2
+        assert candidate["manager_percent"] == 80.0
+
+        rows, _total = await service.list_vacancy_candidates_enriched(
+            db, tenant.id, vacancy_id
+        )
+        assert rows[0]["manager_percent"] == 80.0
+
+        # The round header already averaged the rated scores only: 3.5 -> 80.
+        header = await manager_assessment_service.round_aggregate(
+            db, tenant.id, round_id
+        )
+        assert header["average"] == 3.5
+        assert header["average_weight"] == 80.0
+
+    @pytest.mark.parametrize("fmt", ["csv", "xlsx"])
+    async def test_canvas_export_total(
+        self, auth_client, db: AsyncSession, tenant, user, fmt: str
+    ) -> None:
+        vacancy_id, _cv_id, _round_id = await _scored_candidate(
+            db, tenant, user, {"python-skills": 3, "communication": 4}, _THREE
+        )
+        await db.commit()
+        res = await auth_client.get(
+            f"/api/recruitment/vacancies/{vacancy_id}/assessment-matrix/"
+            f"export.{fmt}?view=manager&scale=percent"
+        )
+        assert res.status_code == 200, res.text
+        assert _export_total(res.content, fmt) == "80.0%"
+
+    @pytest.mark.parametrize("fmt", ["csv", "xlsx"])
+    async def test_nothing_rated_reads_not_assessed_everywhere(
+        self, auth_client, db: AsyncSession, tenant, user, fmt: str
+    ) -> None:
+        vacancy_id, _cv_id, _round_id = await _scored_candidate(
+            db, tenant, user, {}, _THREE
+        )
+        await db.commit()
+        matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)
+        assert matrix["candidates"][0]["manager_percent"] is None
+        rows, _total = await service.list_vacancy_candidates_enriched(
+            db, tenant.id, vacancy_id
+        )
+        assert rows[0]["manager_percent"] is None
+        res = await auth_client.get(
+            f"/api/recruitment/vacancies/{vacancy_id}/assessment-matrix/"
+            f"export.{fmt}?view=manager&scale=percent"
+        )
+        assert res.status_code == 200, res.text
+        assert _export_total(res.content, fmt) == "—"

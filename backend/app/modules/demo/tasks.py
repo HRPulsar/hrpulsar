@@ -28,7 +28,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import create_engine, delete, func, or_, select
+from sqlalchemy import ColumnElement, create_engine, delete, func, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -37,8 +37,15 @@ from app.core.celery_app import celery
 from app.models import Person
 from app.modules.company.models import Tenant
 from app.modules.recruitment.models import Candidate
+from app.modules.signup.models import SignupRequest
 
 logger = logging.getLogger(__name__)
+
+# HRP-1161: how long a pending "keep my demo data" signup holds its
+# sandbox past the usual TTL. A moderator who has not decided by then
+# gets a fresh empty workspace on approve (``_convert_demo_tenant``
+# finds no sandbox and falls back).
+KEEP_DATA_HOLD = timedelta(days=7)
 
 _engine: Engine | None = None
 
@@ -93,6 +100,34 @@ def _purge_tenant_s3_assets(tenant_id: str) -> None:
             continue
 
 
+def held_for_pending_signup(now: datetime) -> ColumnElement[bool]:
+    """True for a demo tenant a visitor asked us to keep (HRP-1161).
+
+    A ``keep_demo_data`` signup still waiting for email verify or
+    moderation, touched within ``KEEP_DATA_HOLD``, holds the sandbox: the
+    card promised the data survives until a moderator decides. A
+    rejection or the hold running out lets the next tick delete it.
+    ``expires_at`` is left alone, so once its TTL is over the held
+    sandbox stays out of the ``demo_max_concurrent_sessions`` count and
+    its tokens expire as usual.
+
+    Measured from ``updated_at``, not ``created_at``: a repeat save from a
+    newer sandbox reuses the visitor's pending row and only repoints it
+    (``create_signup_request``), so the row's age says nothing about when
+    this sandbox was attached.
+    """
+    return (
+        select(SignupRequest.id)
+        .where(
+            SignupRequest.demo_tenant_id_snapshot == Tenant.id,
+            SignupRequest.keep_demo_data.is_(True),
+            SignupRequest.status.in_(("pending_email_verify", "pending_moderation")),
+            SignupRequest.updated_at > now - KEEP_DATA_HOLD,
+        )
+        .exists()
+    )
+
+
 def _expired_demo_tenant_ids(db: Session, now: datetime) -> list:
     inactivity_cutoff = now - timedelta(
         seconds=settings.demo_inactivity_ttl_seconds
@@ -109,6 +144,7 @@ def _expired_demo_tenant_ids(db: Session, now: datetime) -> list:
             func.coalesce(Tenant.last_active_at, Tenant.created_at)
             < inactivity_cutoff,
         ),
+        ~held_for_pending_signup(now),
     )
     return list(db.execute(stmt).scalars().all())
 

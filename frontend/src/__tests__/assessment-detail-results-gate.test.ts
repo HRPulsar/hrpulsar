@@ -21,9 +21,9 @@ describe("Assessment detail — Results visibility (HRP-243)", () => {
     expect(SOURCE).toMatch(/p\.role === "self" && p\.user_id === currentUser\.id/);
   });
 
-  it("uses isPrivileged for whoever runs assessments (HRP-826: the section level)", () => {
-    expect(SOURCE).toMatch(/const isPrivileged = canManage;/);
-    expect(SOURCE).toContain('const canManage = canManageSection("assessments");');
+  it("uses isPrivileged for whoever reads the section's list (HRP-826, QA 27.10)", () => {
+    expect(SOURCE).toMatch(/const isPrivileged = canViewDetailedResults;/);
+    expect(SOURCE).toContain('const canViewDetailedResults = readsSectionList("assessments");');
   });
 
   it("requires Done status for the self participant case", () => {

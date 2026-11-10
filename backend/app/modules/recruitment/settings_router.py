@@ -334,6 +334,21 @@ async def update_transcription_provider(
     return settings_service.transcription_provider_to_read(cfg)
 
 
+@router.post("/recruitment/settings/transcription-providers/{config_id}/test")
+@invitations_limiter.limit("10/minute")
+async def probe_transcription_provider(
+    request: Request,
+    config_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """HRP-986: the LLM probe's twin - the provider's cheapest authenticated
+    call on this row's own key/server, ``{"status": "ok"}`` or a code."""
+    return await settings_service.probe_transcription_provider(
+        db, current_user.tenant_id, config_id
+    )
+
+
 @router.delete(
     "/recruitment/settings/transcription-providers/{config_id}",
     status_code=204,

@@ -3,11 +3,14 @@
 // W6 (§5.9): open a hire need for one step straight from its Coverage
 // row, without a detour through the To do tab. Three routes, one call -
 // the same create_hire_need the tab uses, which already pre-fills the
-// draft vacancy with the step's competences.
+// draft vacancy with the step's competences. HRP-801 (QA 23.10, e): the
+// To do tab opens the same window for one row or for its selection - one
+// component, the title says which.
 //
-// All three land a draft vacancy in Recruitment. "Agency" only labels the
-// need and changes the copy today; routing agency work elsewhere is not
-// part of this wave. Publishing the vacancy stays a recruiter's action.
+// All three land a draft vacancy in Recruitment. "Look inside first" also
+// puts it on the talent market, when the draft has a library competence to
+// match on; "Agency" marks the draft's title. Publishing stays a
+// recruiter's action.
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
@@ -40,30 +43,36 @@ const BODY: Record<Route, { label: "hire" | "agency"; internal_search_allowed: b
 
 export function HireFromStepDialog({
   containerId,
-  stepId,
-  title,
+  steps,
   onClose,
   onCreated,
 }: {
   containerId: string;
-  stepId: string;
-  title: string;
+  /** One step from its row, or the To do tab's selection. */
+  steps: { id: string; title: string }[];
   onClose: () => void;
   onCreated: () => void;
 }) {
   const t = useTranslations("coverage");
   const [route, setRoute] = useState<Route>("internal_first");
   const [saving, setSaving] = useState(false);
+  const one = steps.length === 1;
 
   async function submit() {
     setSaving(true);
     try {
-      await workApi.createHireNeed(containerId, {
-        step_ids: [stepId],
+      const need = await workApi.createHireNeed(containerId, {
+        step_ids: steps.map((s) => s.id),
         label: BODY[route].label,
         internal_search_allowed: BODY[route].internal_search_allowed,
       });
-      toast.success(t("hireNeedCreated"));
+      // The talent market needs a library competence on the draft; without
+      // one the vacancy stays in Recruitment and says so, not silently.
+      if (route === "internal_first" && !need.talent_card_id) {
+        toast.warning(t("hireNeedNotOnTalentMarket"));
+      } else {
+        toast.success(t("hireNeedCreated"));
+      }
       onCreated();
       onClose();
     } catch (err) {
@@ -76,8 +85,10 @@ export function HireFromStepDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent data-testid="coverage-modal-hire">
         <DialogHeader>
-          <DialogTitle>{t("hireFromStepTitle", { title })}</DialogTitle>
-          <DialogDescription>{t("hireFromStepText")}</DialogDescription>
+          <DialogTitle>
+            {one ? t("hireFromStepTitle", { title: steps[0].title }) : t("hireFromStepsTitle")}
+          </DialogTitle>
+          <DialogDescription>{t(one ? "hireFromStepText" : "hireFromStepsText")}</DialogDescription>
         </DialogHeader>
         <RadioGroup
           value={route}

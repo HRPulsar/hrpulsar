@@ -1084,21 +1084,54 @@ async def _hire_need_of_step(
         )
         .order_by(WorkHireNeed.created_at.desc(), WorkHireNeed.id.desc())
     )
+    needs = rows.scalars().all()
+    cards = await live_talent_cards(db, tenant_id, {n.vacancy_id for n in needs})
     out: dict[str, dict[str, Any]] = {}
-    for need in rows.scalars().all():
+    for need in needs:
         for step_id in need.step_ids:
             out.setdefault(
                 str(step_id),
-                {"id": need.id, "vacancy_id": need.vacancy_id, "label": need.label},
+                {
+                    "id": need.id,
+                    "vacancy_id": need.vacancy_id,
+                    "label": need.label,
+                    # Not None: the query keeps needs with a vacancy only.
+                    "talent_card_id": cards.get(need.vacancy_id),  # type: ignore[arg-type]
+                },
             )
     return out
+
+
+async def live_talent_cards(
+    db: AsyncSession, tenant_id: uuid.UUID, vacancy_ids: set[uuid.UUID | None]
+) -> dict[uuid.UUID, uuid.UUID]:
+    """vacancy id → its talent-market twin (HRP-801), only while the card
+    exists: a card deleted in the talent market leaves ``talent_card_id``
+    behind - ``vacancy_service._linked_card_id``'s rule, as one join."""
+    from app.modules.recruitment.models import Vacancy
+    from app.modules.talent_market.models import TalentCard
+
+    ids = [v for v in vacancy_ids if v is not None]
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(Vacancy.id, TalentCard.id)
+        .join(
+            TalentCard,
+            and_(
+                TalentCard.id == Vacancy.talent_card_id,
+                TalentCard.tenant_id == tenant_id,
+            ),
+        )
+        .where(Vacancy.tenant_id == tenant_id, Vacancy.id.in_(ids))
+    )
+    return dict(rows.tuples().all())
 
 
 def redact_people(
     result: dict[str, Any],
     *,
     visible: set[uuid.UUID] | None,
-    reveal_leave: bool,
 ) -> dict[str, Any]:
     """The coverage as one reader may see it.
 
@@ -1108,14 +1141,10 @@ def redact_people(
     verdict stays; an assignee stays named - the company made that choice,
     no assessment did - but without the capabilities they lack.
 
-    ``reveal_leave`` is ``manage`` on the section (HRP-1020): the rule the
-    owner and the people list follow, so leave reads the same on every
-    Coverage path."""
+    A person's status is not redacted: leave shows to every reader of the
+    section, ``view`` as ``manage`` (HRP-1020 REDO, QA 30.10) - the gate keeps
+    ``none`` out of Coverage altogether."""
     for row in result["steps"]:
-        if not reveal_leave:
-            for key in ("human", "accountable"):
-                if row.get(key) is not None:
-                    row[key] = _without_leave(row[key])
         human = row["human"]
         if visible is None or human is None or human["employee_id"] in visible:
             continue
@@ -1125,15 +1154,6 @@ def redact_people(
             row["human"] = None
             row["human_backup"] = False
     return result
-
-
-def _without_leave(person: dict[str, Any]) -> dict[str, Any]:
-    """Leave is HR data the directory withholds (HRP-623): a reader who does
-    not manage the section sees the person at work. Gone stays gone - the
-    step cannot be done by them either way."""
-    if person.get("status") == "on_leave":
-        return {**person, "status": "active"}
-    return person
 
 
 def gap_kind(row: dict[str, Any]) -> str | None:

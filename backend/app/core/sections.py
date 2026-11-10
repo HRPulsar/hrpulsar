@@ -354,6 +354,11 @@ SHARED_READS: frozenset[str] = frozenset(
         # itself answers whoever opens roles or invitations. Writing a
         # role stays gated.
         "/api/roles",
+        # HRP-801: "Based on {process}" on a vacancy and its talent card.
+        # Each route carries that section's own guard; closing Coverage to
+        # a role must not drop the line from the pages it still sees.
+        "/api/work/origin/vacancies/{vacancy_id}",
+        "/api/work/origin/talent-cards/{card_id}",
     }
 )
 

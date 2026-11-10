@@ -90,23 +90,25 @@ async def test_a_raised_role_runs_only_its_own_scope(
     assert foreign not in _ids(await client.get("/api/assessments", headers=recruiter))
 
 
-async def test_a_manager_lowered_to_view_stops_running_assessments(
+async def test_a_manager_lowered_to_view_reads_and_runs_nothing(
     auth_client, client, db, tenant, assessment_statuses, assessment_types
 ):
-    # "Sees drafts and results" was "admin-level or manager"; the manager
-    # role is the level now, the admin tier stays.
+    # "Sees drafts and results" is reading the section's list: ``manage``,
+    # or ``view`` for admin, hr and manager, read-only (QA 27.10). Running
+    # assessments stays ``manage``.
     manager, emp = await _person(db, tenant, "manager")
     aid = (await _assessment_for(client, manager, emp)).json()["id"]
     assert aid in _ids(await client.get("/api/assessments", headers=manager))
 
     await _save(auth_client, levels={"assessments": {"manager": "view"}})
 
-    assert aid not in _ids(await client.get("/api/assessments", headers=manager))
+    assert aid in _ids(await client.get("/api/assessments", headers=manager))
+    detailed = await client.get(f"/api/assessments/{aid}/detailed-results", headers=manager)
+    assert detailed.json().get("code") != GATE, detailed.text
     for method, path, body in (
         ("post", "/api/assessments", {"employee_id": str(emp.id), "type_code": "self"}),
         ("patch", f"/api/assessments/{aid}", {"title": "Mine now"}),
         ("post", f"/api/assessments/{aid}/status", {"status_code": "active"}),
-        ("get", f"/api/assessments/{aid}/detailed-results", None),
         ("get", f"/api/assessments/{aid}/external-reviewers", None),
         ("get", "/api/assessments/criteria/specializations", None),
         ("post", "/api/assessment-groups", {"employee_ids": [str(emp.id)], "type_code": "self"}),

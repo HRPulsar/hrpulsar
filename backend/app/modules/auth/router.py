@@ -143,6 +143,12 @@ router = APIRouter(tags=["auth"])
 async def register(
     request: Request, data: RegisterRequest, db: AsyncSession = Depends(get_db)
 ):
+    # SaaS onboards only through the moderated request-access funnel
+    # (signup module); this endpoint would create a workspace past it.
+    # Guarded here, not in service.register: dev_auto_register seeds the
+    # SaaS E2E run through the service.
+    if settings.deployment_mode == "saas":
+        raise AppError("signup_disabled", status.HTTP_403_FORBIDDEN)
     return await service.register(
         db, data, request_locale=resolve_locale_from_request(request)
     )

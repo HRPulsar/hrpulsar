@@ -68,6 +68,7 @@ import {
   RequiredSpecializationsBlock,
 } from "@/components/talent-market/requirement-blocks";
 import { MatchDrawer } from "@/components/talent-market/match-drawer";
+import { HireNeedOriginLine } from "@/components/coverage/hire-need-origin";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { inlineEditKeys, useInlineEdit } from "@/hooks/use-inline-edit";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -1150,6 +1151,8 @@ export default function TalentCardDetailPage() {
                 )}
               </div>
             )}
+            {/* HRP-801: and the Coverage process behind that vacancy. */}
+            <HireNeedOriginLine talentCardId={card.id} />
             {/* HRP-178: terminal cards (Completed / Cancelled) drop the
               Dates row from Details — the status-specific date below
               already carries the timestamp. Active cards (Draft /

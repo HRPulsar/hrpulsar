@@ -409,6 +409,10 @@ class GapHireNeed(BaseModel):
     id: uuid.UUID
     vacancy_id: uuid.UUID | None
     label: GapLabel
+    # HRP-801 (QA 23.10, b): the vacancy's talent-market twin while it still
+    # exists - "look inside first" lands there. Read live, so a twin posted
+    # later from the vacancy is followed too.
+    talent_card_id: uuid.UUID | None = None
 
 
 class CoverageAgent(BaseModel):
@@ -618,6 +622,20 @@ class HireNeedRead(BaseModel):
     label: GapLabel
     created_by_id: uuid.UUID | None
     created_at: datetime
+    # HRP-801: set when "look inside first" also put the draft on the talent
+    # market; None when it stayed in Recruitment.
+    talent_card_id: uuid.UUID | None = None
+
+
+class HireNeedOrigin(BaseModel):
+    """HRP-801 (QA 23.10): the process or project a vacancy, or its talent
+    card, was opened from. ``can_open`` - the reader may open its coverage;
+    otherwise the title is shown as text."""
+
+    container_id: uuid.UUID
+    type: ContainerType
+    title: str
+    can_open: bool
 
 
 # --- Step skills (HRP-760) ---------------------------------------------------

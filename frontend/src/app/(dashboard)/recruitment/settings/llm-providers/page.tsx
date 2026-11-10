@@ -8,9 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, KeyRound, PlugZap, Plus, Save, Trash2 } from "lucide-react";
+import { Loader2, KeyRound, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
+import { ProviderTestButton } from "@/components/recruitment/provider-test-button";
 import { RequireRole } from "@/components/require-role";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 
@@ -85,7 +86,6 @@ export default function LLMProvidersPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
-  const [testingId, setTestingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({
     provider: "anthropic",
     model: "claude-sonnet-5",
@@ -158,20 +158,6 @@ export default function LLMProvidersPage() {
       toast.error(err instanceof Error ? err.message : t("toastGenericError"));
     } finally {
       setSavingId(null);
-    }
-  }
-
-  // One tiny call through this row's own key/server/model (HRP-986); the
-  // backend answers ok or a localized reason.
-  async function handleTest(p: Provider) {
-    setTestingId(p.id);
-    try {
-      await api.post(`/recruitment/settings/llm-providers/${p.id}/test`);
-      toast.success(t("llmTestOk"));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("toastGenericError"));
-    } finally {
-      setTestingId(null);
     }
   }
 
@@ -359,20 +345,12 @@ export default function LLMProvidersPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleTest(p)}
-                    disabled={testingId === p.id}
-                    data-testid={`llm-btn-test-${p.id}`}
-                  >
-                    {testingId === p.id ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <PlugZap className="size-3.5" />
-                    )}
-                    {t("llmTestButton")}
-                  </Button>
+                  {/* One tiny call through this row's own key/server/model. */}
+                  <ProviderTestButton
+                    url={`/recruitment/settings/llm-providers/${p.id}/test`}
+                    okMessage={t("llmTestOk")}
+                    testId={`llm-btn-test-${p.id}`}
+                  />
                   <Button
                     size="sm"
                     variant="ghost"

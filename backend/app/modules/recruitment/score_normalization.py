@@ -121,3 +121,20 @@ def scale_percent(
         if v0 <= x <= v1:
             return w1 if v1 == v0 else w0 + (w1 - w0) * (x - v0) / (v1 - v0)
     return None  # pragma: no cover — the scan above always brackets ``x``
+
+
+def match_percent(cell_percents: Iterable[float | None]) -> float | None:
+    """A candidate's % match: the mean "% of scale" over the rated cells only.
+
+    HRP-774 REDO: the one rule behind every % match the product prints -
+    the vacancy's Candidates column, the Compact and full-screen canvas,
+    the canvas CSV/XLSX export and the vacancy report workbook. ``None``
+    marks a competence nobody rated (or the AI did not cover) and drops out
+    instead of counting as 0; the "scored/total" counter next to the
+    percent says how many it covers. Nothing rated at all is ``None`` (the
+    "not assessed" dash), never 0 %. Rounded to one decimal.
+    """
+    rated = [p for p in cell_percents if p is not None]
+    if not rated:
+        return None
+    return round(sum(rated) / len(rated), 1)

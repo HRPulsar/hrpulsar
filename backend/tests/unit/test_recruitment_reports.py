@@ -1186,9 +1186,9 @@ class TestGenerateReportTask:
         ws = load_workbook(io.BytesIO(captured["bytes"]))["Summary"]
         assert ws.cell(row=6, column=6).value == "Recommendation"
         assert ws.cell(row=7, column=6).value == "Additional check"
-        # The displayed score keeps the full denominator — coverage is
-        # visible to the reader even though it no longer drives the verdict.
-        assert ws.cell(row=7, column=3).value == "5.0/20.0 (25.0%)"
+        # HRP-774 REDO: the percent covers the rated competence only, and
+        # "1/4 rated" keeps the coverage visible to the reader.
+        assert ws.cell(row=7, column=3).value == "5.0/5.0 (100.0%; 1/4 rated)"
 
     async def test_full_analysis_without_a_resume_is_not_full_data(
         self, db: AsyncSession, tenant, user, monkeypatch
@@ -1815,6 +1815,122 @@ class TestGenerateReportTask:
         on_screen = matrix["candidates"][0]
         assert on_screen["manager_percent"] == 80.0
         assert on_screen["ai_percent"] == 45.0
+
+    async def test_unrated_competences_drop_out_of_the_workbook_percent(
+        self, db: AsyncSession, tenant, user, monkeypatch
+    ) -> None:
+        """HRP-774 REDO — three competences, the manager and the AI rated two
+        of them: Summary and the Matrix TOTAL print (100 + 60) / 2 = 80 % and
+        45 % over "2/3 rated", the same numbers as the screen; a candidate
+        nobody rated reads as a dash, never 0 %."""
+        from app.modules.recruitment import manager_assessment_service
+        from app.modules.recruitment.manager_assessment_schemas import (
+            ScaleCreate,
+            ScaleLevelIn,
+        )
+        from app.modules.recruitment.models import (
+            AIAnalysisRun,
+            HumanAssessment,
+            VacancyProfile,
+        )
+
+        scale = await manager_assessment_service.create_scale(
+            db,
+            tenant.id,
+            user.id,
+            ScaleCreate(
+                name="Weighted",
+                is_default=True,
+                levels=[
+                    ScaleLevelIn(value=v, label=f"L{v}", weight=w)
+                    for v, w in ((1, 0), (2, 30), (3, 60), (4, 100))
+                ],
+            ),
+        )
+        vac = await _make_vacancy(db, tenant, user, title="Partial")
+        vacancy_id = uuid.UUID(str(vac["id"]))
+        await manager_assessment_service.set_vacancy_scale(
+            db, tenant.id, user.id, vacancy_id, uuid.UUID(str(scale["id"]))
+        )
+        comp_ids = [uuid.uuid4() for _ in range(3)]
+        db.add(
+            VacancyProfile(
+                tenant_id=tenant.id,
+                vacancy_id=vacancy_id,
+                profile_data={
+                    "competences": [
+                        {"id": str(cid), "name": f"Competence {n}"}
+                        for n, cid in enumerate(comp_ids, start=1)
+                    ]
+                },
+            )
+        )
+        cv_ids = []
+        for _ in range(2):
+            cand = await _make_candidate(db, tenant, user)
+            cv = await service.attach_candidate(
+                db,
+                tenant.id,
+                user.id,
+                CandidateVacancyCreate(
+                    candidate_id=uuid.UUID(str(cand["id"])), vacancy_id=vacancy_id
+                ),
+            )
+            cv_ids.append(uuid.UUID(str(cv["id"])))
+        rated_cv, unrated_cv = cv_ids
+        for cid, score in zip(comp_ids[:2], (5.0, 3.75), strict=True):
+            db.add(
+                HumanAssessment(
+                    tenant_id=tenant.id,
+                    candidate_vacancy_id=rated_cv,
+                    competence_id=cid,
+                    evaluator_id=user.id,
+                    score=score,
+                )
+            )
+        db.add(
+            AIAnalysisRun(
+                tenant_id=tenant.id,
+                candidate_vacancy_id=rated_cv,
+                mode="resume_only",
+                status="completed",
+                analysis_data={
+                    "mode": "resume_only",
+                    "competence_assessments": [
+                        {"competence_id": str(cid), "score": 0.5, "status": "assessed"}
+                        for cid in comp_ids[:2]
+                    ],
+                },
+            )
+        )
+        await db.flush()
+
+        wb = await self._run_report(
+            db,
+            tenant,
+            user,
+            vacancy_id,
+            ["summary_ranking", "competency_matrix"],
+            monkeypatch,
+        )
+        summary = wb["Summary"]
+        by_manager = {summary.cell(row=r, column=3).value for r in (7, 8)}
+        assert by_manager == {"7.0/8.0 (80.0%; 2/3 rated)", "—"}
+        ai_texts = {summary.cell(row=r, column=4).value for r in (7, 8)}
+        assert "5.0/8.0 (45.0%; 2/3 rated)" in ai_texts
+        matrix_ws = wb["Matrix"]
+        totals = [
+            str(matrix_ws.cell(row=matrix_ws.max_row, column=col).value)
+            for col in range(4, matrix_ws.max_column + 1)
+        ]
+        assert any(t.endswith('&"/8 (80.0%)"') for t in totals), totals
+        assert any(t.endswith('&"/8 (45.0%)"') for t in totals), totals
+
+        matrix = await service.get_assessment_matrix(db, tenant.id, vacancy_id)
+        by_cv = {c["candidate_vacancy_id"]: c for c in matrix["candidates"]}
+        assert by_cv[rated_cv]["manager_percent"] == 80.0
+        assert by_cv[rated_cv]["ai_percent"] == 45.0
+        assert by_cv[unrated_cv]["manager_percent"] is None
 
     async def test_recommendation_keeps_its_pre_hrp774_footing(
         self, db: AsyncSession, tenant, user, monkeypatch

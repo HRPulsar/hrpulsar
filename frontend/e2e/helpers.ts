@@ -197,6 +197,28 @@ export async function setAuthTokens(
   );
 }
 
+/**
+ * Mirror lib/demo.ts::persistDemoSession for a sandbox started through
+ * `POST /demo/start`, with its "Where to start" window (HRP-1159) already
+ * answered "I'll look around": the modal would cover the page the spec
+ * drives. The window's answer is stored per tenant, read off the token.
+ */
+export async function setDemoSession(page: Page, accessToken: string) {
+  await page.goto("/login");
+  await page.evaluate((token: string) => {
+    localStorage.setItem("access_token", token);
+    localStorage.removeItem("refresh_token");
+    document.cookie = "has_token=1; path=/; SameSite=Lax";
+    document.cookie = "demo_session=1; path=/; SameSite=Lax";
+    const claims = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const { tenant_id } = JSON.parse(atob(claims));
+    localStorage.setItem(
+      `demo_guide:${tenant_id}`,
+      JSON.stringify({ path: "skip", step: 0, anchor: null, back: null }),
+    );
+  }, accessToken);
+}
+
 // ---------------------------------------------------------------------------
 // API data helpers — create test entities via API (faster than UI)
 // ---------------------------------------------------------------------------

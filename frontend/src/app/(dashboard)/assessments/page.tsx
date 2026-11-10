@@ -126,12 +126,13 @@ function statusSummaryText(
 }
 
 export default function AssessmentsPage() {
-  // HRP-826 (QA 13.10): `manage` adds the section's own tab; every level
+  // HRP-826 (QA 13.10): the section's own tab shows at `manage`, and
+  // read-only at `view` for admin, hr and manager (QA 27.10); every level
   // gets the assessments of one's own and the questionnaires still to fill.
   const tTabs = useTranslations("sectionTabs");
-  const { canManageSection } = usePermissions();
-  const manage = canManageSection("assessments");
-  const tab = useSectionTab(manage ? ["all", "mine", "todo"] : ["mine", "todo"]);
+  const { readsSectionList } = usePermissions();
+  const lists = readsSectionList("assessments");
+  const tab = useSectionTab(lists ? ["all", "mine", "todo"] : ["mine", "todo"]);
   const todo = useTodoCount("/assessments-grouped/todo-count", tab);
   return (
     <AssessmentsList
@@ -143,7 +144,7 @@ export default function AssessmentsPage() {
           testIdPrefix="assessments"
           active={tab}
           tabs={[
-            ...(manage ? [{ id: "all", label: tTabs("assessmentsAll") }] : []),
+            ...(lists ? [{ id: "all", label: tTabs("assessmentsAll") }] : []),
             { id: "mine", label: tTabs("assessmentsMine") },
             { id: "todo", label: todo.label },
           ]}

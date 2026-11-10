@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { KeyRound, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { RecruitmentBreadcrumbs } from "@/components/recruitment";
+import { ProviderTestButton } from "@/components/recruitment/provider-test-button";
 import { RequireRole } from "@/components/require-role";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 
@@ -324,16 +325,25 @@ export default function STTProvidersPage() {
                 <div className="flex items-center gap-1">
                   {/* The API refuses any edit of an unavailable row; delete only. */}
                   {isAvailable(p.provider) ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleToggle(p)}
-                      disabled={savingId === p.id}
-                      data-testid={`stt-btn-toggle-${p.id}`}
-                    >
-                      <Save className="size-3.5" />
-                      {p.is_active ? t("actionDisable") : t("actionEnable")}
-                    </Button>
+                    <>
+                      {/* The provider's cheapest authenticated call, on this
+                          row's own key or server (HRP-986). */}
+                      <ProviderTestButton
+                        url={`/recruitment/settings/transcription-providers/${p.id}/test`}
+                        okMessage={t("sttTestOk")}
+                        testId={`stt-btn-test-${p.id}`}
+                      />
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleToggle(p)}
+                        disabled={savingId === p.id}
+                        data-testid={`stt-btn-toggle-${p.id}`}
+                      >
+                        <Save className="size-3.5" />
+                        {p.is_active ? t("actionDisable") : t("actionEnable")}
+                      </Button>
+                    </>
                   ) : null}
                   <Button
                     size="sm"

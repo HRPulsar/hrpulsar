@@ -36,7 +36,7 @@ from app.modules.company.models import Tenant
 from app.modules.demo.seed import clone_seed_into_demo_tenant
 from app.modules.demo.seed_i18n import seed_locale, translate
 from app.modules.demo.turnstile import verify_turnstile_token
-from app.modules.demo.utils import DEMO_ADMIN_EMAIL_DOMAIN
+from app.modules.demo.utils import DEMO_ADMIN_EMAIL_DOMAIN, demo_persona_for_email
 
 logger = logging.getLogger(__name__)
 
@@ -553,30 +553,18 @@ async def end_demo_session(db: AsyncSession, *, tenant_id: uuid.UUID) -> None:
     """The visitor ends their own sandbox (explicit logout, HRP-897).
 
     Hands the tenant to ``purge_expired_demo_tenants`` by pulling
-    ``expires_at`` to now — the demo slot frees up on the next purge tick
-    instead of after the full TTL — and bumps ``token_version`` so every
-    demo-scoped token (both personas) dies immediately rather than with the
-    purge. A pending "keep my demo data" signup keeps its sandbox: the
-    visitor asked us to hold on to that data, and logging out right after
-    the form is the natural thing to do.
+    ``expires_at`` to now — the demo slot frees up at once instead of
+    after the full TTL — and bumps ``token_version`` so every demo-scoped
+    token (both personas) dies immediately rather than with the purge.
+    A pending "keep my demo data" signup still keeps the sandbox: the
+    purge's hold predicate spares it (HRP-1161), so the slot need not.
     """
-    from app.modules.signup.models import SignupRequest
-
     tenant = await db.get(Tenant, tenant_id)
     if tenant is None or not tenant.is_demo:
         raise AppError("demo_end_requires_demo_session", status.HTTP_403_FORBIDDEN)
 
     now = datetime.now(UTC)
-    keep = await db.scalar(
-        select(SignupRequest.id)
-        .where(
-            SignupRequest.demo_tenant_id_snapshot == tenant_id,
-            SignupRequest.keep_demo_data.is_(True),
-            SignupRequest.status.in_(("pending_email_verify", "pending_moderation")),
-        )
-        .limit(1)
-    )
-    if keep is None and (tenant.expires_at is None or tenant.expires_at > now):
+    if tenant.expires_at is None or tenant.expires_at > now:
         tenant.expires_at = now
     await db.execute(
         update(User)
@@ -594,3 +582,88 @@ async def end_demo_session(db: AsyncSession, *, tenant_id: uuid.UUID) -> None:
         await publish("demo.session_ended", {"tenant_id": str(tenant_id)})
     except Exception:  # noqa: BLE001
         logger.exception("demo: failed to publish demo.session_ended event")
+
+
+# The bar a result must not clear to be a growth zone when the assessment
+# sets none — the frontend's ``assessmentBar()`` default, which is what
+# decides whether the assessment page offers "Create development plan".
+_GROWTH_ZONE_BAR = 75
+
+
+async def find_guide_assessment(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> uuid.UUID | None:
+    """The completed assessment the plan and assessment routes open (HRP-1159).
+
+    Done, with at least one growth zone (a scored result at or under the
+    bar, the assessment page's rule) and no development plan built from it
+    yet — so its page offers "Create development plan". The most recently
+    finished one wins, id breaking ties, so every call in a sandbox
+    answers alike. ``None`` when the seed has none left (the visitor
+    already planned them all).
+    """
+    from app.modules.assessment.models import (
+        PDP,
+        Assessment,
+        AssessmentResult,
+        AssessmentStatus,
+    )
+
+    has_growth_zone = (
+        select(AssessmentResult.id)
+        .where(
+            AssessmentResult.assessment_id == Assessment.id,
+            AssessmentResult.percent.is_not(None),
+            AssessmentResult.percent
+            <= func.coalesce(Assessment.passing_score, _GROWTH_ZONE_BAR),
+        )
+        .exists()
+    )
+    has_plan = select(PDP.id).where(PDP.assessment_id == Assessment.id).exists()
+    return (
+        await db.execute(
+            select(Assessment.id)
+            .join(AssessmentStatus, AssessmentStatus.id == Assessment.status_id)
+            .where(
+                Assessment.tenant_id == tenant_id,
+                AssessmentStatus.code == "done",
+                has_growth_zone,
+                ~has_plan,
+            )
+            .order_by(Assessment.finished_at.desc().nulls_last(), Assessment.id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def choose_demo_guide(
+    db: AsyncSession, *, user: User, path: str
+) -> uuid.UUID | None:
+    """Record the start route the visitor picked in a sandbox (HRP-1159).
+
+    Admin persona of a live demo only — the employee persona never sees
+    "Where to start". The choice is not stored here: it goes out as
+    ``demo.guide_chosen`` (best-effort, like ``demo.session_started``) for
+    the EE watcher to keep next to the session. Picking again overwrites.
+    Returns the plan and assessment routes' starting assessment.
+    """
+    tenant = await db.get(Tenant, user.tenant_id)
+    now = datetime.now(UTC)
+    if (
+        tenant is None
+        or not tenant.is_demo
+        or (tenant.expires_at is not None and tenant.expires_at <= now)
+        or demo_persona_for_email(user.email) != "admin"
+    ):
+        raise AppError("demo_guide_requires_demo_admin", status.HTTP_403_FORBIDDEN)
+
+    try:
+        from app.core.events import publish
+
+        await publish("demo.guide_chosen", {"tenant_id": str(tenant.id), "path": path})
+    except Exception:  # noqa: BLE001
+        logger.exception("demo: failed to publish demo.guide_chosen event")
+
+    if path not in ("pdp", "assessment"):
+        return None
+    return await find_guide_assessment(db, tenant.id)

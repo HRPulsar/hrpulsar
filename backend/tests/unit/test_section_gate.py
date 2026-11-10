@@ -106,6 +106,10 @@ def test_the_gate_skips_exactly_the_known_token_links_and_personal_paths():
         "/api/employees/{employee_id}",
         # HRP-831: the role list behind the invitation form.
         "/api/roles",
+        # HRP-801: the process behind a vacancy or a talent card, under
+        # that section's own guard.
+        "/api/work/origin/vacancies/{vacancy_id}",
+        "/api/work/origin/talent-cards/{card_id}",
     }
 
 

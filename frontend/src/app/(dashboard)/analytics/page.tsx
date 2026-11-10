@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
 import { gradeTitleLabel } from "@/lib/reference-labels";
 import { usePermissions } from "@/hooks/use-permissions";
+import { type HrScope, hrMetricHintKey, hrScope } from "@/lib/hr-metric-hints";
 
 interface AssessmentStats {
   total: number;
@@ -104,8 +105,11 @@ function HrMetricValue({ value, unit }: { value: number | null; unit: string }) 
   );
 }
 
-function HrMetrics() {
+function HrMetrics({ scope, onScope }: { scope: HrScope; onScope: (scope: HrScope) => void }) {
   const t = useTranslations("analytics");
+  // HRP-822 (QA 22.10): Turnover is admin, hr and manager's whatever the
+  // matrix says - the API leaves it out below them too.
+  const { canViewHrData } = usePermissions();
   const [days, setDays] = useState(90);
   // null = nothing loaded for this period yet; the block stays blank rather
   // than flashing "nothing could be calculated" on first paint.
@@ -115,9 +119,11 @@ function HrMetrics() {
   useEffect(() => {
     let current = true;
     api
-      .get<{ metrics: HrMetric[] }>(`/analytics/hr-metrics?days=${days}`)
+      .get<{ metrics: HrMetric[]; scope?: string }>(`/analytics/hr-metrics?days=${days}`)
       .then((r) => {
-        if (current) setMetrics(r.metrics);
+        if (!current) return;
+        setMetrics(r.metrics.filter((m) => canViewHrData || m.code !== "turnover"));
+        onScope(hrScope(r.scope));
       })
       .catch(() => {
         if (current) setFailed(true);
@@ -125,7 +131,7 @@ function HrMetrics() {
     return () => {
       current = false;
     };
-  }, [days]);
+  }, [days, canViewHrData, onScope]);
 
   function changePeriod(value: number) {
     if (value === days) return;
@@ -183,7 +189,7 @@ function HrMetrics() {
                     </span>
                   )}
                   <Hint
-                    text={t(`hrMetricWhy_${m.code}`)}
+                    text={t(hrMetricHintKey(m.code, scope))}
                     title={t(`hrMetric_${m.code}`)}
                     data-testid={`analytics-hr-metric-${m.code}-hint`}
                   />
@@ -222,7 +228,7 @@ function HrMetrics() {
               {index > 0 && ", "}
               {t(`hrMetric_${m.code}`)}
               <Hint
-                text={t(`hrMetricWhy_${m.code}`)}
+                text={t(hrMetricHintKey(m.code, scope))}
                 title={t(`hrMetric_${m.code}`)}
                 data-testid={`analytics-hr-metric-${m.code}-hint`}
               />
@@ -248,6 +254,7 @@ export default function AnalyticsPage() {
   const [divisionMatrix, setDivisionMatrix] = useState<DivisionMatrix | null>(null);
   const [benchmark, setBenchmark] = useState<CompensationBenchmark | null>(null);
   const [loading, setLoading] = useState(true);
+  const [scope, setScope] = useState<HrScope>("workspace");
 
   useEffect(() => {
     Promise.all([
@@ -287,14 +294,20 @@ export default function AnalyticsPage() {
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
           <Hint
-            text={tSections("analytics.hint")}
+            text={tSections(
+              scope === "own"
+                ? "analytics.hintOwn"
+                : scope === "subtree"
+                  ? "analytics.hintSubtree"
+                  : "analytics.hint",
+            )}
             data-testid="analytics-hint-title"
           />
         </div>
         <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
       </div>
 
-      <HrMetrics />
+      <HrMetrics scope={scope} onScope={setScope} />
 
       <h2 className="text-lg font-semibold">{t("hrMetricActionStats")}</h2>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

@@ -66,33 +66,35 @@ interface EmployeeExamRow {
 
 export default function ExamsPage() {
   // HRP-823: which half of the section this is comes from the tenant's
-  // matrix, not from the role list. `manage` adds the mass exams' tab; every
+  // matrix, not from the role list. The mass exams' tab shows at `manage`,
+  // and read-only at `view` for admin, hr and manager (QA 26.10); every
   // level - `none` included, since the page is outside the section gate -
   // gets one's own exams and the ones still to take (QA 13.10), which an
   // assignment e-mail links to directly.
   const tTabs = useTranslations("sectionTabs");
-  const { canManageSection } = usePermissions();
+  const { canManageSection, readsSectionList } = usePermissions();
   const manage = canManageSection("exams");
-  const tab = useSectionTab(manage ? ["all", "mine", "todo"] : ["mine", "todo"]);
+  const lists = readsSectionList("exams");
+  const tab = useSectionTab(lists ? ["all", "mine", "todo"] : ["mine", "todo"]);
   const todo = useTodoCount("/exams/todo-count", tab);
   const tabs = (
     <SectionTabs
       testIdPrefix="exams"
       active={tab}
       tabs={[
-        ...(manage ? [{ id: "all", label: tTabs("examsAll") }] : []),
+        ...(lists ? [{ id: "all", label: tTabs("examsAll") }] : []),
         { id: "mine", label: tTabs("examsMine") },
         { id: "todo", label: todo.label },
       ]}
     />
   );
   if (tab === "all") {
-    return <ManagerExamsView tabs={tabs} />;
+    return <ManagerExamsView tabs={tabs} manage={manage} />;
   }
   return <EmployeeExamsView key={tab} tab={tab} tabs={tabs} onChanged={todo.reload} />;
 }
 
-function ManagerExamsView({ tabs }: { tabs: ReactNode }) {
+function ManagerExamsView({ tabs, manage }: { tabs: ReactNode; manage: boolean }) {
   const t = useTranslations("exams");
   const tSections = useTranslations("sections");
   const tc = useTranslations("common");
@@ -203,10 +205,12 @@ function ManagerExamsView({ tabs }: { tabs: ReactNode }) {
             {t("examsCount", { count: filtered.length })}
           </p>
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="exams-btn-create">
-          <Plus className="mr-1 h-4 w-4" />
-          {t("createExam")}
-        </Button>
+        {manage && (
+          <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="exams-btn-create">
+            <Plus className="mr-1 h-4 w-4" />
+            {t("createExam")}
+          </Button>
+        )}
       </div>
 
       {tabs}
@@ -293,7 +297,7 @@ function ManagerExamsView({ tabs }: { tabs: ReactNode }) {
                         : "—"}
                     </TableCell>
                     <TableCell>
-                      {!isTerminalStatus(e.status) && (
+                      {manage && !isTerminalStatus(e.status) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" />} data-testid={`exams-row-${e.id}-actions`}>
                             <MoreHorizontal className="h-4 w-4" />

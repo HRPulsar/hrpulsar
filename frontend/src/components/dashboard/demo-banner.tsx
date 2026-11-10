@@ -6,8 +6,15 @@ import { MessageCircle } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
-import { api } from "@/lib/api";
-import { OPEN_DEMO_FEEDBACK_EVENT } from "@/components/dashboard/demo-feedback-popup";
+import { api, MUTATION_EVENT, type MutationEventDetail } from "@/lib/api";
+import {
+  DEMO_SAVED_PREFIX,
+  DEMO_SAVE_SKIPPED_PREFIX,
+  DEMO_SAVE_STATE_EVENT,
+  OPEN_DEMO_FEEDBACK_EVENT,
+  demoFlag,
+  setDemoFlag,
+} from "@/components/dashboard/demo-feedback-popup";
 import { useAuth } from "@/context/auth-context";
 import { useIsSaas } from "@/hooks/use-is-saas";
 import { saveDemoAccess, switchDemoPersona, type DemoPersona } from "@/lib/demo";
@@ -17,6 +24,11 @@ import { TURNSTILE_FAILED_MESSAGE_KEY, useTurnstileGate } from "@/lib/turnstile"
 import type { CreditBalance } from "@/lib/types";
 
 const REFRESH_EVERY_MS = 60_000;
+
+/** The visitor changed something in the sandbox (HRP-1160 (a)) — any
+ * successful mutation but the demo's own plumbing. */
+const DEMO_MUTATED_PREFIX = "demo_mutated:";
+const PLUMBING_PATH = /^\/(demo|feedback|auth)(\/|$)/;
 
 /** Time left in the session; null once it is over (the caller swaps in
  * the expired banner) or when the tenant carries no expiry. */
@@ -38,14 +50,15 @@ function SaveAccessModal({
   onSaved: () => void;
 }) {
   // Starts empty: the session user is a seeded demo persona, and its name
-  // would be sent as the visitor's own.
+  // would be sent as the visitor's own. Keeping the data is the point of
+  // saving from inside the sandbox, so it starts checked (HRP-1160).
   const [form, setForm] = useState({
     email: "",
     first_name: "",
     last_name: "",
     company_name: "",
     role: "",
-    keep_demo_data: false,
+    keep_demo_data: true,
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +77,7 @@ function SaveAccessModal({
     try {
       await saveDemoAccess({
         email: form.email,
-        first_name: form.first_name,
+        first_name: form.first_name.trim() || null,
         last_name: form.last_name || null,
         company_name: form.company_name || null,
         role: form.role || null,
@@ -139,8 +152,7 @@ function SaveAccessModal({
             />
             <input
               type="text"
-              required
-              placeholder={t("demoFirstNamePlaceholder")}
+              placeholder={t("demoFirstNameOptionalPlaceholder")}
               value={form.first_name}
               onChange={(e) =>
                 setForm((prev) => ({ ...prev, first_name: e.target.value }))
@@ -259,8 +271,14 @@ export function DemoBanner() {
   const [credits, setCredits] = useState<CreditBalance | null>(null);
   const [tick, setTick] = useState(0);
   const [showModal, setShowModal] = useState(false);
+  const [flags, setFlags] = useState({
+    saved: false,
+    mutated: false,
+    skipped: false,
+  });
 
   const isDemo = !!user?.tenant_is_demo;
+  const tenantId = user?.tenant_id ?? "";
   const expiresAt = user?.tenant_expires_at
     ? new Date(user.tenant_expires_at)
     : null;
@@ -276,6 +294,33 @@ export function DemoBanner() {
       .then(setCredits)
       .catch(() => {});
   }, [isDemo, isSaas]);
+
+  // HRP-1160: the reminder needs both a change worth keeping (a) and a
+  // save block closed without an email (b) — so it never asks while an
+  // open card is asking after the same action — and no email left yet.
+  useEffect(() => {
+    if (!isDemo || !tenantId) return;
+    const sync = () =>
+      setFlags({
+        saved: demoFlag(DEMO_SAVED_PREFIX, tenantId),
+        mutated: demoFlag(DEMO_MUTATED_PREFIX, tenantId),
+        skipped: demoFlag(DEMO_SAVE_SKIPPED_PREFIX, tenantId),
+      });
+    const onMutation = (e: Event) => {
+      const { path } = (e as CustomEvent<MutationEventDetail>).detail;
+      if (PLUMBING_PATH.test(path) || demoFlag(DEMO_MUTATED_PREFIX, tenantId)) {
+        return;
+      }
+      setDemoFlag(DEMO_MUTATED_PREFIX, tenantId);
+    };
+    sync();
+    window.addEventListener(DEMO_SAVE_STATE_EVENT, sync);
+    window.addEventListener(MUTATION_EVENT, onMutation);
+    return () => {
+      window.removeEventListener(DEMO_SAVE_STATE_EVENT, sync);
+      window.removeEventListener(MUTATION_EVENT, onMutation);
+    };
+  }, [isDemo, tenantId]);
 
   useEffect(() => {
     if (!isDemo) return;
@@ -309,6 +354,7 @@ export function DemoBanner() {
   const creditsLeft = credits ? (credits.available ?? credits.total) : null;
   // tick is consumed only to trigger a re-render so remainingParts recomputes.
   void tick;
+  const reminder = flags.mutated && flags.skipped && !flags.saved;
 
   if (expired) {
     return (
@@ -317,14 +363,24 @@ export function DemoBanner() {
         data-testid="demo-banner-expired"
       >
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-3">
-          <span>{t("demoExpired")}</span>
-          <button
-            type="button"
-            onClick={() => router.push("/register")}
-            className="rounded-md bg-amber-300 px-4 py-1.5 text-sm font-semibold text-zinc-950 hover:bg-amber-200"
-          >
-            {t("demoCreateAccount")}
-          </button>
+          {flags.saved ? (
+            // The data waits for the moderator (HRP-1161): an account
+            // made now would start empty, so no "Create account" here.
+            <span data-testid="demo-banner-expired-saved">
+              {t("demoExpiredSaved")}
+            </span>
+          ) : (
+            <>
+              <span>{t("demoExpired")}</span>
+              <button
+                type="button"
+                onClick={() => router.push("/register")}
+                className="rounded-md bg-amber-300 px-4 py-1.5 text-sm font-semibold text-zinc-950 hover:bg-amber-200"
+              >
+                {t("demoCreateAccount")}
+              </button>
+            </>
+          )}
         </div>
       </div>
     );
@@ -341,8 +397,13 @@ export function DemoBanner() {
             <span className="font-semibold uppercase tracking-wider text-brand">
               {t("demoSessionLabel")}
             </span>
-            <span data-testid="demo-banner-remaining">
-              {t("demoRemaining", { time: remaining })}
+            <span
+              data-testid="demo-banner-remaining"
+              className={cn(reminder && "font-semibold")}
+            >
+              {reminder
+                ? t("demoResetsSaveWork", { time: remaining })
+                : t("demoRemaining", { time: remaining })}
             </span>
             {creditsLeft !== null && (
               <span data-testid="demo-banner-credits">
@@ -358,13 +419,19 @@ export function DemoBanner() {
               <PersonaSwitch activePersona={user.demo_persona} />
             )}
             {/* Filled, unlike "Save access": visitors who wanted a call
-                restarted the demo looking for a way to reach us. */}
+                restarted the demo looking for a way to reach us. Once
+                there is unsaved work to lose, saving takes the fill. */}
             <button
               type="button"
               onClick={() =>
                 window.dispatchEvent(new Event(OPEN_DEMO_FEEDBACK_EVENT))
               }
-              className="flex items-center gap-1.5 rounded-md bg-brand px-3 py-1 text-sm font-semibold text-white hover:bg-brand-hover"
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1 text-sm",
+                reminder
+                  ? "border border-foreground/30 hover:bg-foreground/10"
+                  : "bg-brand font-semibold text-white hover:bg-brand-hover",
+              )}
               data-testid="demo-banner-talk"
             >
               <MessageCircle className="h-4 w-4" />
@@ -373,7 +440,12 @@ export function DemoBanner() {
             <button
               type="button"
               onClick={() => setShowModal(true)}
-              className="rounded-md border border-foreground/30 px-3 py-1 text-sm hover:bg-foreground/10"
+              className={cn(
+                "rounded-md px-3 py-1 text-sm",
+                reminder
+                  ? "bg-brand font-semibold text-white hover:bg-brand-hover"
+                  : "border border-foreground/30 hover:bg-foreground/10",
+              )}
               data-testid="demo-banner-save-access"
             >
               {t("demoSaveAccess")}
@@ -384,9 +456,9 @@ export function DemoBanner() {
       {showModal && (
         <SaveAccessModal
           onClose={() => setShowModal(false)}
-          onSaved={() => {
-            /* leave modal open to show the confirmation card */
-          }}
+          // The modal stays open on its confirmation; the flag hides the
+          // reminder and the cards' save block.
+          onSaved={() => setDemoFlag(DEMO_SAVED_PREFIX, tenantId)}
         />
       )}
     </>

@@ -125,10 +125,11 @@ class TestApplyMatrixAggregates:
         )
         assert total == 1
         row = items[0]
-        # (5+4) / (5 * 4) * 100 = 45%
-        assert row["manager_percent"] == 45.0
-        # (5+2) / (5 * 4) * 100 = 35%
-        assert row["ai_percent"] == 35.0
+        # HRP-774 REDO: the mean over the rated competences only, the two
+        # unscored ones drop out - (100 + 80) / 2 on this linear 0..5 scale.
+        assert row["manager_percent"] == 90.0
+        # (100 + 40) / 2 - no AI row for the other two either.
+        assert row["ai_percent"] == 70.0
         assert row["divergence_count"] == 1
         # HRP-507 REDO: the chip's denominator is the whole profile.
         assert row["profile_competence_count"] == len(_COMPETENCE_SEED)

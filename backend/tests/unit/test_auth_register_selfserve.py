@@ -67,6 +67,36 @@ class TestSignupDisabled:
         assert settings.signup_enabled is True
 
 
+class TestSaasClosesPublicRegister:
+    """SaaS onboards only through the moderated request-access funnel; an
+    open POST /api/auth/register let anyone create a workspace past it."""
+
+    async def test_saas_rejects_public_register(
+        self, client, db: AsyncSession, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "deployment_mode", "saas")
+        data = _register_data()
+
+        resp = await client.post("/api/auth/register", json=data.model_dump())
+
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["code"] == "signup_disabled"
+        found = await db.execute(select(User).where(User.email == data.email))
+        assert found.scalar_one_or_none() is None
+
+    async def test_saas_dev_auto_register_still_creates(
+        self, db: AsyncSession, admin_role, monkeypatch
+    ):
+        # The SaaS E2E run seeds every account through service.register
+        # (dev_auto_register) — the guard belongs to the public endpoint only.
+        monkeypatch.setattr(settings, "deployment_mode", "saas")
+        data = _register_data()
+
+        await service.register(db, data)
+
+        assert (await _get_user(db, data.email)).tenant_id is not None
+
+
 class TestAutoVerify:
     async def test_onprem_without_provider_auto_verifies(
         self, db: AsyncSession, admin_role, monkeypatch

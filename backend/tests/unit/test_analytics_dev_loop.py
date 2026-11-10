@@ -441,8 +441,8 @@ async def test_developing_tile_follows_the_lists_draft_rule(
         db.add_all([_pdp(tenant, emp, status=s) for s in _OPEN_PLAN_STATUSES])
     await db.commit()
 
-    async def tile_and_list() -> tuple[int, int]:
-        h = _headers(head)
+    async def tile_and_list(who=head) -> tuple[int, int]:
+        h = _headers(who)
         loop = (await client.get("/api/analytics/dev-loop", headers=h)).json()
         plans = (await client.get("/api/pdp", headers=h)).json()
         listed = [p for p in plans if p["status"] in _OPEN_PLAN_STATUSES]
@@ -451,9 +451,20 @@ async def test_developing_tile_follows_the_lists_draft_rule(
     # Runs plans: drafts on both sides — 2 people x 5 open statuses.
     await _save(auth_client, levels={"development": {"manager": "manage"}})
     assert await tile_and_list() == (10, 10)
-    # Reads plans only: the list drops the two drafts, and so does the tile.
+    # Reads the section's list at ``view`` (QA 27.10): drafts on both sides still.
     await _save(auth_client, levels={"development": {"manager": "view"}})
-    assert await tile_and_list() == (8, 8)
+    assert await tile_and_list() == (10, 10)
+    # A recruiter deputising for the same division reads the same people at
+    # ``view`` but not the section's list: the list drops the two drafts,
+    # and so does the tile.
+    deputy = await _user(db, tenant, "recruiter")
+    deputy_emp = Employee(user_id=deputy.id, tenant_id=tenant.id, hire_date=date(2024, 1, 1))
+    db.add(deputy_emp)
+    await db.commit()
+    division.deputy_manager_id = deputy_emp.id
+    await db.commit()
+    await _save(auth_client, levels={"analytics": {"recruiter": "view"}})
+    assert await tile_and_list(deputy) == (8, 8)
 
 
 @pytest.mark.asyncio

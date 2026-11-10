@@ -516,38 +516,50 @@ this assessee theirs?
 Below `manage` the section is the respondent's: answering is a `POST`, so
 the section is self-guarded - the gate closes `none`, the routes that run
 it ask for `manage` themselves. What a reader sees follows one rule,
-"an admin-level role or `manage`" (it was "admin-level or the `manager`
-role"): drafts and results of the assessments in their read scope, on the
-list, the grouped list, the detail, the results, a mass assessment and its
-analytics. Anyone else sees the active assessments in their read scope or
-that they take part in, without results - except their own, once done;
-a mass assessment's analytics count only their own row for them. Taking
-part is the other arm of the read scope, so whoever holds `manage` - a
-raised role that heads no division included - reads drafts and results of
-the assessments they take part in, as the `manager` role always did. `hr` at the default `view`
-keeps that read through the admin tier; a `manager` lowered to `view`
-loses drafts, results and every authoring route. The SPA follows the same
-level: the section's pages, detailed results and the employee card's
-"Create assessment" read `manage`, the card's Assessments tab needs the
-section open. The card's development-plan entry reads `manage` on
-`development` - each entry in that menu asks its own section.
+"reads the section's list" (`reads_section` in `core/access_scope.py`,
+QA 27.10 on HRP-826): `manage`, or `view` for `admin`, `hr` and `manager`,
+read-only. That reader gets drafts and results of the assessments in their
+read scope, on the list, the grouped list, the detail, the results, the
+detailed results, a mass assessment and its analytics. Anyone else sees the
+active assessments in their read scope or that they take part in, without
+results - except their own, once done; a mass assessment's analytics count
+only their own row for them. Taking part is the other arm of the read
+scope, so whoever holds `manage` - a raised role that heads no division
+included - reads drafts and results of the assessments they take part in,
+as the `manager` role always did. `hr` at the default `view` and a
+`manager` lowered to `view` read all of that and run nothing: every
+authoring route, calibration included, asks `manage`. The SPA follows the
+same rule: the section's own tab, the results and the detailed results read
+`readsSectionList`, the authoring buttons and the employee card's "Create
+assessment" read `manage`, the card's Assessments tab needs the section
+open. The card's development-plan entry reads `manage` on `development` -
+each entry in that menu asks its own section.
 
 For development plans the first question is the tenant's matrix since
 HRP-825: every authoring route - create, edit, items, materials, reorder,
 version restore and `POST /ai/suggest-pdp` - asks `manage` on
 `development` in place of the admin/manager role list; the table above is
-still the fence behind it. Two role checks became "an admin-level role or
-`manage`": who sees other people's draft plans in `GET /pdp`, and who
-walks the full status graph in `POST /pdp/{id}/status` (anyone else may
-only submit their own plan for review). `hr` holds `view` by default and
-keeps both through the admin tier, but authors nothing until raised. The
-item toggle's review-time override stays admin-level only, as before.
-`/analytics/pdp` (plan statistics, read by the analytics page) lost its
-`admin`/`manager`/`hr` role list: the level opens it and the read scope
-sizes it, so an employee counts their own plans - without the drafts
-`GET /pdp` leaves out for anyone who does not run plans. The plan page
-offers status actions on the same rule: the full graph to the admin tier
-and `manage`, the owner's submit to the owner, nothing to anyone else.
+still the fence behind it. Who sees other people's draft plans in
+`GET /pdp` is the reader of the section's list - `manage`, or `view` for
+`admin`, `hr` and `manager` (QA 27.10). Who walks the full status graph in
+`POST /pdp/{id}/status` stays "an admin-level role or `manage`"
+(`runs_plans`; anyone else may only submit their own plan for review).
+`hr` holds `view` by default and keeps driving plans through the admin
+tier - status, the item toggle's review-time override (admin-level only, as
+before) - exactly as in 2.5.4 (Maxim's decision on QA 27.10), but authors
+nothing until raised. Commenting follows the same rule
+(`POST /pdp/{id}/comments`): whoever runs plans comments, anyone else only
+on a plan they own or review. Read-only at `view` is the section's list and
+the plan's authoring - create, edit, items, materials; a `manager` lowered
+to `view` reads their subtree's plans and drives none, commenting only on
+the ones they own or review. `/analytics/pdp` (plan
+statistics, read by the analytics page) lost its `admin`/`manager`/`hr`
+role list: the level opens it and the read scope sizes it, so an employee
+counts their own plans - without the drafts `GET /pdp` leaves out for
+anyone who does not read the section's list. The plan page offers status
+actions on the same rule: the full graph to the admin tier and `manage`,
+the owner's submit to the owner, nothing to anyone else; the comment box to
+whoever runs plans, the owner and the reviewer.
 
 The assessee arrives either in the body (`POST /assessments`, `POST /pdp`) or
 behind a path id, so the guards live in `assessment/scope.py` and resolve the
@@ -612,9 +624,13 @@ apart (HRP-823). `manage` runs the section: writing a mass exam, its
 questions, pass marks and import, assigning employees, reading everyone's
 results. `admin` and `manager` hold it by default, the setting moves it.
 
-Reading a mass exam asks for `manage` too, not `view`, because a mass exam
-carries the workspace's results and `view` means something else on this
-section - the other audience. Everything under `/api/exams` is one
+Reading a mass exam - the list, one exam and its results - asks for
+`manage`, or `view` for `admin`, `hr` and `manager`, read-only (QA 26.10).
+`view` means something else for the other roles on this section - the
+other audience - and `employee` defaults to it, so they read no mass exam
+at any level below `manage`. Whose mass exams a reader sees is the same at
+both levels: the workspace's for the admin level, one's own for anyone
+else (see below). Everything under `/api/exams` is one
 employee taking an exam of their own: `questions`, `answer` and `finish`
 resolve the caller's own employee row and refuse anyone else (HRP-328),
 `review` adds whoever's read scope covers the taker, and the list answers
@@ -623,9 +639,10 @@ row (see "List tabs"). Those six are in `PERSONAL_PATHS`, so no level of
 the matrix closes them outright - the assignment e-mail links straight to
 `/exams`, and a section closed after the invitation went out must not
 strand it. The page behind that link follows: it is outside the
-front-end's section gate and renders the taker's own exams for anyone
-below `manage`; the mass exam's own page (`/exams/{id}`) asks for
-`manage`.
+front-end's section gate and renders the taker's own exams for everyone,
+with the mass exams' tab ahead of them for a reader of the list; the mass
+exam's own page (`/exams/{id}`) opens for that reader and offers its edits
+at `manage` only.
 
 Outside the matrix is not outside the setting, though. On `exams: none`
 the two routes that read more than one's own - the list and `review` -
@@ -699,6 +716,16 @@ HRP-822 closed the two it did not:
   Narrower than the employee scope beside it on purpose: that one adds the
   caller's own record, and a manager whose own card sits in the parent
   division must not read the parent's headcount to see themselves in it.
+
+`GET /analytics/hr-metrics` names the scope it computed over - `scope`:
+`workspace`, `subtree` or `own`, read off the same read scope - and the
+page's hints say the same (QA 22.10 on HRP-822): the section's own hint and
+those of At risk, Grade changes, Engagement and Time between grade changes
+speak of the whole company, of "your division and its sub-divisions" or of
+"your own data", so a hint never promises a wider picture than the numbers
+under it. Turnover is a ceiling by role instead: below `admin`, `hr` and
+`manager` the route leaves it out whatever the matrix hands the role, and
+the page with it.
 
 `/analytics/my-loop` and its summary are personal and stay outside the
 matrix. `/analytics/pdp` belongs to `development` (the registry's longest
@@ -864,11 +891,21 @@ editor can name as owner, rule or assignee - is the owner's and the managers',
 tenant-wide rather than directory-scoped, and carries only what the directory
 already shows plus `assignable`.
 
-Leave follows the section level, not the HR roles (HRP-1020): an assignee, an
-accountable or an owner on leave reads as on leave - and `assignable` as
-false - only to a caller with `manage` on `coverage`; anyone else sees them at
-work. Someone who left the company reads as gone to every reader (HRP-623,
+Leave shows at `view` as at `manage`, under any role (HRP-1020, QA 30.10): an
+assignee, an accountable or an owner on leave reads as on leave - and
+`assignable` as false - to every caller, since the gate keeps `none` out of
+Coverage altogether. Only the status is shared: who a row names stays as
+above. Someone who left the company reads as gone to every reader (HRP-623,
 HRP-959).
+
+`GET /api/work/origin/vacancies/{id}` and `GET /api/work/origin/talent-cards/{id}`
+(HRP-801) name the process a vacancy or its talent card was opened from. They
+are `SHARED_READS`: the Coverage gate does not apply, each carries the guard
+of the page it serves - the `recruitment` gate at `view` and the vacancy in the
+caller's recruitment scope, or the `talent-market` gate and the card detail's
+own visibility rule (a card the caller may not open answers as one with no
+origin). The title is a link (`can_open`) only for a caller whose Coverage level
+is not `none` and who reads that process.
 
 ## Recruitment (`/api/recruitment`, `/api/reports`, and its `/api/v1` routes)
 
@@ -1209,14 +1246,24 @@ assessment export".
 ### List tabs (HRP-823…826)
 
 The lists of exams, assessments, development plans and the talent market
-open in tabs (QA 13.10). The section's own tab is the list as it was and
-shows at `manage` only; the other two show at every level that opens the
-page and answer for the caller's own employee row (assessments: the
-caller as a participant) whatever their level or read scope - a division
-head holding `manage` sees only their own there, not their subtree's.
-`hr` sits at `view` on all four by default, so it reads only its own items
-on these pages until the tenant raises it to `manage` - the admin tier's
-read scope still answers the detail pages and the API without `tab`.
+open in tabs (QA 13.10). The section's own tab is the list as it was; the
+other two show at every level that opens the page and answer for the
+caller's own employee row (assessments: the caller as a participant)
+whatever their level or read scope - a division head holding `manage` sees
+only their own there, not their subtree's.
+
+Who sees the section's own tab (QA 26-27.10): on exams, assessments and
+development `manage`, and `view` for `admin`, `hr` and `manager` -
+read-only, and as wide as at `manage`: the workspace for `admin` and `hr`,
+a manager's subtree (exams: the mass exams they made). What it opens - a
+mass exam and its results, an assessment and its results, a plan - opens
+read-only too; every write there still asks `manage`. `recruiter`,
+`hiring_manager` and `employee` at `view` see only their own two tabs, and
+a link to the section's tab falls back to the first of them. On the talent
+market the board tab stays `manage` only. `hr` sits at `view` on all four
+by default, so out of the box it reads the three lists and authors none of
+them - it keeps driving development plans through the admin tier, as in
+2.5.4 (see "Assessments and development plans").
 
 | Section | Tab | `?tab=` | What it lists |
 |---|---|---|---|

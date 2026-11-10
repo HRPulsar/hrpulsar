@@ -203,13 +203,15 @@ export default function InterviewDetailPage() {
 
   useEffect(() => {
     // The interviewer picker is an edit control, and so is its list -
-    // without those the interview's vacancy is fenced from (HRP-971).
+    // without those the interview's vacancy is fenced from (HRP-971), except
+    // whoever already sits on this interview (HRP-1015).
     const cvId = interview?.candidate_vacancy_id;
-    if (!canEdit || !cvId) return;
+    const interviewId = interview?.id;
+    if (!canEdit || !cvId || !interviewId) return;
     let cancelled = false;
     api
       .get<InterviewerOption[]>(
-        `/recruitment/interviewers?candidate_vacancy_id=${cvId}`,
+        `/recruitment/interviewers?candidate_vacancy_id=${cvId}&interview_id=${interviewId}`,
       )
       .then((rows) => {
         if (!cancelled) setPeople(Array.isArray(rows) ? rows : []);
@@ -218,7 +220,7 @@ export default function InterviewDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [canEdit, interview?.candidate_vacancy_id]);
+  }, [canEdit, interview?.candidate_vacancy_id, interview?.id]);
 
   // Once we know the vacancy id, fetch its profile to label competence ids.
   useEffect(() => {

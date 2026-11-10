@@ -9,7 +9,8 @@ import { setClientCookie } from "./cookies";
 
 export interface DemoSaveAccessPayload {
   email: string;
-  first_name: string;
+  /** Optional since HRP-1161 — the demo card asks for an email only. */
+  first_name?: string | null;
   last_name?: string | null;
   company_name?: string | null;
   role?: string | null;
@@ -88,4 +89,17 @@ export async function switchDemoPersona(persona: DemoPersona): Promise<void> {
   setClientCookie("has_token", "1");
   setClientCookie("demo_session", "1");
   window.location.assign("/dashboard");
+}
+
+// --- Start routes of the sandbox (HRP-1159) ---
+
+export type DemoGuidePath = "coverage" | "pdp" | "assessment" | "skip";
+
+/** Record the route picked in "Where to start" (or "skip") — the demo
+ * funnel's guided/free split — and get the completed assessment the plan
+ * and assessment routes start from, when the sandbox still has one. */
+export async function chooseDemoGuide(
+  path: DemoGuidePath,
+): Promise<{ assessment_id: string | null }> {
+  return api.post<{ assessment_id: string | null }>("/demo/guide", { path });
 }

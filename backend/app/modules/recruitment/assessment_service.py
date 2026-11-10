@@ -54,6 +54,7 @@ from app.modules.recruitment.schemas import (
 from app.modules.recruitment.scope import refuse_fenced_assignees
 from app.modules.recruitment.score_normalization import (
     compute_normalized_ai_score,
+    match_percent,
     scale_percent,
     weighted_levels,
 )
@@ -1435,12 +1436,6 @@ def _normalize_ai_status(raw_status: str | None) -> str:
     return lowered
 
 
-def _percent(numerator: float, denominator: float) -> float | None:
-    if denominator <= 0:
-        return None
-    return round(numerator / denominator * 100, 1)
-
-
 def _evaluator_key(
     evaluator_id: uuid.UUID | None,
     invite_id: uuid.UUID | None,
@@ -1960,9 +1955,11 @@ async def get_assessment_matrix(
     * ``divergence`` — boolean; only ``True`` when both sides have a
       numeric score and ``abs(m - ai) >= tenant.divergence_threshold``.
 
-    Per-candidate aggregates follow the spec formula: the denominator is
-    ``max_score * (total_competences - not_covered_count)``; not-covered
-    competences only drop out of the AI % side, never the manager %.
+    Per-candidate ``manager_percent`` / ``ai_percent`` are
+    :func:`match_percent` over the cells' "% of scale" (HRP-774 REDO): the
+    mean over the rated cells only, on both sides; ``None`` when nothing
+    is rated. ``*_scored_competences`` against ``total_competences`` is the
+    counter the UI prints beside the figure.
 
     ``round_filter`` (HRP-510 REDO) is either a round-agnostic view —
     ``latest`` (default, the newest interview per candidate) or ``all``
@@ -2351,12 +2348,12 @@ async def get_assessment_matrix(
         name = candidate_display_name(cv.candidate, fallback="")
 
         cells: list[dict] = []
-        # HRP-774: the sums are percents of scale, not raw levels — each
-        # cell's level is converted by ``scale_percent`` (the scale's level
-        # weights), the same conversion the round header shows.
-        manager_percent_sum: float = 0.0
+        # HRP-774: each cell's level is converted by ``scale_percent`` (the
+        # scale's level weights), the same conversion the round header
+        # shows; the candidate's % match is ``match_percent`` over them.
+        manager_cell_percents: list[float | None] = []
         manager_scored_count: int = 0
-        ai_percent_sum: float = 0.0
+        ai_cell_percents: list[float | None] = []
         ai_scored_count: int = 0
         ai_not_covered_count: int = 0
         divergence_count: int = 0
@@ -2370,8 +2367,8 @@ async def get_assessment_matrix(
                     sum(e["score"] for e in human_entries) / len(human_entries), 2
                 )
                 manager_cell_percent = scale_percent(manager_score, scale_levels)
-                manager_percent_sum += manager_cell_percent or 0.0
                 manager_scored_count += 1
+            manager_cell_percents.append(manager_cell_percent)
 
             ai_entry = ai_index.get(cv.id, {}).get(comp_key)
             ai_score: float | None = None
@@ -2393,14 +2390,12 @@ async def get_assessment_matrix(
                 if rebased is not None:
                     ai_score = round(rebased, 2)
                     ai_cell_percent = scale_percent(ai_score, scale_levels)
-                    ai_percent_sum += ai_cell_percent or 0.0
                     ai_scored_count += 1
                 else:
-                    # Anything that is not a numeric ``ready`` score must
-                    # drop out of the AI denominator — otherwise a transient
-                    # ``failed`` cell or a ``ready`` row with NULL score
-                    # silently deflates the candidate's % match.
+                    # Anything that is not a numeric ``ready`` score stays
+                    # out of the AI % match, like an unrated manager cell.
                     ai_not_covered_count += 1
+            ai_cell_percents.append(ai_cell_percent)
 
             divergence = False
             if manager_score is not None and ai_score is not None:
@@ -2430,22 +2425,11 @@ async def get_assessment_matrix(
                 }
             )
 
-        # % match is the mean cell percent. The manager denominator covers
-        # every competence in the profile (no-score-yet counts as 0, the
-        # coverage-aware figure the totals row pairs with "scored/total");
-        # the AI denominator drops not_covered cells so a candidate the AI
-        # skipped on a couple of competences is not unfairly diluted.
-        manager_denominator = 100.0 * total_competences
-        ai_denominator = 100.0 * max(total_competences - ai_not_covered_count, 0)
-
-        manager_percent = (
-            _percent(manager_percent_sum, manager_denominator)
-            if manager_scored_count > 0
-            else None
-        )
-        ai_percent = (
-            _percent(ai_percent_sum, ai_denominator) if ai_scored_count > 0 else None
-        )
+        # HRP-774 REDO: % match is the mean over the rated cells only, for
+        # both halves - an unrated competence drops out instead of counting
+        # as 0; "scored/total" beside the figure says how many it covers.
+        manager_percent = match_percent(manager_cell_percents)
+        ai_percent = match_percent(ai_cell_percents)
 
         candidates_payload.append(
             {

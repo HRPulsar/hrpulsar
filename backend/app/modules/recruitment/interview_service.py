@@ -2165,14 +2165,19 @@ async def purge_expired_archived_interviews(
 
 
 async def list_interviewer_options(
-    db: AsyncSession, tenant_id: uuid.UUID, cv_id: uuid.UUID | None = None
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cv_id: uuid.UUID | None = None,
+    interview_id: uuid.UUID | None = None,
 ) -> list[dict]:
     """HRP-386: active tenant users offered in the Interviewer(s) picker.
 
     Deliberately wider than ``list_hiring_manager_options`` — anyone in
     the tenant can sit in an interview, including engineers without an
     admin-tier role. For a candidacy (``cv_id``) it leaves out whoever the
-    fence keeps off its vacancy (HRP-971).
+    fence keeps off its vacancy (HRP-971) - but only as someone to add:
+    the interviewers already on ``interview_id`` (an interview of that
+    candidacy) stay listed, so editing it shows them ticked (HRP-1015).
     """
 
     rows = (
@@ -2198,6 +2203,18 @@ async def list_interviewer_options(
         )
         if vacancy_id is not None:
             fenced = {u.id for u in await fenced_users(db, tenant_id, vacancy_id)}
+    if fenced and interview_id is not None:
+        interview = await db.scalar(
+            select(Interview)
+            .options(selectinload(Interview.interviewers))
+            .where(
+                Interview.id == interview_id,
+                Interview.tenant_id == tenant_id,
+                Interview.candidate_vacancy_id == cv_id,
+            )
+        )
+        if interview is not None:
+            fenced -= set(_interviewer_ids(interview))
     return [
         {
             "id": row.id,

@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 
-import { API_BASE, SAAS_E2E } from "./helpers";
+import { API_BASE, SAAS_E2E, setDemoSession } from "./helpers";
 
 /**
  * HRP-680 — the resume citation link, both ways.
@@ -65,14 +65,7 @@ test.describe("HRP-680 — resume citations link both ways", () => {
     expect(vacancies.length, "the candidate must sit on a vacancy").toBeGreaterThan(0);
     const vacancyId: string = vacancies[0].vacancy_id;
 
-    // Mirror lib/demo.ts::persistDemoSession — same dance as demo-persona.
-    await page.goto("/login");
-    await page.evaluate((token: string) => {
-      localStorage.setItem("access_token", token);
-      localStorage.removeItem("refresh_token");
-      document.cookie = "has_token=1; path=/; SameSite=Lax";
-      document.cookie = "demo_session=1; path=/; SameSite=Lax";
-    }, access_token);
+    await setDemoSession(page, access_token);
 
     await page.goto(
       `/recruitment/candidates/${candidateId}?vacancyId=${vacancyId}`,

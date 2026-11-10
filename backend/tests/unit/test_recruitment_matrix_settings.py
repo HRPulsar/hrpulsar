@@ -201,7 +201,7 @@ class TestAssessmentMatrixBasic:
         cv = ctx["cv_links"][0]
 
         # Manager scores: 5 / 4 on the first two competences, nothing on the
-        # remaining two. Denominator stays max_score * total_competences (=20).
+        # remaining two - HRP-774 REDO: those two drop out of the mean.
         for slug, score in [("python-skills", 5.0), ("communication", 4.0)]:
             await service.record_human_assessment(
                 db,
@@ -218,8 +218,8 @@ class TestAssessmentMatrixBasic:
             db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
         )
         cand = result["candidates"][0]
-        # (5+4) / (5*4) * 100 = 45%
-        assert cand["manager_percent"] == 45.0
+        # (100 + 80) / 2 = 90% on this linear 0..5 scale, not (5+4)/20 = 45%.
+        assert cand["manager_percent"] == 90.0
         assert cand["ai_percent"] is None
         assert cand["divergence_count"] == 0
         assert cand["manager_scored_competences"] == 2
@@ -233,8 +233,8 @@ class TestAssessmentMatrixBasic:
         )
         cv = ctx["cv_links"][0]
 
-        # AI scored 3/5 on the first two competences and explicitly skipped
-        # the next one. Denominator must therefore be max_score * (4 - 1) = 15.
+        # AI scored 3/5 on the first two competences, explicitly skipped the
+        # next one and has no row for the fourth: only the two scored count.
         # HRP-507: AIAssessment.score is stored on the canonical 0..1 scale
         # (HRP-274) and rebased onto the tenant scale on read, so 0.6 → 3.
         interview = Interview(
@@ -268,8 +268,8 @@ class TestAssessmentMatrixBasic:
             db, tenant.id, uuid.UUID(str(ctx["vacancy"]["id"]))
         )
         cand = result["candidates"][0]
-        # (3+3) / (5 * 3) * 100 = 40%, not 30% (which would use denom=20).
-        assert cand["ai_percent"] == 40.0
+        # HRP-774 REDO: (60 + 60) / 2 = 60%, not 40% (denom 3) or 30% (4).
+        assert cand["ai_percent"] == 60.0
         assert cand["ai_not_covered_competences"] == 1
         assert cand["ai_scored_competences"] == 2
 

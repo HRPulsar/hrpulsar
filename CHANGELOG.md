@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-10
+
+### Added
+- Demo: after creating a development plan or an assessment, breaking a process down or opening a hire need, a card asks one question about that object, once per kind (HRP-1158)
+- Demo: the feedback card offers to keep the sandbox data for an email, and the banner reminds a visitor with unsaved work to save it (HRP-1160)
+- Demo: a "Where to start" window offers three five-minute routes - Coverage, a development plan, an assessment - and a strip above the page walks the chosen one step by step (HRP-1159)
+- Recruitment: transcription providers get a Test connection button, like the LLM providers (HRP-986)
+
+### Changed
+- Demo: a sandbox with a pending save-access request is kept until a moderator decides, up to 7 days (HRP-1161)
+- Demo: saving access no longer asks for a name (HRP-1161)
+- Demo: the survey for visitors who only browse comes after one minute and no longer asks for contact details (HRP-1158)
+- Development plans: at View the plan list and plan editing are read-only; admins and HR keep moving plans through their statuses and commenting as before, a manager at View reads and comments only on the plans they own or review (HRP-825)
+
+### Fixed
+- Exams, assessments and development plans: at the View level admins, HR and division managers see the section's own tab again, read-only - the whole company for admins and HR, a manager's own exams and their division's assessments and plans (HRP-823, HRP-825, HRP-826)
+- Analytics: the hints say whose figures they are - the whole company, your division, or only your own data - and Turnover is shown to admins, HR and division managers only (HRP-822)
+- Assessments: the add-participant dialog no longer offers the External role, which the API rejected (HRP-1173)
+- Recruitment: step 2 of the "Add competences from the library" dialog keeps the size of step 1, shortens long competence names with an ellipsis and scrolls only the list (HRP-1087)
+- Recruitment: editing an interview lists its interviewers ticked, including one who has since become a candidate for the vacancy (HRP-1015)
+- Recruitment: a completed GDPR export has its file to download, and erasure and the link's expiry delete it, including exports made before this fix (HRP-989)
+- Recruitment: a candidate's % match averages only the competences actually rated, the same on the vacancy table, both canvases, the canvas export and the vacancy report (HRP-774)
+- Coverage: the "See what changes" preview of a regenerated breakdown shows a chevron that turns when it opens (HRP-949)
+- Coverage: generating all skills at once stops at the first out-of-credits answer in the demo sandbox as well (HRP-1172)
+- Coverage: an assignee, a checker or an owner on leave shows as on leave at the View level too, under any role (HRP-1020)
+- Coverage: hiring for a gap - one window for a step or a selection on the To do tab, "look inside first" lands on the talent market, agency work is marked in the vacancy title, a handed-over step links to its vacancy, and the vacancy and its talent card name the process they came from (HRP-801)
+
 ## [2.5.4] - 2026-10-23
 
 ### Added

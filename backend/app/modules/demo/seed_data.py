@@ -932,7 +932,7 @@ TOMAS_INTERVIEW_ANALYSIS: dict = {
         },
         {
             "competence_id": "postgres-advanced",
-            "score": 0.6,
+            "score": 0.5,
             "status": "assessed",
             "citations": _cite(
                 "I can read a query plan and spot a sequential scan.",
@@ -942,7 +942,7 @@ TOMAS_INTERVIEW_ANALYSIS: dict = {
         },
         {
             "competence_id": "system-design",
-            "score": 0.65,
+            "score": 0.55,
             "status": "assessed",
             "citations": _cite(
                 "Aggregate per merchant, apply the fee table, create the transfer, mark the settlement paid.",

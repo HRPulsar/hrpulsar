@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import type {
   CompetenceGroupTree,
@@ -118,6 +118,9 @@ export function VacancyCompetencesSection({
   // for each - the same two steps as the talent-market card's Required
   // competences (HRP-128), where these rows end up with that level.
   const [pickerStep, setPickerStep] = useState<1 | 2>(1);
+  // HRP-1087 (c): step 2 keeps the size the dialog had on step 1.
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const [step1Height, setStep1Height] = useState<number>();
   const [pickerLevels, setPickerLevels] = useState<Record<string, string>>({});
   const [skillLevels, setSkillLevels] = useState<SkillLevel[]>([]);
 
@@ -514,8 +517,14 @@ export function VacancyCompetencesSection({
       />
       <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
         <DialogContent
+          ref={pickerRef}
           data-testid="vacancy-competences-library-dialog"
-          className="max-h-[85vh] overflow-y-auto sm:max-w-xl"
+          // HRP-1087 (b)/(c): on step 2 the header and footer stay put and
+          // only the rows scroll, inside the height step 1 had.
+          className={`max-h-[85vh] overflow-y-auto sm:max-w-xl${
+            pickerStep === 2 ? " grid-rows-[auto_minmax(0,1fr)_auto]" : ""
+          }`}
+          style={pickerStep === 2 ? { height: step1Height } : undefined}
         >
           <DialogHeader>
             <DialogTitle>
@@ -535,7 +544,10 @@ export function VacancyCompetencesSection({
               testIdPrefix="vacancy-competences-library-picker"
             />
           ) : (
-            <div className="space-y-2" data-testid="vacancy-competences-library-levels">
+            <div
+              className="-mx-1 min-h-0 space-y-2 overflow-y-auto px-1"
+              data-testid="vacancy-competences-library-levels"
+            >
               {pickedIds.length === 0 && (
                 <p className="text-sm text-muted-foreground">
                   {t("vacancyLibraryLevelsEmpty")}
@@ -546,7 +558,12 @@ export function VacancyCompetencesSection({
                   key={id}
                   className="flex items-center gap-3 rounded-md border p-2 text-sm"
                 >
-                  <div className="flex-1 truncate">
+                  {/* HRP-1087 (a): one line with an ellipsis, as in the
+                      assessment criteria sheet; the full name on hover. */}
+                  <div
+                    className="min-w-0 flex-1 truncate"
+                    title={titleByCompetenceId.get(id)}
+                  >
                     {titleByCompetenceId.get(id) ?? "—"}
                   </div>
                   <Select
@@ -556,7 +573,7 @@ export function VacancyCompetencesSection({
                     }
                   >
                     <SelectTrigger
-                      className="w-40"
+                      className="w-40 shrink-0"
                       data-testid={`vacancy-competences-library-level-${id}`}
                     >
                       <SelectValue placeholder={t("vacancyLibraryLevelPlaceholder")}>
@@ -591,7 +608,10 @@ export function VacancyCompetencesSection({
             </Button>
             {pickerStep === 1 ? (
               <Button
-                onClick={() => setPickerStep(2)}
+                onClick={() => {
+                  setStep1Height(pickerRef.current?.offsetHeight);
+                  setPickerStep(2);
+                }}
                 data-testid="vacancy-competences-library-next-btn"
               >
                 {tc("next")}

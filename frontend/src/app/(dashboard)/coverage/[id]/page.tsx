@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Archive, Lock, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Archive, ChevronRight, Lock, Pencil, Sparkles, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -465,8 +465,15 @@ function ContainerView({ id }: { id: string }) {
               Titles side by side - two breakdowns of the same process
               cannot be diffed line by line, the wording changes wholesale. */}
           {session.status === "ready" && steps.length > 0 && (
-            <details data-testid="coverage-draft-preview">
-              <summary className="cursor-pointer list-none text-sm text-primary underline-offset-4 hover:underline">
+            <details className="group" data-testid="coverage-draft-preview">
+              {/* HRP-949 REDO: the chevron says the line opens, as on the
+                  step details (HRP-904). */}
+              <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-sm text-primary underline-offset-4 hover:underline [&::-webkit-details-marker]:hidden">
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-4 shrink-0 transition-transform group-open:rotate-90"
+                  data-testid="coverage-draft-preview-chevron"
+                />
                 {t("draftPreviewOpen", { from: steps.length, to: draftedCount })}
               </summary>
               <div className="mt-3 grid gap-4 sm:grid-cols-2">

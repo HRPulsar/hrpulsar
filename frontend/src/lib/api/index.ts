@@ -67,7 +67,40 @@ let refreshPromise: Promise<boolean> | null = null;
 // keyed on the error code.
 const DEMO_QUOTA_CODE = "credits_demo_quota_exhausted";
 
-function isCreditLimitResponse(status: number, body: unknown): boolean {
+/** Fired on `window` after every successful non-GET `request()` or
+ * `requestWithMeta()` — the place the app learns that the visitor changed
+ * something. The demo
+ * feedback card and banner listen (HRP-1158/1160); without a listener it
+ * costs nothing. `path` is the caller's path without the query string
+ * (`/pdp`, `/work/containers/<id>/gaps/hire-need`); `data` is the parsed
+ * response body, `undefined` on 204. */
+export const MUTATION_EVENT = "hrpulsar:mutation";
+
+export interface MutationEventDetail {
+  method: string;
+  path: string;
+  status: number;
+  data: unknown;
+}
+
+function notifyMutation(
+  options: RequestInit,
+  path: string,
+  status: number,
+  data: unknown,
+) {
+  const method = (options.method ?? "GET").toUpperCase();
+  if (method === "GET" || typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<MutationEventDetail>(MUTATION_EVENT, {
+      detail: { method, path: path.split("?")[0], status, data },
+    }),
+  );
+}
+
+/** Out of credits: 402, or the demo sandbox's 429 quota code. Exported so a
+ * loop of paid calls stops on the same rule the credit banner follows. */
+export function isCreditLimitResponse(status: number, body: unknown): boolean {
   if (status === 402) return true;
   if (status !== 429) return false;
   const code = (body as { code?: unknown } | null)?.code;
@@ -221,8 +254,9 @@ async function request<T>(
     throw new ApiError(res.status, message, body.detail, body.code);
   }
 
-  if (res.status === 204) return undefined as T;
-  return res.json();
+  const data = res.status === 204 ? undefined : await res.json();
+  notifyMutation(options, path, res.status, data);
+  return data as T;
 }
 
 // Header-aware variant of `request`: returns the parsed body alongside the
@@ -278,6 +312,7 @@ async function requestWithMeta<T>(
 
   const data =
     res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+  notifyMutation(options, path, res.status, data);
   return { data, headers: res.headers };
 }
 

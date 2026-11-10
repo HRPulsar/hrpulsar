@@ -426,15 +426,15 @@ async def owner_summaries(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     user_ids: set[uuid.UUID],
-    *,
-    reveal_leave: bool = False,
 ) -> dict[uuid.UUID, dict[str, Any]]:
     """Process owners the way the shared employee line shows a person
     (HRP-810 REDO): name, position, status. The status is the employee
     card's; an account with no card (an admin who never got one) counts by
     the account alone, and one switched off reads as inactive. ``active``
     means what login means: on leave is still with the company. An id from
-    another tenant stays unlisted."""
+    another tenant stays unlisted. Leave shows to every reader: the section
+    gate keeps ``none`` out, so whoever gets here reads Coverage at ``view``
+    or ``manage`` (HRP-1020 REDO, QA 30.10)."""
     from app.modules.auth.service import BLOCKED_EMPLOYEE_STATUSES
 
     if not user_ids:
@@ -462,10 +462,6 @@ async def owner_summaries(
         status = status or "active"
         if not is_active and status == "active":
             status = "inactive"
-        # Leave is HR data the directory withholds (HRP-623): only a reader
-        # who may see it (``list_people``'s rule) reads it on the owner too.
-        if status == "on_leave" and not reveal_leave:
-            status = "active"
         out[uid] = {
             "user_id": uid,
             # HRP-829 REDO: the name links to the card where it opens.
@@ -496,17 +492,13 @@ async def _ensure_current_employee(
         raise AppError("work_access_employee_invalid", 422)
 
 
-async def list_people(
-    db: AsyncSession, tenant_id: uuid.UUID, *, reveal_status: bool = True
-) -> list[dict[str, Any]]:
+async def list_people(db: AsyncSession, tenant_id: uuid.UUID) -> list[dict[str, Any]]:
     """HRP-810: the people an editor of a process can name - every current
     employee, with what the company directory already shows everyone (name,
     email, position). Not the directory's scope: an owner who heads one
     division still names someone from another. ``assignable`` marks who can
-    take a step (HRP-809 needs someone at work); with the terminated already
-    out of the list it is the leave status the directory withholds (HRP-623),
-    so without ``reveal_status`` everyone reads as assignable and the
-    assignment itself refuses a person on leave."""
+    take a step (HRP-809 needs someone at work): with the terminated already
+    out of the list, everyone but a person on leave (HRP-1020 REDO)."""
     from app.modules.auth.service import BLOCKED_EMPLOYEE_STATUSES
 
     rows = await db.execute(
@@ -533,7 +525,7 @@ async def list_people(
             "name": f"{first} {last}".strip(),
             "email": email,
             "position_title": position_title,
-            "assignable": status == "active" if reveal_status else True,
+            "assignable": status == "active",
         }
         for employee_id, user_id, status, position_title, first, last, email in rows.all()
     ]
@@ -543,8 +535,6 @@ async def get_container_access(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     container_id: uuid.UUID,
-    *,
-    reveal_leave: bool = False,
 ) -> dict[str, Any]:
     container = await get_container(db, tenant_id, container_id)
     rules = (
@@ -581,9 +571,7 @@ async def get_container_access(
     )
     owner = None
     if container.owner_id is not None:
-        owners = await owner_summaries(
-            db, tenant_id, {container.owner_id}, reveal_leave=reveal_leave
-        )
+        owners = await owner_summaries(db, tenant_id, {container.owner_id})
         owner = owners.get(container.owner_id)
     return {
         "visibility": container.visibility,
@@ -616,7 +604,6 @@ async def set_container_access(
     data: ContainerAccessUpdate,
     *,
     user_id: uuid.UUID,
-    reveal_leave: bool = False,
 ) -> dict[str, Any]:
     """Replace the visibility and the rules, logging every difference. Not
     a content edit: an accepted breakdown stays accepted. The container row
@@ -687,9 +674,7 @@ async def set_container_access(
         )
         _log_access(db, container, "rule_added", payload(ref), user_id)
     await db.commit()
-    return await get_container_access(
-        db, tenant_id, container_id, reveal_leave=reveal_leave
-    )
+    return await get_container_access(db, tenant_id, container_id)
 
 
 # --- Steps ------------------------------------------------------------------
@@ -1542,7 +1527,13 @@ async def create_hire_need(
     - the existing, billed function, called through the module so the EE
     wrapper sees it; this function is therefore BILLING_EXEMPT. Steps of
     the selection that are not gaps are skipped: the screen may be stale.
-    ``recruitment`` learns nothing about ``work``: the link lives here."""
+    ``recruitment`` learns nothing about ``work``: the link lives here.
+
+    HRP-801 (QA 23.10): an agency need says so in the draft's title, in the
+    tenant's content language (d); "look inside first" also posts the draft
+    to the talent market (b) - see ``_post_to_talent_market``."""
+    from app.core.i18n import translate
+    from app.modules.ai_settings import service as ai_settings_service
     from app.modules.competence.models import Competence
     from app.modules.primitives.models import CompetencePrimitive
     from app.modules.recruitment import vacancy_service
@@ -1595,6 +1586,13 @@ async def create_hire_need(
         description, cut = description[:HIRE_NEED_MAX_DESCRIPTION].rstrip(), True
     if cut:
         description = f"{description}\n\n{HIRE_NEED_TRUNCATED}"
+    title = data.title or container.title
+    if data.label == "agency":
+        # The draft lands in the tenant's language, like the README of the
+        # agent bundle: the content language, not the reader's interface.
+        settings = await ai_settings_service.get_or_default(db, tenant_id)
+        language = settings.content_language
+        title = translate("work_hire_need.agency_title", language, title=title)
     hiring_manager_id = None
     if container.owner_id and await vacancy_service._is_hiring_manager_eligible(
         db, tenant_id, container.owner_id
@@ -1609,7 +1607,7 @@ async def create_hire_need(
         tenant_id,
         user_id,
         VacancyCreate(
-            title=(data.title or container.title)[:VACANCY_TITLE_MAX],
+            title=title[:VACANCY_TITLE_MAX],
             description=description,
             division_id=data.division_id,
             hiring_manager_id=hiring_manager_id,
@@ -1658,7 +1656,81 @@ async def create_hire_need(
     db.add(need)
     await db.commit()
     await db.refresh(need)
+    if data.internal_search_allowed:
+        await _post_to_talent_market(db, tenant_id, need, user_id=user_id)
     return need
+
+
+async def _post_to_talent_market(
+    db: AsyncSession, tenant_id: uuid.UUID, need: WorkHireNeed, *, user_id: uuid.UUID
+) -> None:
+    """HRP-801 (QA 23.10, b): "look inside first" puts the draft on the
+    talent market as its internal-mobility twin - the existing
+    ``vacancy_service.post_vacancy_to_talent_market``, through the module
+    so the EE wrappers bill (``talent_card.create``) and audit it. The link
+    is the vacancy's own ``talent_card_id``: no column on our side.
+
+    The twin needs a library competence on the vacancy, and a cold tenant
+    has none that overlaps the gap. Then - or when the bridge refuses for
+    any other reason, credits included - the need stands on the draft in
+    Recruitment, internal search still on: the recruiter adds competences
+    and posts it from the vacancy, and the step's link follows the card,
+    read live. The caller learns it from ``talent_card_id`` staying None."""
+    from app.modules.recruitment import vacancy_service
+
+    need_id, vacancy_id = need.id, need.vacancy_id
+    assert vacancy_id is not None
+    try:
+        await vacancy_service.post_vacancy_to_talent_market(
+            db, tenant_id, vacancy_id, user_id
+        )
+    except AppError as exc:
+        # Every refusal comes before the bridge writes - its preconditions
+        # and the billing precheck - so there is nothing to undo (and a
+        # rollback would expire the caller's objects with it).
+        logger.info(
+            "hire need %s stays in Recruitment, no talent card: %s", need_id, exc.code
+        )
+    except Exception:
+        # The matcher failed after the card committed: the bridge deleted
+        # the card itself and re-raised, having rolled the session back.
+        # The need and its draft are committed - a 500 here would leave
+        # them behind a retry that answers 409 - so the need stays open
+        # like any refusal. The rollback clears whatever the bridge's own
+        # cleanup could not, and the need is read back for the response.
+        logger.exception("hire need %s stays in Recruitment, no talent card", need_id)
+        await db.rollback()
+        await db.refresh(need)
+
+
+async def hire_need_origin(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    vacancy_id: uuid.UUID | None = None,
+    card_id: uuid.UUID | None = None,
+) -> WorkContainer | None:
+    """HRP-801 (QA 23.10): the container a vacancy - or the talent card
+    posted from it - was opened from, newest need first. Whether the
+    reader may see the vacancy or the card is the caller's guard."""
+    from app.modules.recruitment.models import Vacancy
+
+    query = (
+        select(WorkContainer)
+        .join(WorkHireNeed, WorkHireNeed.container_id == WorkContainer.id)
+        .where(
+            WorkHireNeed.tenant_id == tenant_id, WorkContainer.tenant_id == tenant_id
+        )
+        .order_by(WorkHireNeed.created_at.desc(), WorkHireNeed.id.desc())
+        .limit(1)
+    )
+    if card_id is not None:
+        query = query.join(Vacancy, Vacancy.id == WorkHireNeed.vacancy_id).where(
+            Vacancy.tenant_id == tenant_id, Vacancy.talent_card_id == card_id
+        )
+    else:
+        query = query.where(WorkHireNeed.vacancy_id == vacancy_id)
+    return (await db.execute(query)).scalar_one_or_none()
 
 
 # --- Step skills (HRP-760) ---------------------------------------------------

@@ -518,6 +518,7 @@
     "demo_data_already_seeded": "Demo-Daten sind für diesen Tenant bereits angelegt",
     "demo_disabled": "Die öffentliche Sandbox ist derzeit deaktiviert.",
     "demo_end_requires_demo_session": "Nur eine aktive Demo-Sitzung kann beendet werden",
+    "demo_guide_requires_demo_admin": "Die Startrouten sind nur für die Admin-Persona einer aktiven Demo-Sitzung verfügbar",
     "demo_persona_not_available": "Diese Demo-Persona ist in der Sandbox nicht verfügbar",
     "demo_rate_limited": "Zu viele Demo-Versuche von dieser Adresse; bitte versuchen Sie es später erneut.",
     "demo_sandbox_capacity_reached": "Sandbox-Kapazität erreicht; bitte versuchen Sie es in einigen Minuten erneut.",
@@ -679,6 +680,7 @@
     "llm_provider_test_auth_failed": "Der Anbieter hat den API-Schlüssel abgelehnt. Prüfen Sie den Schlüssel und seine Zugriffsrechte.",
     "llm_provider_test_model_not_found": "Der Server hat mit \"nicht gefunden\" geantwortet. Prüfen Sie den Modellnamen '{model}' und ob die Serveradresse den API-Pfad enthält, etwa /v1.",
     "llm_provider_test_failed": "Die Testanfrage ist fehlgeschlagen. Details stehen im Serverprotokoll.",
+    "transcription_provider_test_folder_missing": "Yandex SpeechKit braucht neben dem API-Schlüssel eine Ordner-ID.",
     "llm_yandex_folder_missing": "Die Yandex-Cloud-Folder-ID ist nicht konfiguriert — setzen Sie YANDEX_FOLDER_ID oder verwenden Sie eine vollständige gpt://-Modell-URI",
     "llm_yandex_key_missing": "Der Yandex-API-Schlüssel ist nicht konfiguriert — setzen Sie YANDEX_API_KEY oder hinterlegen Sie einen Workspace-Yandex-Schlüssel",
     "logo_empty_file": "Leere Datei",
@@ -1134,6 +1136,9 @@
       "rejected": "Abgelehnt",
       "withdrew": "Zurückgezogen"
     }
+  },
+  "work_hire_need": {
+    "agency_title": "[Besetzung durch Agentur] {title}"
   },
   "work_bundle": {
     "title": "Leitfaden zur Agenten-Einrichtung: {title}",

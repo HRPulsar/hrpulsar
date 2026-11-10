@@ -64,6 +64,15 @@ export function usePermissions() {
     canViewSection: (code: SectionCode) => Boolean(sections[code]),
     canManageSection: (code: SectionCode) => sections[code] === "manage",
     /**
+     * HRP-823/825/826 (QA 26-27.10): reads the section's own list - the
+     * first tab of exams, assessments and development - and what it opens:
+     * `manage`, or `view` for admin, hr and manager, read-only. Mirrors
+     * `reads_section` in backend/app/core/access_scope.py.
+     */
+    readsSectionList: (code: SectionCode) =>
+      sections[code] === "manage" ||
+      (Boolean(sections[code]) && (isAdmin || isPlatformAdmin || isHr || isManager)),
+    /**
      * HRP-623: sees the HR record rather than the directory row. Mirrors
      * ``is_employee_only`` in backend/app/core/access_scope.py, inverted —
      * a wider set here renders columns the API does not send.

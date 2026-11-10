@@ -2,7 +2,8 @@
 
 Covers: the sandbox is handed to the purge and its tokens stop working,
 ``demo.session_ended`` is published, a pending "keep my demo data" signup
-keeps the sandbox alive, and a non-demo bearer is rejected.
+frees the slot but keeps the sandbox from the purge (HRP-1161), and a
+non-demo bearer is rejected.
 """
 
 from __future__ import annotations
@@ -13,9 +14,12 @@ from datetime import UTC, datetime
 import pytest
 from app.config import settings
 from app.modules.company.models import Tenant
+from app.modules.demo import tasks
 from app.modules.signup.models import SignupRequest
 from httpx import AsyncClient
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from tests.unit.test_demo_switch_view import _paid_account_headers
 
@@ -71,7 +75,7 @@ async def test_end_expires_sandbox_and_revokes_tokens(
 
 
 @pytest.mark.asyncio
-async def test_end_spares_sandbox_with_pending_keep_data_signup(
+async def test_end_frees_slot_but_purge_keeps_pending_keep_data_sandbox(
     client: AsyncClient,
     admin_role,
     enable_demo,
@@ -98,9 +102,20 @@ async def test_end_spares_sandbox_with_pending_keep_data_signup(
     )
     assert resp.status_code == 204
 
+    # The live-session slot is free at once (HRP-1161)...
     tenant = await db.get(Tenant, tenant_id)
     await db.refresh(tenant)
-    assert tenant.expires_at > datetime.now(UTC)
+    assert tenant.expires_at <= datetime.now(UTC)
+    # ...while the purge's hold predicate keeps the data for the moderator.
+    from tests.conftest import TEST_DB_URL
+
+    engine = create_engine(TEST_DB_URL.replace("+asyncpg", "+psycopg2"))
+    try:
+        with Session(engine) as sync_db:
+            doomed = tasks._expired_demo_tenant_ids(sync_db, datetime.now(UTC))
+    finally:
+        engine.dispose()
+    assert uuid.UUID(tenant_id) not in doomed
     assert published[-1][0] == "demo.session_ended"
 
     # Revoked means revoked: the resume hint outlives the logout on the

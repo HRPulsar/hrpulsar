@@ -318,7 +318,7 @@ describe("Interviewers field — names for every reader", () => {
     try {
       await render(["recruiter"], <InterviewDetailPage />);
       expect(api.get).toHaveBeenCalledWith(
-        "/recruitment/interviewers?candidate_vacancy_id=cv-1",
+        "/recruitment/interviewers?candidate_vacancy_id=cv-1&interview_id=iv-1",
       );
       expect(
         byId("recruitment-interview-detail-interviewers")?.textContent,

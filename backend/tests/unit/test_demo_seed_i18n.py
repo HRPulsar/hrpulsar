@@ -62,7 +62,8 @@ def test_catalog_covers_every_translatable_string(locale: str):
         f"deliberately kept English): {missing}"
     )
 
-    stale = sorted(set(catalog) - collected)
+    # HRP-767: a locale may point a material link at its own language.
+    stale = sorted(set(catalog) - collected - seed_i18n.localizable_links())
     assert not stale, (
         f"seed_i18n_{locale}.json carries entries no fixture references: {stale}"
     )

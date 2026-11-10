@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.access_scope import ADMIN_ROLE_CODES, authored_only
+from app.core.access_scope import ADMIN_ROLE_CODES, authored_only, require_section_reads
 from app.core.errors import AppError
 from app.core.sections import require_section
 from app.database import get_db
@@ -76,6 +76,7 @@ from app.modules.assessment.scope import (
     cpa_scope,
     pdp_scope,
     pdp_status_scope,
+    reads_plans,
     runs_assessments,
     runs_plans,
 )
@@ -104,6 +105,9 @@ AssessmentStatusCode = Literal[
 # ``view``, so the section guards itself and these routes carry the level.
 # The answer-scale catalogue keeps its admin/hr role gate (HRP-631).
 _manage_assessments = require_section("assessments", "manage")
+# QA 27.10: admin, hr and manager read the section's list at ``view`` too,
+# read-only - so the detailed results it opens read at that level.
+_read_assessments = require_section_reads("assessments")
 
 
 # --- Assessment CRUD ---
@@ -366,12 +370,12 @@ async def get_results(
 async def get_detailed_results(
     assessment_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(_manage_assessments),
+    current_user: User = Depends(_read_assessments),
 ):
     """HRP-154: per-competence/skill-level/indicator breakdown for the
-    Results page. Whoever runs assessments (HRP-826: ``manage`` on the
-    section, which ``platform_admin`` always reaches); a respondent gets
-    403. The
+    Results page. Whoever reads the section's list (HRP-826: ``manage``
+    on the section, which ``platform_admin`` always reaches, or ``view``
+    for admin, hr and manager - QA 27.10); a respondent gets 403. The
     employee-id scope from ``get_results`` is reused so a manager
     can't peek at out-of-division assessments via the URL.
     """
@@ -931,8 +935,9 @@ async def list_pdps(
     # authoring queue is irrelevant to them). Admins/HR/platform_admin and
     # division managers (incl. deputies) see drafts inside their visibility
     # scope so they can pick up Plans created for their team. HRP-825: the
-    # manager role is the section's ``manage`` now.
-    privileged = await runs_plans(db, current_user)
+    # manager role is the section's level now - ``manage``, or ``view`` for
+    # admin, hr and manager, who read the section's list (QA 27.10).
+    privileged = await reads_plans(db, current_user)
     return await pdp_service.list_pdps(
         db,
         current_user.tenant_id,
@@ -1167,6 +1172,15 @@ async def add_pdp_comment(
     current_user: User = Depends(get_current_user),
     _scope: None = Depends(pdp_status_scope),
 ):
+    # Whoever runs plans comments (the admin tier and ``manage``, as in
+    # 2.5.4); anyone else comments on the plans they own or review - a
+    # manager at ``view`` reads their subtree's plans as they are (QA 27.10).
+    if not await runs_plans(db, current_user):
+        pdp = await pdp_service._get_pdp(db, current_user.tenant_id, pdp_id)
+        owner = getattr(getattr(pdp, "employee", None), "user_id", None)
+        reviewer = await pdp_service._resolve_reviewer_user_id(db, pdp)
+        if current_user.id not in (owner, reviewer):
+            raise AppError("auth_insufficient_permissions", 403)
     return await pdp_service.add_comment(
         db, current_user.tenant_id, pdp_id, current_user.id, data
     )

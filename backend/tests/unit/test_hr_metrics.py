@@ -569,3 +569,42 @@ def test_the_plan_chart_still_answers_to_its_own_section():
 
     assert section_for_path("/api/analytics/pdp").code == "development"
     assert "Depends(get_current_user)" in _guard_of("pdp")
+
+
+@pytest.mark.asyncio
+async def test_the_route_names_its_scope_and_keeps_turnover_to_three_roles(
+    auth_client, client, db: AsyncSession, tenant
+):
+    """HRP-822 (QA 22.10): the page's hints read ``scope`` - the read scope
+    the figures were computed over - so they never promise more than the
+    numbers cover. Turnover is a ceiling by role: below admin, hr and
+    manager it is left out whatever the matrix hands the role."""
+    from app.modules.company.models import Division
+
+    from tests.unit.test_section_gate import _save
+    from tests.unit.test_section_list_tabs import _person
+
+    head = await _person(db, tenant, "manager")
+    division = Division(tenant_id=tenant.id, name=f"Ops {uuid.uuid4().hex[:4]}", manager_id=head.emp.id)
+    db.add(division)
+    await db.commit()
+    await _person(db, tenant, "employee", division_id=division.id)  # the head's subtree
+    hr = await _person(db, tenant, "hr")
+    lower = {code: await _person(db, tenant, code) for code in ("recruiter", "hiring_manager", "employee")}
+    await _save(auth_client, levels={"analytics": dict.fromkeys(lower, "manage")})
+
+    async def read(h):
+        r = await client.get("/api/analytics/hr-metrics", headers=h)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        return body["scope"], {m["code"] for m in body["metrics"]}
+
+    for h in (None, hr.h):  # None: the client's own admin
+        scope, codes = await read(h)
+        assert scope == "workspace" and "turnover" in codes
+    scope, codes = await read(head.h)
+    assert scope == "subtree" and "turnover" in codes
+    for code, person in lower.items():
+        scope, codes = await read(person.h)
+        assert scope == "own", code
+        assert "turnover" not in codes and "engagement" in codes, code
