@@ -169,7 +169,9 @@ jobs:
         run: cd frontend && npm run build
 
   e2e:
-    runs-on: ubuntu-latest
+    # ponytail: pinned — Playwright 1.59 cannot install chromium on ubuntu-26.04 (the new
+    # ubuntu-latest); back to ubuntu-latest once @playwright/test supports it.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:17
