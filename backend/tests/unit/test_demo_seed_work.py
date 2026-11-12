@@ -130,7 +130,7 @@ async def test_seed_creates_the_containers_and_the_mapping(
         expected_state = (
             "accepted" if spec["status"] == "active" else "system_suggested"
         )
-        assert {s.state for s in steps} == {expected_state}
+        assert {s.state for s in steps} == ({expected_state} if steps else set())
 
     # Every declared code made it to a link row.
     declared = sum(
@@ -180,8 +180,13 @@ async def test_the_seed_stores_the_summary_the_list_reads(
         .scalars()
         .all()
     )
+    not_broken_down = {spec["title"] for spec in WORK_CONTAINERS if not spec["steps"]}
     for container in containers:
         summary = container.coverage_summary
+        if container.title in not_broken_down:
+            # HRP-1176: no steps, no figures - as after ``/coverage/new``.
+            assert summary is None, container.title
+            continue
         assert summary is not None, container.title
         assert summary["hours"]["total"] > 0, container.title
 
@@ -334,6 +339,18 @@ async def test_the_demo_keeps_one_boundary_step_and_one_hire_gap(
     assert out_of_scope == [title_of["customer_requests"]]
     assert gaps["hire"] == [title_of["customer_requests"]]
     assert gaps["agency"] == [title_of["iso27001"]]
+
+
+def test_one_process_is_left_for_the_visitor_to_break_down():
+    """HRP-1176: the Coverage start route says "Generate steps", and only a
+    described process with no steps shows that button - a broken-down one
+    says "Regenerate steps" and asks to confirm the replacement."""
+    empty = [spec for spec in WORK_CONTAINERS if not spec["steps"]]
+    assert [spec["key"] for spec in empty] == ["customer_onboarding"]
+    (spec,) = empty
+    assert spec["type"] == "process" and spec["description"].strip()
+    # What ``work.service.create_container`` writes before a breakdown.
+    assert spec["status"] == "draft" and spec["source"] == "manual"
 
 
 def test_the_iso_project_keeps_its_steps_under_the_new_title():

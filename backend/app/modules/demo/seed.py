@@ -2210,19 +2210,21 @@ async def _seed_work(
         # container, and nobody has opened a freshly seeded process yet -
         # without this the demo opens on a dash where the figures belong.
         # In the seed's own transaction, so it is one write, not a commit.
+        # A process seeded without steps (HRP-1176) has no figures yet.
         await db.flush()
-        container.coverage_summary = coverage.summary_of(
-            await coverage.compute(
-                db,
-                tenant_id,
-                container.id,
-                user_id=owner_user_id,
-                schedule_mapping=False,
-                # The summary follows the modes and the agents: the tenant's
-                # people are not queried once per seeded container.
-                people=False,
+        if spec["steps"]:
+            container.coverage_summary = coverage.summary_of(
+                await coverage.compute(
+                    db,
+                    tenant_id,
+                    container.id,
+                    user_id=owner_user_id,
+                    schedule_mapping=False,
+                    # The summary follows the modes and the agents: the
+                    # tenant's people are not queried once per container.
+                    people=False,
+                )
             )
-        )
         container_count += 1
     await db.flush()
 

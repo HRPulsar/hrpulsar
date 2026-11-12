@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.6.1] - 2026-11-11
+
+### Fixed
+- Demo: picking a start route opens the page the route begins on instead of leaving the visitor in Coverage (HRP-1175)
+- Demo: the Coverage start route begins on a process that has no steps yet, where "Generate steps" is there to click (HRP-1176)
+- Demo: the start route rings the button its current step asks for and shows "Go" only while that button is not on screen (HRP-1177)
+- Demo: a start route step counts once the visitor has done it, not when a page opens, so the counter no longer reaches the last step early (HRP-1178)
+
 ## [2.6.0] - 2026-11-10
 
 ### Added

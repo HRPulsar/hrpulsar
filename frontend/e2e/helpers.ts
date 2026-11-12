@@ -214,7 +214,7 @@ export async function setDemoSession(page: Page, accessToken: string) {
     const { tenant_id } = JSON.parse(atob(claims));
     localStorage.setItem(
       `demo_guide:${tenant_id}`,
-      JSON.stringify({ path: "skip", step: 0, anchor: null, back: null }),
+      JSON.stringify({ path: "skip", step: 0, back: null, lead: false, gap: null }),
     );
   }, accessToken);
 }

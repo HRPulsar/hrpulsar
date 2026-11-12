@@ -822,7 +822,7 @@ function DevelopmentList({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>{tc("cancel")}</Button>
-            <Button onClick={handleCreate} disabled={saving}>{saving ? t("creating") : t("create")}</Button>
+            <Button onClick={handleCreate} disabled={saving} data-testid="development-create-submit">{saving ? t("creating") : t("create")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

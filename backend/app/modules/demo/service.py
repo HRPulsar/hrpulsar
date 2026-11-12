@@ -636,16 +636,88 @@ async def find_guide_assessment(
     ).scalar_one_or_none()
 
 
+async def find_guide_process(
+    db: AsyncSession, tenant_id: uuid.UUID
+) -> uuid.UUID | None:
+    """The process the Coverage route starts from (HRP-1176).
+
+    Described and not broken down yet, so its page offers "Generate steps"
+    rather than "Regenerate steps" - the button needs a description. The
+    oldest one wins; the seed's own share one ``created_at`` (one
+    transaction), so among them the id decides - the same in every call.
+    ``None`` once every process has steps (a sandbox from before the seed
+    held one, or the visitor generated them already).
+    """
+    from app.modules.work.models import WorkContainer, WorkStep
+
+    has_steps = (
+        select(WorkStep.id).where(WorkStep.container_id == WorkContainer.id).exists()
+    )
+    return (
+        await db.execute(
+            select(WorkContainer.id)
+            .where(
+                WorkContainer.tenant_id == tenant_id,
+                WorkContainer.type == "process",
+                WorkContainer.status != "archived",
+                WorkContainer.description != "",
+                ~has_steps,
+            )
+            .order_by(WorkContainer.created_at, WorkContainer.id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def find_guide_gap_process(
+    db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID
+) -> uuid.UUID | None:
+    """A process where the Coverage route's hire step can be done (HRP-1176).
+
+    One with a step nobody covers and no hire need opened for it yet - what
+    ``work.service.create_hire_need`` accepts, read through the same
+    ``coverage.gaps``. A fresh AI breakdown does not promise such a step;
+    the seed does. Processes only: the route says "process", and the
+    seeded project's gap is an ``agency`` one. Ordered like
+    ``find_guide_process``; one without steps has no gap to look for.
+    """
+    from app.modules.work import coverage
+    from app.modules.work.models import WorkContainer, WorkStep
+
+    has_steps = (
+        select(WorkStep.id).where(WorkStep.container_id == WorkContainer.id).exists()
+    )
+    container_ids = (
+        await db.execute(
+            select(WorkContainer.id)
+            .where(
+                WorkContainer.tenant_id == tenant_id,
+                WorkContainer.type == "process",
+                WorkContainer.status != "archived",
+                has_steps,
+            )
+            .order_by(WorkContainer.created_at, WorkContainer.id)
+        )
+    ).scalars()
+    for container_id in container_ids.all():
+        rows = await coverage.gaps(
+            db, tenant_id, container_id, user_id=user_id, schedule_mapping=False
+        )
+        if any(r["kind"] == "no_owner" and not r["hire_need"] for r in rows):
+            return container_id
+    return None
+
+
 async def choose_demo_guide(
     db: AsyncSession, *, user: User, path: str
-) -> uuid.UUID | None:
+) -> dict[str, uuid.UUID | None]:
     """Record the start route the visitor picked in a sandbox (HRP-1159).
 
     Admin persona of a live demo only — the employee persona never sees
     "Where to start". The choice is not stored here: it goes out as
     ``demo.guide_chosen`` (best-effort, like ``demo.session_started``) for
     the EE watcher to keep next to the session. Picking again overwrites.
-    Returns the plan and assessment routes' starting assessment.
+    Returns where the picked route starts (``DemoGuideResponse``).
     """
     tenant = await db.get(Tenant, user.tenant_id)
     now = datetime.now(UTC)
@@ -664,6 +736,14 @@ async def choose_demo_guide(
     except Exception:  # noqa: BLE001
         logger.exception("demo: failed to publish demo.guide_chosen event")
 
-    if path not in ("pdp", "assessment"):
-        return None
-    return await find_guide_assessment(db, tenant.id)
+    starts: dict[str, uuid.UUID | None] = {
+        "assessment_id": None,
+        "process_id": None,
+        "gap_process_id": None,
+    }
+    if path in ("pdp", "assessment"):
+        starts["assessment_id"] = await find_guide_assessment(db, tenant.id)
+    elif path == "coverage":
+        starts["process_id"] = await find_guide_process(db, tenant.id)
+        starts["gap_process_id"] = await find_guide_gap_process(db, tenant.id, user.id)
+    return starts

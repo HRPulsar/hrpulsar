@@ -167,11 +167,12 @@ async def choose_guide(
     """The start route picked in the sandbox's "Where to start" (HRP-1159).
 
     Admin persona of a live demo only (403 otherwise). Calling again
-    overwrites the choice. Answers with the completed assessment the plan
-    and assessment routes start from, when there is one.
+    overwrites the choice. Answers with where the picked route starts:
+    the completed assessment of the plan and assessment routes, the
+    processes of the Coverage one - each when there is one.
     """
-    assessment_id = await choose_demo_guide(db, user=current_user, path=payload.path)
-    return DemoGuideResponse(assessment_id=assessment_id)
+    starts = await choose_demo_guide(db, user=current_user, path=payload.path)
+    return DemoGuideResponse(**starts)
 
 
 @router.post("/end", status_code=status.HTTP_204_NO_CONTENT)

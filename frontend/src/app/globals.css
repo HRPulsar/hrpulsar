@@ -184,3 +184,27 @@
     letter-spacing: -0.01em;
   }
 }
+
+/* HRP-1177: the button the demo start route's current step asks for
+   (components/dashboard/demo-guide.tsx). An outline, so it takes no room
+   and no clicks; unlayered, so it wins over the button's own outline. */
+[data-demo-guide-target] {
+  outline: 3px solid var(--brand-accent);
+  outline-offset: 3px;
+  animation: demo-guide-target 1.6s ease-in-out infinite;
+  /* Scrolled to under the strip, with its heading still in view. */
+  scroll-margin-top: 6rem;
+}
+
+@keyframes demo-guide-target {
+  50% {
+    outline-offset: 7px;
+    outline-color: color-mix(in srgb, var(--brand-accent) 40%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-demo-guide-target] {
+    animation: none;
+  }
+}

@@ -3,9 +3,10 @@
 Coverage is the only surface of the demo that opened empty: the seed laid
 down people, competences and assessments but no work to cover, so a demo
 visitor met the cold-start screen on the one page the primitives story is
-about. Three containers fix that — two processes and one initiative —
-picked so the Coverage tab shows every verdict the arithmetic can produce
-(``coverage.py`` §5.2) against the company the rest of the seed builds:
+about. Three broken-down containers fix that — two processes and one
+initiative — picked so the Coverage tab shows every verdict the arithmetic
+can produce (``coverage.py`` §5.2) against the company the rest of the
+seed builds; a fourth is left for the visitor to break down:
 
 * ``customer_requests`` — Go-to-Market. Intake, classification, routing
   and the knowledge-base lookup are strong codes on work nobody signs for,
@@ -24,6 +25,10 @@ picked so the Coverage tab shows every verdict the arithmetic can produce
   (``runs_per_year=1``) and its unclosed step falls to ``agency`` through
   the §5.1 suggestion rather than a hand-set label. A certification
   project is what a company of this size actually outsources.
+* ``customer_onboarding`` — a process with a description and no steps
+  (HRP-1176): what ``/coverage/new`` leaves behind before the first
+  breakdown. The Coverage start route opens it, so the visitor runs
+  "Generate steps" on a page that really offers it.
 
 Both processes are picked so that "moves to an agent" is at least 30 % of
 their yearly hours (HRP-870): the demo has to show the benefit. The pair
@@ -643,5 +648,34 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
         ],
+    },
+    {
+        "key": "customer_onboarding",
+        "type": "process",
+        # Not broken down yet, on purpose (HRP-1176): status and source are
+        # what ``work.service.create_container`` writes for a process typed
+        # in by hand, and the seeder stores no summary for it.
+        "status": "draft",
+        "source": "manual",
+        "gap_default_label": "hire",
+        "title": "Onboarding a new customer",
+        "description": (
+            "A signed contract reaches us from sales with the handover "
+            "notes. We set up the customer's workspace and accounts, import "
+            "their data from the files they send and check it against the "
+            "source, connect the integrations they use, and configure roles "
+            "and permissions the way their company is organised. The admins "
+            "are trained on a live call and the rest of the team gets a "
+            "recorded walkthrough. For the first month we watch the usage, "
+            "answer the questions that come up and chase whatever blocks "
+            "the rollout. Then the launch is reviewed with the customer's "
+            "sponsor, the open items are agreed, and the account is handed "
+            "over to support."
+        ),
+        "goal": (
+            "Every new customer live within thirty days of signing, with "
+            "their own admins running the product rather than waiting on us."
+        ),
+        "steps": [],
     },
 ]

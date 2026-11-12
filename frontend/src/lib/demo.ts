@@ -95,11 +95,19 @@ export async function switchDemoPersona(persona: DemoPersona): Promise<void> {
 
 export type DemoGuidePath = "coverage" | "pdp" | "assessment" | "skip";
 
+/** Where the picked route starts; each id is null for the routes that do
+ * not use it, and when the sandbox has nothing of the kind left. */
+export interface DemoGuideStarts {
+  /** Plan and assessment routes: a completed assessment with growth zones. */
+  assessment_id: string | null;
+  /** Coverage route: the process with no steps yet. */
+  process_id: string | null;
+  /** Coverage route: a process with a step nobody does, for the hire step. */
+  gap_process_id: string | null;
+}
+
 /** Record the route picked in "Where to start" (or "skip") — the demo
- * funnel's guided/free split — and get the completed assessment the plan
- * and assessment routes start from, when the sandbox still has one. */
-export async function chooseDemoGuide(
-  path: DemoGuidePath,
-): Promise<{ assessment_id: string | null }> {
-  return api.post<{ assessment_id: string | null }>("/demo/guide", { path });
+ * funnel's guided/free split — and get the pages the route starts from. */
+export async function chooseDemoGuide(path: DemoGuidePath): Promise<DemoGuideStarts> {
+  return api.post<DemoGuideStarts>("/demo/guide", { path });
 }

@@ -125,11 +125,15 @@ class DemoGuideRequest(BaseModel):
 
 
 class DemoGuideResponse(BaseModel):
-    """The completed assessment the plan and assessment routes start from.
-
-    ``None`` for the other routes, and when the sandbox has no completed
-    assessment with growth zones and no plan left — the route then starts
-    from the Assessments list.
+    """Where the picked route starts; every id is ``None`` for the routes
+    that do not use it, and when the sandbox has nothing of the kind left
+    — the route then starts from the list.
     """
 
+    # Plan and assessment routes: a completed assessment with growth zones
+    # and no plan built from it.
     assessment_id: uuid.UUID | None = None
+    # Coverage route (HRP-1176): the process with no steps yet, and a
+    # process with a step nobody covers for the hire step.
+    process_id: uuid.UUID | None = None
+    gap_process_id: uuid.UUID | None = None
