@@ -15,16 +15,18 @@ import type { SkillStatus, StepSkill } from "@/lib/api/work";
 
 const getSkill = vi.fn();
 const generateSkill = vi.fn();
+const toastSuccess = vi.fn();
 
 vi.mock("@/lib/api/work", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/work")>()),
   workApi: { getSkill, generateSkill },
 }));
-vi.mock("@/context/auth-context", () => ({ useAuth: () => ({ user: null }) }));
+let authUser: { tenant_is_demo?: boolean } | null = null;
+vi.mock("@/context/auth-context", () => ({ useAuth: () => ({ user: authUser }) }));
 vi.mock("@/hooks/use-cost-confirmation", () => ({
   useCostConfirmation: () => ({ cost: null, threshold: 0, requiresConfirmation: false }),
 }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
 
 const { SkillDialog } = await import("@/components/coverage/skill-dialog");
 
@@ -46,6 +48,8 @@ let root: Root;
 beforeEach(() => {
   getSkill.mockReset();
   generateSkill.mockReset();
+  toastSuccess.mockReset();
+  authUser = null;
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -61,7 +65,7 @@ async function open(status: SkillStatus, onClose: () => void = () => {}) {
     root.render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
         <SkillDialog
-          step={{ step_id: "s-1", title: "Draft the offer", skill_status: status }}
+          step={{ step_id: "s-1", position: 3, title: "Draft the offer", skill_status: status }}
           canEdit
           onClose={onClose}
           onChanged={() => {}}
@@ -94,8 +98,9 @@ it("does not regenerate a ready skill that came back empty", async () => {
 
 it("asks before the first skill of a step, and generates once confirmed", async () => {
   generateSkill.mockResolvedValue({ ...SKILL, status: "generating" });
+  const onClose = vi.fn();
 
-  await open("none");
+  await open("none", onClose);
 
   expect(generateSkill).not.toHaveBeenCalled();
   expect(byId("coverage-modal-skill")).toBeNull();
@@ -106,7 +111,22 @@ it("asks before the first skill of a step, and generates once confirmed", async 
 
   expect(generateSkill).toHaveBeenCalledWith("s-1");
   expect(byId("coverage-skill-confirm-btn-confirm")).toBeNull();
-  expect(byId("coverage-modal-skill")).not.toBeNull();
+  // HRP-1202: queued, not awaited - the reader goes back to the process,
+  // told the step updates by itself; no progress modal holds them.
+  expect(byId("coverage-modal-skill")).toBeNull();
+  expect(onClose).toHaveBeenCalled();
+  expect(toastSuccess.mock.calls[0][0]).toContain("step 3 is being written");
+});
+
+it("leaves a generation started elsewhere to the page instead of waiting in the modal", async () => {
+  getSkill.mockResolvedValue({ ...SKILL, status: "generating" });
+  const onClose = vi.fn();
+
+  await open("generating", onClose);
+
+  expect(generateSkill).not.toHaveBeenCalled();
+  expect(byId("coverage-modal-skill")).toBeNull();
+  expect(onClose).toHaveBeenCalled();
 });
 
 it("cancel closes without a request", async () => {
@@ -154,4 +174,20 @@ it("says the file follows the AI content language (HRP-912)", async () => {
   await open("ready");
 
   expect(document.body.textContent).toContain(enMessages.coverage.skillLanguageHint);
+});
+
+// HRP-1201: a demo visitor has no agent of their own - the dialog says in
+// one line where the file goes, next to the download; nothing asks for an
+// agent first. Outside the demo the text is the one it always was.
+it.each([
+  ["the demo", { tenant_is_demo: true }, enMessages.coverage.skillTextDemo],
+  ["a company workspace", { tenant_is_demo: false }, enMessages.coverage.skillText],
+])("in %s says where the file goes", async (_name, user, text) => {
+  authUser = user;
+  getSkill.mockResolvedValue({ ...SKILL, content: "# Draft the offer" });
+
+  await open("ready");
+
+  expect(byId("coverage-skill-text")!.textContent).toBe(text);
+  expect(byId("coverage-btn-skill-download")!.hasAttribute("disabled")).toBe(false);
 });

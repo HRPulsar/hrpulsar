@@ -300,7 +300,7 @@ class TestRoute:
         await _ready_skill(db, tenant, taken, "taken", "---\nname: taken\n---\n")
         employee = await _employee(db, tenant)
         await service.update_step(
-            db, tenant.id, taken["id"], StepUpdate(executor_employee_id=employee.id)
+            db, tenant.id, taken["id"], StepUpdate(executor_employee_ids=[employee.id])
         )
 
         rows_before = await db.scalar(select(func.count()).select_from(WorkStepSkill))

@@ -7,10 +7,11 @@
 // To do tab opens the same window for one row or for its selection - one
 // component, the title says which.
 //
-// All three land a draft vacancy in Recruitment. "Look inside first" also
-// puts it on the talent market, when the draft has a library competence to
-// match on; "Agency" marks the draft's title. Publishing stays a
-// recruiter's action.
+// "Look inside first" opens a talent-market card and nothing in Recruitment
+// (HRP-801, QA 12.11); without a library competence to match on, or when the
+// talent market refuses the card, it falls back to a draft vacancy and the
+// toast says so. The other two land a draft vacancy in Recruitment; "Agency"
+// marks its title. Publishing stays a recruiter's action.
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
@@ -66,8 +67,8 @@ export function HireFromStepDialog({
         label: BODY[route].label,
         internal_search_allowed: BODY[route].internal_search_allowed,
       });
-      // The talent market needs a library competence on the draft; without
-      // one the vacancy stays in Recruitment and says so, not silently.
+      // The card needs a library competence to match on; without one the
+      // need opens as a draft in Recruitment and says so, not silently.
       if (route === "internal_first" && !need.talent_card_id) {
         toast.warning(t("hireNeedNotOnTalentMarket"));
       } else {

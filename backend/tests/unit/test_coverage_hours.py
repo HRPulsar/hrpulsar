@@ -226,7 +226,7 @@ class TestAlreadyAutomated:
         await _agent(db, tenant, user, "extraction")
         doer = await _employee(db, tenant)
         await service.update_step(
-            db, tenant.id, step["id"], StepUpdate(executor_employee_id=doer.id)
+            db, tenant.id, step["id"], StepUpdate(executor_employee_ids=[doer.id])
         )
         result = await coverage.compute(db, tenant.id, c.id)
         assert result["steps"][0]["agent"]["agent_id"] is not None

@@ -14,18 +14,34 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.modules.ai_workforce import service as agents_service
+from app.modules.ai_workforce.models import AIAgent
 from app.modules.competence.models import Competence
 from app.modules.demo.seed import clone_seed_into_demo_tenant
-from app.modules.demo.seed_data_work import COMPETENCE_PRIMITIVES, WORK_CONTAINERS
+from app.modules.demo.seed_data_work import (
+    COMPETENCE_PRIMITIVES,
+    DEMO_AGENTS,
+    WORK_CONTAINERS,
+    preset_breakdown,
+)
+from app.modules.demo.seed_i18n import localize
 from app.modules.primitives import catalog_data
 from app.modules.primitives.catalog_data import PRIMITIVES
 from app.modules.primitives.models import CompetenceMappingState, CompetencePrimitive
 from app.modules.work import coverage as coverage_service
+from app.modules.work import service as work_service
 from app.modules.work.models import WorkContainer, WorkStep, WorkStepPrimitive
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _CATALOG_CODES = {p["code"] for p in PRIMITIVES}
+
+
+def _all_steps():
+    """The seeded steps and the onboarding preset (HRP-1208): the preset
+    is applied as a breakdown, so it answers to the same rules."""
+    for spec in WORK_CONTAINERS:
+        yield from spec["steps"]
+        yield from spec.get("preset_steps", [])
 
 
 @pytest.fixture(autouse=True)
@@ -69,9 +85,8 @@ def test_fixture_codes_exist_in_the_catalog():
     """A typo in a code would be silently dropped by the seeder — the
     links are written ``if code in primitives``. Catch it here instead."""
     used = {code for codes in COMPETENCE_PRIMITIVES.values() for code in codes}
-    for spec in WORK_CONTAINERS:
-        for step in spec["steps"]:
-            used |= set(step["primitives"])
+    for step in _all_steps():
+        used |= set(step["primitives"])
     assert used <= _CATALOG_CODES, sorted(used - _CATALOG_CODES)
 
 
@@ -79,10 +94,9 @@ def test_every_step_is_estimated():
     """A step without both numbers falls out of the shares and the ROI
     panel (``coverage.step_hours``), which is the panel these fixtures
     exist to fill."""
-    for spec in WORK_CONTAINERS:
-        for step in spec["steps"]:
-            assert step["hours_per_run"] > 0, step["title"]
-            assert step["runs_per_year"] >= 1, step["title"]
+    for step in _all_steps():
+        assert step["hours_per_run"] > 0, step["title"]
+        assert step["runs_per_year"] >= 1, step["title"]
 
 
 @pytest.mark.asyncio
@@ -353,14 +367,100 @@ def test_one_process_is_left_for_the_visitor_to_break_down():
     assert spec["status"] == "draft" and spec["source"] == "manual"
 
 
-def test_the_iso_project_keeps_its_steps_under_the_new_title():
-    """HRP-870 renamed the project; its steps are the same."""
+def test_the_iso_project_follows_its_description():
+    """HRP-1193: the steps follow the description, from the boundaries of
+    the system to the surveillance audits that keep the certificate."""
     iso = next(spec for spec in WORK_CONTAINERS if spec["key"] == "iso27001")
     assert iso["title"] == "Getting ISO 27001 certified"
     assert iso["type"] == "initiative" and iso["status"] == "draft"
-    assert len(iso["steps"]) == 12
-    assert iso["steps"][0]["title"].startswith("Map the scope")
-    assert iso["steps"][-1]["title"] == "Set up the surveillance cycle"
+    assert len(iso["steps"]) == 13
+    assert iso["steps"][0]["title"] == "Define the boundaries of the security system"
+    assert (
+        iso["steps"][-1]["title"]
+        == "Plan the annual surveillance audits and the renewal"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_seeded_agents_automate_part_of_both_processes(
+    db: AsyncSession, tenant, user
+):
+    """HRP-1194: "Already automated" read 0 % - no step had an agent the
+    company runs. Seeded ones take part of each process, not all of it: the
+    demo shows the benefit and still leaves work on To do."""
+    await _seed(db, tenant, user)
+    agents = (
+        (await db.execute(select(AIAgent).where(AIAgent.tenant_id == tenant.id)))
+        .scalars()
+        .all()
+    )
+    assert sorted(a.name for a in agents) == sorted(a["name"] for a in DEMO_AGENTS)
+    assert all(a.pack_id is not None and a.is_active for a in agents)
+
+    title_of = {spec["key"]: spec["title"] for spec in WORK_CONTAINERS}
+    for key in PROCESS_KEYS:
+        container = (
+            await db.execute(
+                select(WorkContainer).where(
+                    WorkContainer.tenant_id == tenant.id,
+                    WorkContainer.title == title_of[key],
+                )
+            )
+        ).scalar_one()
+        report = await coverage_service.compute(
+            db, tenant.id, container.id, user_id=user.id
+        )
+        hours = report["hours"]
+        assert 0 < hours["automated"] < hours["moves"] + hours["to_review"], (
+            key,
+            hours,
+        )
+        # The list column reads the summary stored at seed time.
+        assert container.coverage_summary["automated_share"] > 0, key
+        # A step a seeded agent covers still waits for its instruction,
+        # like every other agent step of the demo (HRP-1201).
+        todo = await coverage_service.gaps(db, tenant.id, container.id)
+        with_agent = {
+            g["agent"]["agent_id"] is not None
+            for g in todo
+            if g["kind"] == "not_automated_yet"
+        }
+        assert with_agent == {True, False}, key
+
+
+def test_the_onboarding_preset_answers_its_own_text_only():
+    """HRP-1208: the prepared steps go to the seeded description and goal
+    in the content language, whatever the spacing - not to an edit, not to
+    another language's text, not to another seeded process."""
+    spec = next(s for s in WORK_CONTAINERS if s["key"] == "customer_onboarding")
+    text = {"description": spec["description"], "goal": spec["goal"]}
+    payload = preset_breakdown(text, "en")
+    assert payload is not None
+    assert [s["title"] for s in payload["steps"]] == [
+        s["title"] for s in spec["preset_steps"]
+    ]
+    spaced = {"description": f"  {spec['description']}\n", "goal": spec["goal"]}
+    assert preset_breakdown(spaced, "en") is not None
+    edited = {"description": f"{spec['description']} Edited.", "goal": spec["goal"]}
+    assert preset_breakdown(edited, "en") is None
+    assert preset_breakdown({**text, "goal": "Another goal."}, "en") is None
+
+    local = localize(spec, "de")
+    de_text = {"description": local["description"], "goal": local["goal"]}
+    de_payload = preset_breakdown(de_text, "de")
+    assert de_payload is not None
+    assert [s["title"] for s in de_payload["steps"]] == [
+        s["title"] for s in local["preset_steps"]
+    ]
+    assert preset_breakdown(text, "de") is None
+
+    requests = next(s for s in WORK_CONTAINERS if s["key"] == "customer_requests")
+    assert (
+        preset_breakdown(
+            {"description": requests["description"], "goal": requests["goal"]}, "en"
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -378,3 +478,41 @@ async def test_reseed_is_a_no_op(db: AsyncSession, tenant, user):
         )
     ).scalar_one()
     assert containers == len(WORK_CONTAINERS)
+
+
+@pytest.mark.asyncio
+async def test_the_applied_onboarding_preset_gives_a_working_coverage(
+    db: AsyncSession, tenant, user
+):
+    """HRP-1208: the steps the demo hands out at once are a breakdown the
+    Coverage tab can answer for - shares, agent and person verdicts,
+    nothing unclassified - as on the seeded processes."""
+    await _seed(db, tenant, user)
+    spec = next(s for s in WORK_CONTAINERS if s["key"] == "customer_onboarding")
+    container = (
+        await db.execute(
+            select(WorkContainer).where(
+                WorkContainer.tenant_id == tenant.id,
+                WorkContainer.title == spec["title"],
+            )
+        )
+    ).scalar_one()
+    sess = await work_service.create_session(db, tenant.id, user.id, container.id)
+    sess.status = "ready"
+    sess.payload = preset_breakdown(
+        {"description": container.description, "goal": container.goal}, "en"
+    )
+    await db.commit()
+    await work_service.apply_session(
+        db, tenant.id, sess.id, idempotency_key="demo-preset-apply"
+    )
+
+    report = await coverage_service.compute(
+        db, tenant.id, container.id, user_id=user.id
+    )
+    verdicts = {row["verdict"] for row in report["steps"]}
+    assert len(report["steps"]) == len(spec["preset_steps"])
+    assert "unclassified" not in verdicts
+    assert {"agent", "human"} <= verdicts, verdicts
+    assert report["shares"] is not None
+    assert report["shares"]["moves"] > 0 and report["shares"]["stays"] > 0

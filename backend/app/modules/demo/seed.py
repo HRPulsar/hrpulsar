@@ -28,12 +28,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.currency import installation_currency
 from app.core.security import hash_password
 from app.models import Person
+from app.modules.ai_workforce.models import AIAgent, AIAgentPack
 from app.modules.assessment.models import (
     PDP,
     AnswerOption,
@@ -111,6 +112,7 @@ from app.modules.demo.seed_data_recruitment_extras import (
 from app.modules.demo.seed_data_talent_market import TALENT_CARDS
 from app.modules.demo.seed_data_work import (
     COMPETENCE_PRIMITIVES,
+    DEMO_AGENTS,
     WORK_CONTAINERS,
 )
 from app.modules.demo.seed_i18n import localize, seed_locale, translate
@@ -2143,6 +2145,42 @@ async def _seed_work(
             commit=False,
         )
         mapped += 1
+    await db.flush()
+
+    # HRP-1194: the agents the company already runs - the row "I already use
+    # this" writes, a name and a built-in agent type. Before the containers:
+    # the summary stored below counts the work they do.
+    packs = {
+        p.code: p.id
+        for p in (
+            await db.execute(
+                select(AIAgentPack).where(
+                    AIAgentPack.tenant_id.is_(None), AIAgentPack.is_active.is_(True)
+                )
+            )
+        ).scalars()
+    }
+    for agent_spec in localize(DEMO_AGENTS):
+        if agent_spec["pack"] not in packs:
+            continue
+        taken = (
+            await db.execute(
+                select(AIAgent.id).where(
+                    AIAgent.tenant_id == tenant_id,
+                    func.lower(AIAgent.name) == agent_spec["name"].lower(),
+                )
+            )
+        ).scalar()
+        if taken is None:
+            db.add(
+                AIAgent(
+                    tenant_id=tenant_id,
+                    name=agent_spec["name"],
+                    pack_id=packs[agent_spec["pack"]],
+                    category=agent_spec["category"],
+                    data_classification=agent_spec["data_classification"],
+                )
+            )
     await db.flush()
 
     container_count = 0

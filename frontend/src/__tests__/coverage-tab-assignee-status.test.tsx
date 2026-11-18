@@ -45,6 +45,7 @@ const STEP: CoverageStep = {
     missing_codes: [],
   },
   human_backup: false,
+  executors: [],
   accountable: { employee_id: "e-2", name: "John Roe", position: null, status: "terminated" },
   needs_accountable: false,
   gap_label: null,
@@ -54,6 +55,8 @@ const STEP: CoverageStep = {
   tentative: false,
   review_human_share: null,
 };
+// HRP-1197: the assigned person is the step's executor.
+STEP.executors = [STEP.human!];
 
 function coverageOf(...steps: CoverageStep[]): Coverage {
   return {
@@ -128,6 +131,7 @@ it("shows no chip for an active person", async () => {
     coverageOf({
       ...STEP,
       human: { ...STEP.human!, status: "active" },
+      executors: [{ ...STEP.human!, status: "active" }],
       accountable: { ...STEP.accountable!, status: undefined },
     }),
   );

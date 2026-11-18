@@ -19,7 +19,7 @@ import Link from "next/link";
 
 import { BADGE_COLOR } from "@/lib/badge-tones";
 import { usePermissions } from "@/hooks/use-permissions";
-import type { Coverage, Quality } from "@/lib/api/work";
+import type { AutomationMode, Coverage, CoverageStep, Quality } from "@/lib/api/work";
 
 /** The bar's segments and the legend's dots, in bar order: one list, so the
  * two cannot drift apart. The labels are the bucket cards' own. The grey is
@@ -31,8 +31,26 @@ const BUCKETS = [
   { key: "stays", color: "bg-zinc-500", label: "summaryStays" },
 ] as const;
 
-type BucketKey = (typeof BUCKETS)[number]["key"];
+export type BucketKey = (typeof BUCKETS)[number]["key"];
 type Shares = NonNullable<Coverage["shares"]>;
+
+/** The backend's `BUCKET_OF_MODE`: which share a step's hours go to. */
+const BUCKET_OF_MODE: Record<AutomationMode, BucketKey> = {
+  automatable: "moves",
+  draft_then_review: "to_review",
+  review_required: "to_review",
+  blocked_judgment: "stays",
+  blocked_physical: "stays",
+};
+
+/** The in-scope steps of each bucket, estimated or not. One function for the
+ * legend, the bucket cards and who-does-what (HRP-1195, HRP-1200), so their
+ * step counts cannot disagree. */
+export function bucketsOf(steps: CoverageStep[]): Record<BucketKey, CoverageStep[]> {
+  const out: Record<BucketKey, CoverageStep[]> = { moves: [], to_review: [], stays: [] };
+  for (const s of steps) if (s.in_scope && s.mode) out[BUCKET_OF_MODE[s.mode]].push(s);
+  return out;
+}
 
 /** Largest remainder. Rounded one by one, three shares of 33.33 print "33%"
  * three times and the reader adds up 99; these always add up to 100. The
@@ -100,7 +118,14 @@ export function CoverageSummary({ coverage }: { coverage: Coverage }) {
             </p>
           </>
         ) : (
-          <SharesCard shares={shares} t={t} />
+          <SharesCard
+            shares={shares}
+            hours={hours}
+            buckets={bucketsOf(coverage.steps)}
+            inScope={inScope}
+            round={round}
+            t={t}
+          />
         )}
       </div>
 
@@ -146,6 +171,11 @@ export function CoverageSummary({ coverage }: { coverage: Coverage }) {
               data-hours={Math.round(hours.automated)}
             >
               {t("roiHoursDone", { automated: round(hours.automated), total: round(hours.total) })}
+              {/* HRP-1194: how the figure is counted - a second sentence, the
+                  way RoiRow's hints are. */}
+              <span className="ml-1 text-xs text-muted-foreground" data-testid="coverage-roi-automated-hint">
+                · {t("roiHoursDoneHint")}
+              </span>
             </p>
             {hours.unestimated > 0 && (
               <p className="mt-3 text-xs text-muted-foreground" data-testid="coverage-roi-unestimated">
@@ -204,12 +234,24 @@ export function CoverageSummary({ coverage }: { coverage: Coverage }) {
 
 /** The headline percentage, the bar and its legend - one set of shares read
  * three times, so they are rounded once, together. The exact percentage
- * stays on each element in `data-share`. */
+ * stays on each element in `data-share`.
+ *
+ * HRP-1195: a percent is of yearly hours, so a long step weighs more than a
+ * short one. Each legend line says how many steps and how many hours stand
+ * behind it, and the caption names the base and the steps left out of it. */
 function SharesCard({
   shares,
+  hours,
+  buckets,
+  inScope,
+  round,
   t,
 }: {
   shares: Shares;
+  hours: Coverage["hours"];
+  buckets: Record<BucketKey, CoverageStep[]>;
+  inScope: number;
+  round: (value: number) => string;
   t: (key: string, values?: Record<string, string | number>) => string;
 }) {
   const whole = wholePercents(shares);
@@ -244,20 +286,29 @@ function SharesCard({
           />
         ))}
       </div>
-      <ul className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+      <ul className="mt-3 space-y-1">
         {BUCKETS.map((b) => (
           <li
             key={b.key}
-            className="flex items-center gap-1.5 text-sm"
+            className="flex flex-wrap items-center gap-x-1.5 text-sm"
             data-testid={`coverage-share-${b.key}`}
             data-share={shares[b.key]}
+            data-steps={buckets[b.key].length}
+            data-hours={Math.round(hours[b.key])}
           >
             <span className={`size-2.5 shrink-0 rounded-full ${b.color}`} />
             <span className="tabular-nums">{percent(b.key)}</span>
             <span className="text-muted-foreground">{t(b.label)}</span>
+            <span className="text-xs text-muted-foreground tabular-nums" data-testid={`coverage-share-${b.key}-basis`}>
+              · {t("sharesBucketSteps", { count: buckets[b.key].length, total: inScope })} ·{" "}
+              {t("roiHours", { hours: round(hours[b.key]) })}
+            </span>
           </li>
         ))}
       </ul>
+      <p className="mt-2 text-xs text-muted-foreground" data-testid="coverage-shares-base">
+        {t("sharesBase", { unestimated: hours.unestimated })}
+      </p>
     </>
   );
 }

@@ -42,6 +42,7 @@ function step(position: number, pack: string | null, patch: Partial<CoverageStep
       : null,
     human: null,
     human_backup: false,
+    executors: [],
     accountable: null,
     needs_accountable: false,
     gap_label: null,

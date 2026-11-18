@@ -41,6 +41,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import AppError
 from app.modules.ai_workforce import service as agents_service
 from app.modules.assessment.models import (
     Assessment,
@@ -81,8 +82,11 @@ AGENCY_RUNS_PER_YEAR = 12
 # W6 (§5.10): the To do tab is everything unclosed, not only "nobody does
 # this". A step an agent type covers but the tenant has not actually
 # automated - no agent of its own registered, or no skill file written -
-# is work not started, and it belongs on the same list.
-GAP_KINDS = ("no_owner", "not_automated_yet")
+# is work not started, and it belongs on the same list. HRP-1198: so is a
+# step people do where nobody is assigned yet (``unassigned``) - the match
+# found someone, or someone this reader may not see, and the company has
+# not confirmed them.
+GAP_KINDS = ("no_owner", "not_automated_yet", "unassigned")
 STRONG_VERDICTS = ("strong", "better_than_human")
 # W6 (§5.3): the quality traffic light of a step - how well an agent does
 # this work, next to the mode, which says what to do about it. Weakest
@@ -516,15 +520,20 @@ async def _human_layer(
     return out, competence_ids
 
 
-def _assignee_ids(steps: Sequence[WorkStep]) -> list[uuid.UUID]:
-    ids = {s.executor_employee_id for s in steps} | {
+def _assignee_ids(
+    steps: Sequence[WorkStep], executors: Mapping[uuid.UUID, Sequence[uuid.UUID]]
+) -> list[uuid.UUID]:
+    ids = {e for people in executors.values() for e in people} | {
         s.accountable_employee_id for s in steps
     }
     return [i for i in ids if i is not None]
 
 
 async def _assignees(
-    db: AsyncSession, tenant_id: uuid.UUID, steps: Sequence[WorkStep]
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    steps: Sequence[WorkStep],
+    executors: Mapping[uuid.UUID, Sequence[uuid.UUID]],
 ) -> dict[uuid.UUID | None, dict[str, Any]]:
     """The employees the steps name as executor or accountable (HRP-809).
     Read on their own rather than out of ``_human_layer``, which drops a
@@ -533,7 +542,7 @@ async def _assignees(
     (HRP-959): the company's word stands until the company changes it, and
     the row says the person is on leave or gone. A deleted one is nulled by
     the FK."""
-    ids = _assignee_ids(steps)
+    ids = _assignee_ids(steps, executors)
     if not ids:
         return {}
     rows = await db.execute(
@@ -726,6 +735,50 @@ def _match_human(codes: set[str], people) -> dict[str, Any] | None:
     }
 
 
+async def step_people(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    step_id: uuid.UUID,
+    *,
+    visible: set[uuid.UUID] | None,
+) -> list[dict[str, Any]]:
+    """HRP-1197: everyone who can take the step - the active employees of
+    ``service.list_people`` - each with ``match_percent``, the share of the
+    step's capabilities they hold by the very data ``_match_human`` reads
+    (assessed or expected by the grade), cognitive codes only. Most matching
+    first, then by name. The percent comes from assessments, so it stays
+    None for a person outside the reader's HR scope (``visible``, as in
+    ``redact_people``), as on a step with no capability to measure."""
+    step = await db.get(WorkStep, step_id)
+    if step is None or step.tenant_id != tenant_id:
+        raise AppError("work_step_not_found", 404)
+    rows = await db.execute(
+        select(Primitive)
+        .join(WorkStepPrimitive, WorkStepPrimitive.primitive_id == Primitive.id)
+        .where(WorkStepPrimitive.step_id == step_id)
+    )
+    cognitive = {p.code for p in rows.scalars() if count_toward_coverage(p)}
+    held: dict[uuid.UUID, int] = {}
+    if cognitive:
+        layer, _ = await _human_layer(db, tenant_id, cognitive)
+        held = {p["id"]: len(cognitive & p["codes"].keys()) for p in layer}
+    out = [
+        {
+            **{k: p[k] for k in ("employee_id", "name", "email", "position_title")},
+            "match_percent": (
+                round(100 * held.get(p["employee_id"], 0) / len(cognitive))
+                if cognitive and (visible is None or p["employee_id"] in visible)
+                else None
+            ),
+        }
+        for p in await service.list_people(db, tenant_id)
+        if p["assignable"]
+    ]
+    # Stable: ``list_people`` is already in name order.
+    out.sort(key=lambda p: (p["match_percent"] is None, -(p["match_percent"] or 0)))
+    return out
+
+
 async def compute(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -746,13 +799,14 @@ async def compute(
     started = time.perf_counter()
     container = await get_container(db, tenant_id, container_id)
     steps = await _steps(db, container.id)
+    executor_ids = await service.step_executor_ids(db, [s.id for s, _ in steps])
     packs, agents = await _agent_layer(db, tenant_id)
     people_layer, referenced = (
         await _human_layer(
             db,
             tenant_id,
             {p.code for _step, ps in steps for p in ps},
-            also=_assignee_ids([s for s, _ in steps]),
+            also=_assignee_ids([s for s, _ in steps], executor_ids),
         )
         if people
         else ([], set())
@@ -795,7 +849,7 @@ async def compute(
             .all()
         )
 
-    assignees = await _assignees(db, tenant_id, [s for s, _ in steps])
+    assignees = await _assignees(db, tenant_id, [s for s, _ in steps], executor_ids)
     codes_of_person = {p["id"]: p["codes"] for p in people_layer}
 
     result_rows: list[dict[str, Any]] = []
@@ -803,18 +857,27 @@ async def compute(
         codes = {p.code for p in primitives}
         cognitive = [p.code for p in primitives if count_toward_coverage(p)]
         mode = effective_mode(step, primitives)
-        executor = assignees.get(step.executor_employee_id)
         accountable = assignees.get(step.accountable_employee_id)
-        agent = human = None
-        if executor:
-            # HRP-809: the company's word outranks the match, an agent's
-            # included; the agent stays on the row as what could take it.
-            held = codes_of_person.get(executor["employee_id"], {})
-            human = {
-                **executor,
-                "label": "assigned",
-                "missing_codes": [c for c in cognitive if c not in held],
-            }
+        # HRP-809: the company's word outranks the match, an agent's
+        # included; the agent stays on the row as what could take it.
+        # HRP-1197: several people may do the step, each with what they
+        # lack; ``human`` is the first of them by name.
+        executors = sorted(
+            (
+                {
+                    **assignees[e],
+                    "label": "assigned",
+                    "missing_codes": [
+                        c for c in cognitive if c not in codes_of_person.get(e, {})
+                    ],
+                }
+                for e in executor_ids[step.id]
+                if e in assignees
+            ),
+            key=lambda p: (p["name"], str(p["employee_id"])),
+        )
+        agent = None
+        human = executors[0] if executors else None
         if cognitive:
             # The named pack only counts in a mode where an agent produces
             # the work: on a blocked step it would take the row out of To do
@@ -825,7 +888,7 @@ async def compute(
                 agents,
                 step.manual_pack_id if mode in CANDIDATE_MODES else None,
             )
-            if executor:
+            if executors:
                 verdict = "human"
             else:
                 # Cognitive codes only, like ``required_codes`` and an
@@ -855,6 +918,8 @@ async def compute(
                 "step_id": step.id,
                 "position": step.position,
                 "title": step.title,
+                # HRP-1196: the Steps tab's text, shown on the coverage row too.
+                "description": step.description,
                 "state": step.state,
                 "codes": [p.code for p in primitives],
                 "required_codes": cognitive,
@@ -866,6 +931,7 @@ async def compute(
                 "agent": agent,
                 "human": human,
                 "human_backup": verdict == "agent" and human is not None,
+                "executors": executors,
                 "accountable": accountable,
                 "needs_accountable": (
                     accountable is None
@@ -939,6 +1005,11 @@ async def compute(
 
     # The one rate the ROI is priced at (§5.2); no GEO benchmark behind it.
     tenant = await db.get(Tenant, tenant_id)
+    # HRP-1198/1206: the To do group of every row, so the tab's count comes
+    # with the coverage the page loads anyway - one rule with the tab itself.
+    agent_required = not (tenant is not None and tenant.is_demo)
+    for r in result_rows:
+        r["todo"] = gap_kind(r, agent_required=agent_required)
     # HRP-868: a step may name its own rate, so the money is summed here.
     tenant_rate = tenant.hourly_rate if tenant is not None else None
     money = money_of(
@@ -1073,14 +1144,19 @@ async def _hire_need_of_step(
     db: AsyncSession, tenant_id: uuid.UUID, container_id: uuid.UUID
 ) -> dict[str, dict[str, Any]]:
     """step id (as a string) → the newest hire need of the container that
-    still points at a vacancy (a deleted vacancy leaves ``vacancy_id``
-    NULL and the need drops out of the screen)."""
+    still points at a vacancy or at its own talent card (HRP-801, QA 12.11).
+    A deleted vacancy or card leaves the column NULL; a need left with
+    neither drops out of the screen, and the step can be handed over again.
+    The card is the need's own, else the vacancy's live twin."""
     rows = await db.execute(
         select(WorkHireNeed)
         .where(
             WorkHireNeed.tenant_id == tenant_id,
             WorkHireNeed.container_id == container_id,
-            WorkHireNeed.vacancy_id.is_not(None),
+            or_(
+                WorkHireNeed.vacancy_id.is_not(None),
+                WorkHireNeed.talent_card_id.is_not(None),
+            ),
         )
         .order_by(WorkHireNeed.created_at.desc(), WorkHireNeed.id.desc())
     )
@@ -1089,17 +1165,22 @@ async def _hire_need_of_step(
     out: dict[str, dict[str, Any]] = {}
     for need in needs:
         for step_id in need.step_ids:
-            out.setdefault(
-                str(step_id),
-                {
-                    "id": need.id,
-                    "vacancy_id": need.vacancy_id,
-                    "label": need.label,
-                    # Not None: the query keeps needs with a vacancy only.
-                    "talent_card_id": cards.get(need.vacancy_id),  # type: ignore[arg-type]
-                },
-            )
+            out.setdefault(str(step_id), need_link(need, cards))
     return out
+
+
+def need_link(
+    need: WorkHireNeed, cards: Mapping[uuid.UUID, uuid.UUID]
+) -> dict[str, Any]:
+    """The need as a step reads it (``GapHireNeed``), ``cards`` being
+    ``live_talent_cards`` of its vacancy."""
+    return {
+        "id": need.id,
+        "vacancy_id": need.vacancy_id,
+        "label": need.label,
+        "talent_card_id": need.talent_card_id
+        or (cards.get(need.vacancy_id) if need.vacancy_id else None),
+    }
 
 
 async def live_talent_cards(
@@ -1144,23 +1225,35 @@ def redact_people(
     A person's status is not redacted: leave shows to every reader of the
     section, ``view`` as ``manage`` (HRP-1020 REDO, QA 30.10) - the gate keeps
     ``none`` out of Coverage altogether."""
+    if visible is None:
+        return result
     for row in result["steps"]:
+        row["executors"] = [
+            e if e["employee_id"] in visible else {**e, "missing_codes": []}
+            for e in row["executors"]
+        ]
         human = row["human"]
-        if visible is None or human is None or human["employee_id"] in visible:
+        if human is None or human["employee_id"] in visible:
             continue
         if human["label"] == "assigned":
-            row["human"] = {**human, "missing_codes": []}
+            row["human"] = row["executors"][0]
         else:
             row["human"] = None
             row["human_backup"] = False
     return result
 
 
-def gap_kind(row: dict[str, Any]) -> str | None:
+def gap_kind(row: dict[str, Any], *, agent_required: bool = True) -> str | None:
     """Which To do section a coverage row belongs to, or None when it
-    belongs to neither (§5.10)."""
+    belongs to none (§5.10). ``agent_required=False`` (the demo sandbox,
+    HRP-1201) closes an agent's step on its skill file alone: a visitor has
+    no agent of their own to register, and the step must not wait on one.
+    HRP-1198: a step people do stays until the company names who does it -
+    a match is not an assignment."""
     if row["verdict"] == "gap":
         return "no_owner"
+    if row["verdict"] == "human" and not row["executors"]:
+        return "unassigned"
     # The mode has to agree, not only the pack match: a tenant may add any
     # catalog code to its own agent, including a judgement or a boundary
     # one, and such a step would otherwise be listed with a skill button
@@ -1168,7 +1261,10 @@ def gap_kind(row: dict[str, Any]) -> str | None:
     if (
         row["verdict"] == "agent"
         and row["mode"] in CANDIDATE_MODES
-        and (row["agent"]["agent_id"] is None or row["skill_status"] != "ready")
+        and (
+            (agent_required and row["agent"]["agent_id"] is None)
+            or row["skill_status"] != "ready"
+        )
     ):
         return "not_automated_yet"
     return None
@@ -1181,18 +1277,29 @@ async def gaps(
     *,
     user_id: uuid.UUID | None = None,
     schedule_mapping: bool = True,
+    visible: set[uuid.UUID] | None = None,
 ) -> list[dict[str, Any]]:
     """Everything unclosed, in breakdown order: the steps nobody covers
     (``no_owner``, each with the hire need it was already handed to,
-    HRP-759) and the ones an agent could take but nobody has automated
-    yet (``not_automated_yet``). One list with a ``kind``, so the filter
-    lives in one place and the hire guard can read it."""
-    result = await compute(
-        db, tenant_id, container_id, user_id=user_id, schedule_mapping=schedule_mapping
+    HRP-759), the ones an agent could take but nobody has automated yet
+    (``not_automated_yet``) and the ones people do with nobody assigned
+    (``unassigned``, HRP-1198, with the person the match found). One list
+    with a ``kind`` - the row's ``todo`` - so the filter lives in one place
+    and the hire guard can read it. ``visible`` is the reader's HR scope,
+    as for the coverage itself; None names everyone."""
+    result = redact_people(
+        await compute(
+            db,
+            tenant_id,
+            container_id,
+            user_id=user_id,
+            schedule_mapping=schedule_mapping,
+        ),
+        visible=visible,
     )
     rows = []
     for r in result["steps"]:
-        kind = gap_kind(r)
+        kind = r["todo"]
         if kind is None:
             continue
         rows.append(
@@ -1204,9 +1311,11 @@ async def gaps(
                 "mode": r["mode"],
                 "gap_label": r["gap_label"],
                 "required_codes": r["required_codes"],
+                "codes": r["codes"],
                 "agent": r["agent"],
                 "skill_status": r["skill_status"],
                 "hire_need": r["hire_need"],
+                "human": r["human"],
             }
         )
     return rows

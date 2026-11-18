@@ -36,7 +36,7 @@ const STEP: WorkStep = {
   state: "system_suggested",
   gap_label: null,
   notes: null,
-  executor_employee_id: null,
+  executor_employee_ids: [],
   accountable_employee_id: null,
   review_human_share: null,
   manual_mode: null,

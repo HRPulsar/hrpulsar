@@ -27,7 +27,7 @@ const DEFAULT_DELAY_MS = 60_000;
 
 /** A value moment's card shows this long after the request: room for the
  * router.push that follows a create to land first. */
-const MOMENT_DELAY_MS = 1_500;
+export const MOMENT_DELAY_MS = 1_500;
 
 /** The timer card is shown once per demo sandbox — keyed by tenant so a
  * genuinely new demo session asks again, while reloads and extra tabs do

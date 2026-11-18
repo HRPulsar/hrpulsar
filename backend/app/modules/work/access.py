@@ -45,6 +45,7 @@ from app.modules.work.models import (
     WorkContainerAccessRule,
     WorkDecompositionSession,
     WorkStep,
+    WorkStepExecutor,
 )
 
 SECTION = "coverage"  # this module's row in the section access matrix
@@ -110,8 +111,12 @@ def visible(actor: Actor) -> ColumnElement[bool]:
             exists().where(
                 WorkStep.container_id == WorkContainer.id,
                 or_(
-                    WorkStep.executor_employee_id == actor.employee_id,
                     WorkStep.accountable_employee_id == actor.employee_id,
+                    # HRP-1197: one of the people who do the step.
+                    exists().where(
+                        WorkStepExecutor.step_id == WorkStep.id,
+                        WorkStepExecutor.employee_id == actor.employee_id,
+                    ),
                 ),
             )
         )

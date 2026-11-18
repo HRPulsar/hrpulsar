@@ -49,6 +49,7 @@ const STEP: CoverageStep = {
   agent: { pack_id: "p-1", pack_code: "extraction", agent_id: null, agent_name: null },
   human: { employee_id: "e-1", name: "Jane Doe", position: "Controller", label: "assessed", missing_codes: [] },
   human_backup: true,
+  executors: [],
   accountable: { employee_id: "e-2", name: "John Roe", position: null },
   needs_accountable: false,
   gap_label: null,
@@ -139,6 +140,7 @@ it("links an assigned executor, and names the agent type that could take the ste
       verdict: "human",
       human_backup: false,
       human: { ...STEP.human!, label: "assigned" },
+      executors: [{ ...STEP.human!, label: "assigned" }],
     }),
   );
 

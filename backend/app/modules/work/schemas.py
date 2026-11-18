@@ -13,6 +13,7 @@ from pydantic import (
     StringConstraints,
     create_model,
     field_validator,
+    model_validator,
 )
 
 from app.modules.work.models import (
@@ -56,6 +57,8 @@ AccessLogAction = Literal[
 
 TITLE_MAX = 300
 TEXT_MAX = 20_000
+# HRP-1197: people named to do one step.
+MAX_STEP_EXECUTORS = 50
 Title = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=TITLE_MAX)
 ]
@@ -180,6 +183,19 @@ class ContainerAccessRead(BaseModel):
     history: list[AccessLogRead]
 
 
+class StepPersonRead(BaseModel):
+    """HRP-1197: an active employee as a candidate executor of one step.
+    ``match_percent`` - the share of the step's capabilities the person
+    holds, by the coverage match's own data; None for a person outside the
+    reader's HR scope, since it is read off their assessments."""
+
+    employee_id: uuid.UUID
+    name: str
+    email: str | None
+    position_title: str | None
+    match_percent: int | None
+
+
 class ProcessPersonRead(BaseModel):
     employee_id: uuid.UUID
     user_id: uuid.UUID
@@ -213,8 +229,22 @@ class StepCreate(BaseModel):
 
 class StepUpdate(BaseModel):
     _reject_null = field_validator(
-        "title", "responsibility", "output_type", mode="before"
+        "title", "responsibility", "output_type", "executor_employee_ids", mode="before"
     )(_not_null)
+
+    # ponytail: the single executor of 2.6.1 and earlier, for a client on the
+    # old contract during the deploy (a cached SPA, an API consumer) - read
+    # as the whole set, ``null`` as nobody, unless the body names the list.
+    # Without it the old field is dropped and the PATCH answers 200 having
+    # done nothing. TODO(2.7): remove with the column (HRP-1197).
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_executor(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "executor_employee_id" in data:
+            data = dict(data)
+            one = data.pop("executor_employee_id")
+            data.setdefault("executor_employee_ids", [] if one is None else [one])
+        return data
 
     title: Title | None = None
     description: str | None = Field(default=None, max_length=TEXT_MAX)
@@ -225,8 +255,13 @@ class StepUpdate(BaseModel):
     output_type: OutputType | None = None
     gap_label: GapLabel | None = None
     notes: str | None = Field(default=None, max_length=TEXT_MAX)
+    # HRP-1197: everyone who does the step, the whole set - ``[]`` clears it.
+    # A person added must be an active employee of the tenant (HRP-809); one
+    # kept stays whatever their status.
+    executor_employee_ids: list[uuid.UUID] | None = Field(
+        default=None, max_length=MAX_STEP_EXECUTORS
+    )
     # HRP-809: an active employee of the tenant; ``null`` clears it.
-    executor_employee_id: uuid.UUID | None = None
     accountable_employee_id: uuid.UUID | None = None
     # ``null`` clears each: the default share (HRP-861), the computed mode
     # and pack (HRP-863), the tenant's rate (HRP-868).
@@ -263,7 +298,9 @@ class StepRead(BaseModel):
     state: StepState
     gap_label: GapLabel | None
     notes: str | None
-    executor_employee_id: uuid.UUID | None
+    # HRP-1197: earliest named first; the people of one save in a stable
+    # order of their own (the screens sort by name).
+    executor_employee_ids: list[uuid.UUID]
     accountable_employee_id: uuid.UUID | None
     review_human_share: int | None
     manual_mode: AutomationMode | None
@@ -409,9 +446,10 @@ class GapHireNeed(BaseModel):
     id: uuid.UUID
     vacancy_id: uuid.UUID | None
     label: GapLabel
-    # HRP-801 (QA 23.10, b): the vacancy's talent-market twin while it still
-    # exists - "look inside first" lands there. Read live, so a twin posted
-    # later from the vacancy is followed too.
+    # HRP-801: the need's own talent card - "look inside first" opens one
+    # instead of a vacancy (QA 12.11) - else the vacancy's talent-market
+    # twin while it still exists, read live, so a twin posted later from a
+    # fallback draft is followed too.
     talent_card_id: uuid.UUID | None = None
 
 
@@ -469,10 +507,18 @@ class CoveragePerson(BaseModel):
 SkillStatus = Literal["none", "generating", "ready", "failed"]
 
 
+# W6 (§5.10): which To do section the row belongs to - nobody covers it,
+# or an agent could and nobody has automated it yet; HRP-1198: or people do
+# it and nobody is assigned.
+GapKind = Literal["no_owner", "not_automated_yet", "unassigned"]
+
+
 class CoverageStep(BaseModel):
     step_id: uuid.UUID
     position: int
     title: str
+    # HRP-1196: the step's own description, as on the Steps tab.
+    description: str | None = None
     state: StepState
     codes: list[str]
     required_codes: list[str]
@@ -484,8 +530,12 @@ class CoverageStep(BaseModel):
     quality: Quality | None
     verdict: Verdict
     agent: CoverageAgent | None
+    # The assigned executor first among ``executors``, or the person the
+    # match found; ``human_backup`` - the match behind an agent.
     human: CoverageHuman | None
     human_backup: bool
+    # HRP-1197: everyone the company named to do the step, by name.
+    executors: list[CoverageHuman] = []
     # HRP-809: who checks and signs the step, and whether the step asks for
     # one - an agent's draft or review, or a responsibility someone bears.
     accountable: CoveragePerson | None
@@ -493,8 +543,9 @@ class CoverageStep(BaseModel):
     gap_label: GapLabel | None
     # hours_per_run x runs_per_year; null when either is not set.
     hours_per_year: float | None
-    # The newest hire need of this step that still points at a vacancy, so
-    # the row links to it instead of offering the handoff a second time.
+    # The newest hire need of this step that still points at a vacancy or a
+    # talent card, so the row links to it instead of offering the handoff a
+    # second time.
     hire_need: GapHireNeed | None
     skill_status: SkillStatus
     # HRP-776: the verdict is preliminary while the step is not accepted or
@@ -503,6 +554,9 @@ class CoverageStep(BaseModel):
     # HRP-861: percent of the step's hours its checker keeps - the step's own
     # or the default; null outside the review bucket.
     review_human_share: int | None
+    # HRP-1206: the To do group the row is listed in, None when it is not -
+    # the tab's count, read off the coverage the page loads anyway.
+    todo: GapKind | None = None
 
 
 class CoverageShares(BaseModel):
@@ -576,11 +630,6 @@ class CoverageRead(BaseModel):
     steps: list[CoverageStep]
 
 
-# W6 (§5.10): which To do section the row belongs to - nobody covers it,
-# or an agent could and nobody has automated it yet.
-GapKind = Literal["no_owner", "not_automated_yet"]
-
-
 class GapRead(BaseModel):
     step_id: uuid.UUID
     position: int
@@ -590,12 +639,18 @@ class GapRead(BaseModel):
     # Only a ``no_owner`` row is routed to hiring; the other kind has none.
     gap_label: GapLabel | None
     required_codes: list[str]
+    # Every code of the step, boundary ones included: what an agent named
+    # on the row must cover to be matched to it (HRP-1199).
+    codes: list[str]
     # The agent type that covers a ``not_automated_yet`` row, so the screen
     # can register the agent the company already uses for it.
     agent: CoverageAgent | None
     skill_status: SkillStatus
-    # The newest hire need that still points at a vacancy, if any.
+    # The newest hire need that still points at a vacancy or a card, if any.
     hire_need: GapHireNeed | None
+    # HRP-1198: on an ``unassigned`` row, the person the match found - None
+    # where nobody matched for this reader (HR scope, as on the coverage).
+    human: CoverageHuman | None = None
 
 
 # --- Hire needs (HRP-759) ----------------------------------------------------
@@ -622,8 +677,8 @@ class HireNeedRead(BaseModel):
     label: GapLabel
     created_by_id: uuid.UUID | None
     created_at: datetime
-    # HRP-801: set when "look inside first" also put the draft on the talent
-    # market; None when it stayed in Recruitment.
+    # HRP-801: the talent card "look inside first" opened, with
+    # ``vacancy_id`` None; None when the need fell back to a draft vacancy.
     talent_card_id: uuid.UUID | None = None
 
 

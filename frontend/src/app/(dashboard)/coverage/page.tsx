@@ -214,7 +214,16 @@ export default function CoveragePage() {
               <TableHead>{t("colType")}</TableHead>
               <TableHead>{t("colStatus")}</TableHead>
               <TableHead>{t("colOwner")}</TableHead>
-              <TableHead>{t("colAutomated")}</TableHead>
+              <TableHead>
+                {t("colAutomated")}
+                {/* HRP-1194: what the percent counts, under the header. */}
+                <span
+                  className="block max-w-56 text-xs font-normal whitespace-normal text-muted-foreground"
+                  data-testid="coverage-col-automated-hint"
+                >
+                  {t("colAutomatedHint")}
+                </span>
+              </TableHead>
               <TableHead>{t("colUpdated")}</TableHead>
             </TableRow>
           </TableHeader>

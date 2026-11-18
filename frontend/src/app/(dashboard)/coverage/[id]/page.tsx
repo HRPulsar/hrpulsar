@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Archive, ChevronRight, Lock, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Archive, ChevronRight, Lock, Pencil, Signpost, Sparkles, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -22,6 +22,14 @@ import { GapsTab } from "@/components/coverage/gaps-tab";
 import { generationErrorText } from "@/components/coverage/generation-errors";
 import { GenerationProgress } from "@/components/coverage/generation-progress";
 import { StepsEditor } from "@/components/coverage/steps-editor";
+import { useSkillWatch } from "@/components/coverage/use-skill-watch";
+import {
+  WhatNextDialog,
+  markWhatNextShown,
+  whatNextShown,
+  whenDemoIsClear,
+} from "@/components/coverage/what-next-dialog";
+import { useAuth } from "@/context/auth-context";
 import { usePermissions } from "@/hooks/use-permissions";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 import { newClientId } from "@/lib/utils";
@@ -39,6 +47,7 @@ import { EECreditCostBadge } from "@/lib/ee-hooks";
 import { ApiError } from "@/lib/api";
 import {
   APPLY_WOULD_DISCARD,
+  type Coverage,
   DECOMPOSITION_ACTION,
   type DecompositionSession,
   type Primitive,
@@ -70,6 +79,8 @@ function ContainerView({ id }: { id: string }) {
   const router = useRouter();
   // HRP-830: a hire need drafts a vacancy - `manage` on recruitment.
   const canRunHiring = usePermissions().canManageSection("recruitment");
+  // HRP-1192: one poll for the skills being written, whichever tab is open.
+  const skillWatch = useSkillWatch();
 
   const [container, setContainer] = useState<WorkContainer | null>(null);
   const [steps, setSteps] = useState<WorkStep[]>([]);
@@ -94,6 +105,46 @@ function ContainerView({ id }: { id: string }) {
   const applyKeys = useRef<Map<string, string>>(new Map());
   // W6 (§5.5): the first generation applies itself, once per session.
   const autoApplied = useRef<string | null>(null);
+  // HRP-1205: "What's next" reads what the Coverage tab last loaded. In a
+  // demo sandbox it also opens by itself, once per process, when a breakdown
+  // finishes in front of the visitor: a run seen in flight on this page,
+  // then applied, then its coverage computed - never on opening a process
+  // that was broken down before.
+  const isDemo = !!useAuth().user?.tenant_is_demo;
+  const [coverage, setCoverage] = useState<Coverage | null>(null);
+  const [whatNextOpen, setWhatNextOpen] = useState(false);
+  const [whatNextDue, setWhatNextDue] = useState(false);
+  const runSeen = useRef(false);
+  const finishedLive = useRef(false);
+  // HRP-1206: "To do (N)" - the rows the tab lists, known on opening the page
+  // from the coverage the Coverage tab loads, then from every load of the tab
+  // itself after an action there. Null until either arrives.
+  const [todoCount, setTodoCount] = useState<number | null>(null);
+  const onCoverage = useCallback(
+    (fresh: Coverage) => {
+      setCoverage(fresh);
+      setTodoCount(fresh.steps.filter((s) => s.todo).length);
+      if (!finishedLive.current || fresh.mapping_pending) return;
+      finishedLive.current = false;
+      if (isDemo && !whatNextShown(id)) setWhatNextDue(true);
+    },
+    [id, isDemo],
+  );
+  // The Coverage tab is unmounted while another tab is open: what changes
+  // there (steps edited, people confirmed on To do) reaches the count and
+  // "What's next" only through a fetch of its own.
+  const refreshCoverage = useCallback(
+    () => workApi.getCoverage(id).then(onCoverage).catch(() => undefined),
+    [id, onCoverage],
+  );
+  useEffect(() => {
+    if (!whatNextDue) return;
+    return whenDemoIsClear(() => {
+      markWhatNextShown(id);
+      setWhatNextDue(false);
+      setWhatNextOpen(true);
+    });
+  }, [whatNextDue, id]);
 
   const load = useCallback(async () => {
     try {
@@ -124,6 +175,9 @@ function ContainerView({ id }: { id: string }) {
   // followed by a full reload so the steps match the record.
   const sessionId = session?.id;
   const sessionStatus = session?.status;
+  useEffect(() => {
+    if (isSessionRunning(session)) runSeen.current = true;
+  }, [session]);
   useEffect(() => {
     if (!sessionId || !sessionStatus || !["pending", "running"].includes(sessionStatus)) {
       return;
@@ -203,6 +257,7 @@ function ContainerView({ id }: { id: string }) {
       setContainer(c);
       setSteps(s);
       setSession(latest);
+      finishedLive.current = runSeen.current;
       setAppliedCount((n) => n + 1);
       setConfirmForceApply(false);
       toast.success(t("appliedToast", { count: s.length }));
@@ -300,6 +355,17 @@ function ContainerView({ id }: { id: string }) {
           >
             {t(`status_${container.status}`)}
           </Badge>
+          {coverage?.steps.some((s) => s.in_scope) && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void refreshCoverage().then(() => setWhatNextOpen(true))}
+              data-testid="coverage-btn-what-next"
+            >
+              <Signpost className="size-4" />
+              {t("whatNextButton")}
+            </Button>
+          )}
           {canEdit && (
             <Button
               size="sm"
@@ -501,8 +567,8 @@ function ContainerView({ id }: { id: string }) {
           <TabsTrigger value="steps" data-testid="coverage-tab-steps">
             {t("tabSteps")}
           </TabsTrigger>
-          <TabsTrigger value="gaps" data-testid="coverage-tab-gaps">
-            {t("tabGaps")}
+          <TabsTrigger value="gaps" data-testid="coverage-tab-gaps" data-count={todoCount ?? undefined}>
+            {todoCount === null ? t("tabGaps") : t("tabGapsCount", { count: todoCount })}
           </TabsTrigger>
         </TabsList>
 
@@ -510,12 +576,14 @@ function ContainerView({ id }: { id: string }) {
           <CoverageTab
             key={appliedCount}
             containerId={id}
+            skillWatch={skillWatch}
             steps={steps}
             primitives={primitives}
             canEdit={canEdit}
             canOpenHireNeed={canEdit && canManageSection && canRunHiring}
             canRegisterAgent={canEdit && canManageSection}
             onStepsChanged={setSteps}
+            onCoverage={onCoverage}
           />
         </TabsContent>
 
@@ -535,19 +603,28 @@ function ContainerView({ id }: { id: string }) {
             primitives={primitives}
             canEdit={canEdit}
             canAccept={canAccept}
-            onStepsChange={setSteps}
-            onAccepted={load}
+            onStepsChange={(update) => {
+              setSteps(update);
+              void refreshCoverage();
+            }}
+            onAccepted={() => {
+              void load();
+              void refreshCoverage();
+            }}
           />
         </TabsContent>
 
         <TabsContent value="gaps" className="pt-4">
           <GapsTab
+            key={appliedCount}
             containerId={id}
+            skillWatch={skillWatch}
             primitives={primitives}
             canEdit={canEdit}
             canOpenHireNeed={canEdit && canManageSection && canRunHiring}
             canRegisterAgent={canEdit && canManageSection}
             onStepsChanged={setSteps}
+            onLoaded={setTodoCount}
           />
         </TabsContent>
       </Tabs>
@@ -562,6 +639,10 @@ function ContainerView({ id }: { id: string }) {
             setEditing(false);
           }}
         />
+      )}
+
+      {whatNextOpen && coverage && (
+        <WhatNextDialog steps={coverage.steps} onClose={() => setWhatNextOpen(false)} />
       )}
 
       {accessOpen && (

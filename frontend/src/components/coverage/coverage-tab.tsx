@@ -44,9 +44,12 @@ import {
   CoverageSummary,
   QUALITY_BADGE,
   RATE_SETTINGS_HREF,
+  bucketsOf,
 } from "@/components/coverage/coverage-summary";
+import { CoverageOutcome, stepExecutors } from "@/components/coverage/coverage-outcome";
 import { HireFromStepDialog } from "@/components/coverage/hire-from-step-dialog";
 import { MatchGroundsDrawer } from "@/components/coverage/match-grounds-drawer";
+import { ModeHelp } from "@/components/coverage/mode-help";
 import {
   HoursFields,
   type HoursDraft,
@@ -63,6 +66,7 @@ import {
 } from "@/components/coverage/hours-fields";
 import { RegisterAgentInline } from "@/components/coverage/register-agent-inline";
 import {
+  MorePeople,
   PackChip,
   PersonLink,
   StepJump,
@@ -71,6 +75,7 @@ import {
   stepRowId,
 } from "@/components/coverage/row-links";
 import { SkillDialog } from "@/components/coverage/skill-dialog";
+import { type SkillWatch, useFollowSkills } from "@/components/coverage/use-skill-watch";
 import { StepOverrideMenu } from "@/components/coverage/step-override-menu";
 import { BADGE_COLOR, BADGE_OUTLINE } from "@/lib/badge-tones";
 import { EECreditCostBadge } from "@/lib/ee-hooks";
@@ -119,6 +124,10 @@ interface CoverageTabProps {
   /** HRP-810: the agent registry is the section's roles', not the owner's. */
   canRegisterAgent: boolean;
   onStepsChanged: (updater: (prev: WorkStep[]) => WorkStep[]) => void;
+  /** HRP-1192: the page's one poll of the skills being written. */
+  skillWatch?: SkillWatch;
+  /** HRP-1205: every coverage this tab loads, for the page's "What's next". */
+  onCoverage?: (coverage: Coverage) => void;
 }
 
 export function CoverageTab({
@@ -129,6 +138,8 @@ export function CoverageTab({
   canOpenHireNeed,
   canRegisterAgent,
   onStepsChanged,
+  skillWatch,
+  onCoverage,
 }: CoverageTabProps) {
   const t = useTranslations("coverage");
   const tc = useTranslations("common");
@@ -196,6 +207,14 @@ export function CoverageTab({
     void load();
   }, [load]);
 
+  // HRP-1192: the status on the rows, in the agent guide and in the dialog
+  // all come from `coverage`, so one reload refreshes every place.
+  useFollowSkills(skillWatch, coverage?.steps, load);
+
+  useEffect(() => {
+    if (coverage) onCoverage?.(coverage);
+  }, [coverage, onCoverage]);
+
   // The competence mapping runs in a worker: follow it by polling, bounded.
   // Once the budget is spent the tab no longer refreshes on its own, so the
   // banner that promises it must go.
@@ -220,14 +239,7 @@ export function CoverageTab({
     };
   }, [mappingPending, load]);
 
-  const buckets = useMemo(() => {
-    const rows = coverage?.steps.filter((s) => s.in_scope) ?? [];
-    return {
-      moves: rows.filter((s) => s.mode === "automatable"),
-      to_review: rows.filter((s) => s.mode === "draft_then_review" || s.mode === "review_required"),
-      stays: rows.filter((s) => s.mode === "blocked_judgment" || s.mode === "blocked_physical"),
-    };
-  }, [coverage]);
+  const buckets = useMemo(() => bucketsOf(coverage?.steps ?? []), [coverage]);
 
   if (failed) {
     return <LoadErrorState onRetry={load} testIdPrefix="coverage-coverage" />;
@@ -254,9 +266,23 @@ export function CoverageTab({
     (s) => coverage.candidate_step_ids.includes(s.step_id) && s.hours_per_year === null,
   ).length;
   const shares = coverage.shares;
+  // HRP-1195: once the shares are known, their card says what they are of -
+  // no note here then, not an empty one.
+  const weightNote =
+    candidates === 0
+      ? t("weightNoteNoCandidates")
+      : shares
+        ? null
+        : unestimated > 0
+          ? t("weightNotePending", { count: unestimated })
+          : t("weightNoteShort");
 
   return (
     <div className="space-y-6">
+      {/* HRP-1182: what the product does and does not do, on the screen itself. */}
+      <p className="max-w-3xl text-sm" data-testid="coverage-thesis">
+        {t("coverageThesis")}
+      </p>
       <p className="max-w-3xl text-sm text-muted-foreground">{t("coverageHint")}</p>
 
       {coverage.mapping_pending && !pollExhausted && (
@@ -269,6 +295,12 @@ export function CoverageTab({
       )}
 
       <CoverageSummary coverage={coverage} />
+
+      {/* HRP-1200: the same buckets as who does and who checks. */}
+      <CoverageOutcome
+        steps={coverage.steps}
+        onAssign={canEdit ? (row, field) => setAssign({ row, field }) : undefined}
+      />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <SummaryCard
@@ -296,17 +328,18 @@ export function CoverageTab({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground" data-testid="coverage-summary-weight-note">
-          {candidates === 0
-            ? t("weightNoteNoCandidates")
-            : shares
-              ? t("weightNoteReady", { unestimated: coverage.hours.unestimated })
-              : unestimated > 0
-                ? t("weightNotePending", { count: unestimated })
-                : t("weightNoteShort")}
-        </p>
+        {weightNote && (
+          <p className="text-sm text-muted-foreground" data-testid="coverage-summary-weight-note">
+            {weightNote}
+          </p>
+        )}
         {canEdit && inScopeIds.size > 0 && (
-          <Button variant="outline" onClick={() => setWizardOpen(true)} data-testid="coverage-btn-weights">
+          <Button
+            variant="outline"
+            className="ml-auto"
+            onClick={() => setWizardOpen(true)}
+            data-testid="coverage-btn-weights"
+          >
             <Scale className="size-4" />
             {t("setWeights")}
           </Button>
@@ -376,9 +409,9 @@ export function CoverageTab({
           containerId={containerId}
           stepId={assign.row.step_id}
           field={assign.field}
-          // The stored id, not the coverage row: coverage hides a terminated
-          // assignee, and the assignment must still be removable.
-          currentId={steps.find((s) => s.id === assign.row.step_id)?.[assign.field] ?? null}
+          // The stored ids, not the coverage row: the row may lag behind an
+          // edit on the Steps tab, and an assignment must stay removable.
+          currentIds={currentAssignees(steps.find((s) => s.id === assign.row.step_id), assign.field)}
           onClose={() => setAssign(null)}
           onSaved={(step) => {
             onStepsChanged((prev) => prev.map((s) => (s.id === step.id ? step : s)));
@@ -413,6 +446,13 @@ export function CoverageTab({
       )}
     </div>
   );
+}
+
+/** The ids a step names in `field`, as stored. */
+function currentAssignees(step: WorkStep | undefined, field: AssigneeField): string[] {
+  if (!step) return [];
+  if (field === "executor_employee_ids") return step.executor_employee_ids;
+  return step.accountable_employee_id ? [step.accountable_employee_id] : [];
 }
 
 function SummaryCard({
@@ -500,8 +540,14 @@ function MatchRow({
   // work: coverage ignores a pack named on a blocked step, so offering it
   // there would save a value nothing reads.
   const canOverride = canEdit && row.in_scope;
-  // HRP-809: a person the company named outranks the match.
-  const assigned = row.human?.label === "assigned" ? row.human : null;
+  // HRP-809: the people the company named outrank the match. HRP-1197: one
+  // or several - the first by name, then "+N".
+  const executors = stepExecutors(row);
+  const assigned = executors[0] ?? null;
+  // A team covers a step together: what none of them holds is missing.
+  const missing = executors
+    .slice(1)
+    .reduce((left, e) => left.filter((c) => e.missing_codes.includes(c)), assigned?.missing_codes ?? []);
   // HRP-863 (decision 2026-09-21): the company put the step in a bucket by
   // hand and has not named the agent yet. Until it does, the row keeps quiet:
   // no "nobody covers this" verdict against its word, and no quality light on
@@ -524,7 +570,7 @@ function MatchRow({
       size="sm"
       variant="outline"
       className="h-7"
-      onClick={() => onAssign("executor_employee_id")}
+      onClick={() => onAssign("executor_employee_ids")}
       data-testid={`coverage-btn-assign-executor-${row.step_id}`}
     >
       {assigned ? t("changeExecutor") : t("assignExecutor")}
@@ -576,6 +622,8 @@ function MatchRow({
                 </Badge>
               </StepOverrideMenu>
             )}
+            {/* HRP-1204: what every mode means, one popover. */}
+            {row.mode && <ModeHelp testId={`coverage-mode-help-${row.step_id}`} />}
             {row.quality && !awaitingAgent && (
               <Badge
                 className={QUALITY_BADGE[row.quality]}
@@ -596,17 +644,28 @@ function MatchRow({
               </Badge>
             )}
           </div>
+          {/* HRP-1196: the Steps tab's description; none, nothing. */}
+          {row.description && (
+            <p className="text-sm text-muted-foreground" data-testid={`coverage-description-${row.step_id}`}>
+              {row.description}
+            </p>
+          )}
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
             {row.agent && !assigned && (
               <span className="inline-flex items-center gap-1" data-testid={`coverage-agent-${row.step_id}`}>
                 <Bot className="size-4" />
-                <PackChip
-                  code={row.agent.pack_code}
-                  label={packLabel(row.agent.pack_code)}
-                  testId={`coverage-pack-chip-${row.step_id}`}
-                />
-                {row.agent.agent_name && ` ${t("agentVia", { name: row.agent.agent_name })}`}
+                {/* HRP-1182: the company's own agent by its name - not glued
+                    to the agent type ("<type> via <name>") as one phrase. */}
+                {row.agent.agent_name ? (
+                  t("agentInUse", { name: row.agent.agent_name })
+                ) : (
+                  <PackChip
+                    code={row.agent.pack_code}
+                    label={packLabel(row.agent.pack_code)}
+                    testId={`coverage-pack-chip-${row.step_id}`}
+                  />
+                )}
               </span>
             )}
             {assigned && (
@@ -620,11 +679,12 @@ function MatchRow({
                   testId={`coverage-link-executor-${row.step_id}`}
                   summaryTestId={`coverage-executor-summary-${row.step_id}`}
                 />
-                {assigned.missing_codes.length > 0 && (
+                <MorePeople people={executors.slice(1)} testId={`coverage-executor-more-${row.step_id}`} />
+                {missing.length > 0 && (
                   <Badge
                     className={BADGE_COLOR.amber}
                     title={t("noMatchingSkillsHint", {
-                      capabilities: assigned.missing_codes.map(capabilityLabel).join(", "),
+                      capabilities: missing.map(capabilityLabel).join(", "),
                     })}
                     data-testid={`coverage-executor-unmatched-${row.step_id}`}
                   >
@@ -720,7 +780,7 @@ function MatchRow({
                 {t("gapVerdictNobody")}
                 {/* Already handed over: link to the draft rather than
                     offer a second vacancy for the same step. */}
-                {row.hire_need?.vacancy_id ? (
+                {row.hire_need ? (
                   <VacancyLink
                     need={row.hire_need}
                     label={t("goToVacancy")}
@@ -757,15 +817,19 @@ function MatchRow({
             {!assigned && assignExecutorButton}
           </div>
 
-          <AccountableLine row={row} canEdit={canEdit} t={t} onAssign={() => onAssign("accountable_employee_id")} />
-
+          {/* HRP-1182 (QA 17.11): the agent the company uses first, the
+              checker of its work after it. */}
           {canRegisterAgent && !assigned && row.agent?.pack_id && !row.agent.agent_id && (
             <RegisterAgentInline
               packId={row.agent.pack_id}
+              codes={row.codes}
+              packManual={row.agent.pack_manual}
               testId={`coverage-btn-use-agent-${row.step_id}`}
               onRegistered={onChanged}
             />
           )}
+
+          <AccountableLine row={row} canEdit={canEdit} t={t} onAssign={() => onAssign("accountable_employee_id")} />
         </div>
 
         {canHaveSkill && (

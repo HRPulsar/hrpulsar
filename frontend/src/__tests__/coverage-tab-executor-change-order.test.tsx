@@ -48,6 +48,7 @@ const STEP: CoverageStep = {
     missing_codes: [],
   },
   human_backup: false,
+  executors: [],
   accountable: null,
   needs_accountable: false,
   gap_label: null,
@@ -57,6 +58,8 @@ const STEP: CoverageStep = {
   tentative: false,
   review_human_share: null,
 };
+// HRP-1197: the assigned person is the step's executor.
+STEP.executors = [STEP.human!];
 
 const COVERAGE: Coverage = {
   container_id: "c-1",
@@ -135,7 +138,7 @@ it("puts Change right after the executor, before the agent hint", async () => {
 it("keeps Assign at the end of the row when nobody is assigned", async () => {
   await render({
     ...COVERAGE,
-    steps: [{ ...STEP, verdict: "agent", human: null }],
+    steps: [{ ...STEP, verdict: "agent", human: null, executors: [] }],
   });
 
   const button = byId("coverage-btn-assign-executor-s-1")!;

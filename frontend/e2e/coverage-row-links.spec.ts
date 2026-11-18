@@ -52,7 +52,7 @@ test.describe("Coverage — row links", () => {
     const signed = await step({ title: "Release the payment", primitive_codes: ["P6"] });
     const assigned = await page.request.patch(`${API_BASE}/work/steps/${signed.id}`, {
       headers,
-      data: { executor_employee_id: controller.id, accountable_employee_id: colleague.employeeId },
+      data: { executor_employee_ids: [controller.id], accountable_employee_id: colleague.employeeId },
     });
     expect(assigned.ok()).toBeTruthy();
 

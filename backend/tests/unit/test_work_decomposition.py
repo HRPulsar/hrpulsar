@@ -1027,6 +1027,62 @@ class TestRouter:
         await db.refresh(sess)
         assert (sess.error_code, sess.error_message) == ("service_error", "x")
 
+    async def test_the_demo_preset_starts_without_a_precheck_or_a_hold(
+        self, auth_client, db, tenant, user, monkeypatch
+    ):
+        """HRP-1208: the demo's own process, unchanged, costs nothing - a
+        sandbox that has spent its credits still gets its steps. The same
+        process with an edited description is prechecked as before."""
+        from app.core import task_enqueue
+        from app.modules.demo.seed_data_work import WORK_CONTAINERS
+
+        class _Result:
+            id = "celery-task-id"
+
+        monkeypatch.setattr(task_enqueue, "enqueue_task", lambda *_a, **_k: _Result())
+
+        async def _refuse(*_args, **_kwargs):
+            raise AppError("credits_limit_reached", 402)
+
+        spec = next(s for s in WORK_CONTAINERS if s.get("preset_steps"))
+        tenant.is_demo = True
+        await db.commit()
+        preset = await _container(
+            db,
+            tenant,
+            user,
+            title=spec["title"],
+            description=spec["description"],
+            goal=spec["goal"],
+        )
+        edited = await _container(
+            db,
+            tenant,
+            user,
+            title="Onboarding, our way",
+            description=f"{spec['description']} Edited.",
+            goal=spec["goal"],
+        )
+        preset_id, edited_id = str(preset.id), str(edited.id)
+        with (
+            patch.object(billing_hooks, "precheck_action", side_effect=_refuse),
+            patch.object(billing_hooks, "reserve_action", side_effect=_refuse),
+        ):
+            started = await auth_client.post(
+                "/api/work/decomposition/sessions", json={"container_id": preset_id}
+            )
+            refused = await auth_client.post(
+                "/api/work/decomposition/sessions", json={"container_id": edited_id}
+            )
+        assert started.status_code == 201, started.text
+        assert started.json()["status"] == "pending"
+        assert refused.status_code == 402
+        # The decision travels with the run, in the language it was made in.
+        sess = await db.get(WorkDecompositionSession, uuid.UUID(started.json()["id"]))
+        assert sess is not None
+        assert sess.params["preset"] is True
+        assert sess.params["content_language"] == "en"
+
     async def test_start_get_apply_cancel(
         self, auth_client, db, tenant, user, primitives, monkeypatch
     ):

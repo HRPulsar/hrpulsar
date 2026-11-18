@@ -20,6 +20,7 @@ from app.modules.work.models import (
     WorkContainer,
     WorkContainerAccessRule,
     WorkStep,
+    WorkStepExecutor,
 )
 from sqlalchemy import select, update
 
@@ -119,15 +120,18 @@ class TestVisible:
         doer = await _employee(db, tenant, last_name="Doer")
         checker = await _employee(db, tenant, last_name="Checker")
         closed = await _container(db, tenant)
+        step = WorkStep(
+            tenant_id=tenant.id,
+            container_id=closed.id,
+            position=1,
+            title="Release the payment",
+            accountable_employee_id=checker.id,
+        )
+        db.add(step)
+        await db.flush()
+        # HRP-1197: one of several people who do the step.
         db.add(
-            WorkStep(
-                tenant_id=tenant.id,
-                container_id=closed.id,
-                position=1,
-                title="Release the payment",
-                executor_employee_id=doer.id,
-                accountable_employee_id=checker.id,
-            )
+            WorkStepExecutor(tenant_id=tenant.id, step_id=step.id, employee_id=doer.id)
         )
         await db.commit()
         for emp in (doer, checker):
@@ -183,6 +187,8 @@ EXPECTED_GUARDS = {
     "remove_step_primitive": "edit_step",
     "confirm_step_primitive": "edit_step",
     "reclassify_step": "edit_step",
+    # HRP-1197: the assign dialog's ranked list, for the editors.
+    "list_step_people": "edit_step",
     "get_coverage": "read_container",
     "list_gaps": "read_container",
     "create_hire_need": "manage_actor",
@@ -321,7 +327,7 @@ class TestHttpMatrix:
         # Doing a step is enough to read the process.
         assigned = await auth_client.patch(
             f"/api/work/steps/{sid}",
-            json={"executor_employee_id": str(executor_emp.id)},
+            json={"executor_employee_ids": [str(executor_emp.id)]},
         )
         assert assigned.status_code == 200, assigned.text
         listed = await client.get("/api/work/containers", headers=executor_h)
@@ -688,7 +694,8 @@ class TestReviewFollowUps:
             await client.get("/api/auth/me", headers=doer_h)
         ).json()["sections"]
         assigned = await auth_client.patch(
-            f"/api/work/steps/{sid}", json={"executor_employee_id": str(doer_emp.id)}
+            f"/api/work/steps/{sid}",
+            json={"executor_employee_ids": [str(doer_emp.id)]},
         )
         assert assigned.status_code == 200, assigned.text
         assert (await client.get("/api/auth/me", headers=doer_h)).json()["sections"][
@@ -795,13 +802,24 @@ def test_redact_people_keeps_verdicts_and_assignees():
     }
     result = {
         "steps": [
-            {"verdict": "human", "human": assignee, "human_backup": False},
-            {"verdict": "agent", "human": matched, "human_backup": True},
-            {"verdict": "gap", "human": None, "human_backup": False},
+            {
+                "verdict": "human",
+                "human": assignee,
+                "human_backup": False,
+                "executors": [assignee],
+            },
+            {
+                "verdict": "agent",
+                "human": matched,
+                "human_backup": True,
+                "executors": [],
+            },
+            {"verdict": "gap", "human": None, "human_backup": False, "executors": []},
         ]
     }
     steps = coverage.redact_people(result, visible=set())["steps"]
     assert steps[0]["human"] == {**assignee, "missing_codes": []}
+    assert steps[0]["executors"] == [{**assignee, "missing_codes": []}]
     assert steps[1]["human"] is None and steps[1]["human_backup"] is False
     assert [s["verdict"] for s in steps] == ["human", "agent", "gap"]
 
@@ -819,8 +837,10 @@ def test_redact_people_keeps_the_status():
     result = {
         "steps": [
             {"verdict": "human", "human": person("e1", "on_leave"), "human_backup": False,
+             "executors": [person("e1", "on_leave")],
              "accountable": person("e2", "on_leave")},
             {"verdict": "human", "human": person("e3", "terminated"), "human_backup": False,
+             "executors": [person("e3", "terminated")],
              "accountable": person("e4", "on_leave")},
         ]
     }
@@ -859,11 +879,24 @@ def test_redact_people_keeps_a_colleague_within_the_reader_scope():
         "missing_codes": ["P6"],
     }
 
+    # HRP-1197: a second executor, inside the scope.
+    other = {**assignee, "employee_id": "e3", "name": "C"}
+
     def payload():
         return {
             "steps": [
-                {"verdict": "agent", "human": dict(matched), "human_backup": True},
-                {"verdict": "human", "human": dict(assignee), "human_backup": False},
+                {
+                    "verdict": "agent",
+                    "human": dict(matched),
+                    "human_backup": True,
+                    "executors": [],
+                },
+                {
+                    "verdict": "human",
+                    "human": dict(assignee),
+                    "human_backup": False,
+                    "executors": [dict(assignee), dict(other)],
+                },
             ]
         }
 
@@ -871,10 +904,12 @@ def test_redact_people_keeps_a_colleague_within_the_reader_scope():
     steps = coverage.redact_people(payload(), visible={"e1", "e2"})["steps"]
     assert steps[0]["human"] == matched and steps[0]["human_backup"] is True
     assert steps[1]["human"] == assignee
-    # Outside the subtree the match is dropped and the assignee's gaps hidden.
-    steps = coverage.redact_people(payload(), visible={"e9"})["steps"]
+    # Outside the subtree the match is dropped and the assignee's gaps hidden;
+    # each executor is judged on their own.
+    steps = coverage.redact_people(payload(), visible={"e3"})["steps"]
     assert steps[0]["human"] is None and steps[0]["human_backup"] is False
     assert steps[1]["human"] == {**assignee, "missing_codes": []}
+    assert steps[1]["executors"] == [{**assignee, "missing_codes": []}, other]
 
 
 class TestReaderScope:
@@ -962,10 +997,14 @@ class TestLeaveFollowsTheSectionLevel:
             f"/api/work/containers/{cid}/steps", json={"title": "Approve"}
         )
         away = await _employee(db, tenant, last_name="Away", status="on_leave")
+        step_id = uuid.UUID(step.json()["id"])
         await db.execute(
             update(WorkStep)
-            .where(WorkStep.id == uuid.UUID(step.json()["id"]))
-            .values(executor_employee_id=away.id, accountable_employee_id=away.id)
+            .where(WorkStep.id == step_id)
+            .values(accountable_employee_id=away.id)
+        )
+        db.add(
+            WorkStepExecutor(tenant_id=tenant.id, step_id=step_id, employee_id=away.id)
         )
         await db.execute(
             update(WorkContainer)

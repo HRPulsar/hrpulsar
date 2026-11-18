@@ -44,6 +44,7 @@ const STEP: CoverageStep = {
   },
   human: null,
   human_backup: false,
+  executors: [],
   accountable: null,
   needs_accountable: false,
   gap_label: null,

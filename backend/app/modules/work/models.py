@@ -254,15 +254,17 @@ class WorkStep(BaseModel, TenantMixin):
     # Set on the gaps report; falls back to the container's default.
     gap_label: Mapped[str | None] = mapped_column(String(10), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # HRP-809: who does the step and who checks and signs it. The executor
-    # outranks the computed match, agent included; both are ignored by
-    # coverage once the employee is no longer active.
+    # HRP-1197: the people who do the step live in ``WorkStepExecutor``;
+    # nothing reads or writes this column since. Kept for one release: the
+    # previous release still reads it while a deploy migrates ahead of the
+    # swap (the HRP-911 pattern above); the next migration drops it.
     executor_employee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("employees.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
+    # HRP-809: who checks and signs the step.
     accountable_employee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("employees.id", ondelete="SET NULL"),
@@ -353,6 +355,31 @@ class WorkStepPrimitive(BaseModel, TenantMixin):
     quote: Mapped[str | None] = mapped_column(Text, nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class WorkStepExecutor(BaseModel, TenantMixin):
+    """HRP-1197: a person who does a step (HRP-809), one row per person - a
+    step done by people may name several. The company's word outranks the
+    computed match, agent included; a person no longer active stays named
+    and the row says so (HRP-959). A deleted employee or step takes the row
+    with it."""
+
+    __tablename__ = "work_step_executors"
+    __table_args__ = (
+        UniqueConstraint("step_id", "employee_id", name="uq_work_step_executor"),
+        Index("ix_work_step_executors_employee", "employee_id"),
+    )
+
+    step_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("work_steps.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("employees.id", ondelete="CASCADE"),
+        nullable=False,
     )
 
 
@@ -515,13 +542,18 @@ class WorkHireNeed(BaseModel, TenantMixin):
     """A gap handed to Recruitment (HRP-759, §6): which steps, which label,
     and the draft vacancy that came out of it. A separate table rather than
     a column on ``vacancies`` - one need may span several steps, and the
-    dependency runs ``work → recruitment`` only."""
+    dependency runs ``work → recruitment`` only.
+
+    HRP-801 (QA 12.11): "look inside first" opens a talent card instead of
+    the vacancy - ``talent_card_id`` set, ``vacancy_id`` empty. The link
+    lives here too: ``talent_market`` learns nothing about ``work``."""
 
     __tablename__ = "work_hire_needs"
     __table_args__ = (
         CheckConstraint(_in("label", GAP_LABELS), name="ck_work_hire_needs_label"),
         Index("ix_work_hire_needs_container", "container_id"),
         Index("ix_work_hire_needs_vacancy", "vacancy_id"),
+        Index("ix_work_hire_needs_talent_card", "talent_card_id"),
     )
 
     container_id: Mapped[uuid.UUID] = mapped_column(
@@ -532,6 +564,13 @@ class WorkHireNeed(BaseModel, TenantMixin):
     vacancy_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("vacancies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # A card deleted in the talent market drops the need off the screen, the
+    # way a deleted vacancy does.
+    talent_card_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("talent_cards.id", ondelete="SET NULL"),
         nullable=True,
     )
     # JSON array of step uuids as strings.

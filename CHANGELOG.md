@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.6.2] - 2026-11-18
+
+### Added
+- Coverage: a step's description shows on its coverage row, as on the Steps tab (HRP-1196)
+- Coverage: a "Who does the work" block under the summary says which steps an agent closes by itself, which it does while a person checks and who checks them, and which stay with people (HRP-1200)
+- Coverage: a "?" by a step's type opens short definitions of every type (HRP-1204)
+- Coverage: the To do tab shows its count, "To do (N)", as soon as a process opens (HRP-1206)
+- Coverage: a step done by people can have several executors, picked from a list of employees ranked by how much of the step each one covers; the steps API takes and returns `executor_employee_ids`, and still accepts the single `executor_employee_id` in this release (HRP-1197)
+- Coverage: "What's next" on a process says what stays with people, what goes to an agent, who checks it and how to hand the instruction to your own bot; in the demo it opens by itself once per process when a breakdown finishes (HRP-1205)
+- Coverage: "Already automated" in the list and "Agents already do N of M" on a process say how the figure is counted (HRP-1194)
+- Coverage: the tab says what the product does - splits a process between people and agents and writes the instructions you give to your own bot (HRP-1182)
+- Demo: the sandbox comes with agents the company already uses, so "Already automated" shows part of each process done (HRP-1194)
+- Demo: breaking down the unchanged onboarding process returns its steps at once, without waiting for the model (HRP-1208)
+
+### Changed
+- Coverage: To do is split into three groups - people to confirm or assign, an agent to pick with its instruction to download, and steps nobody covers - each with its next action (HRP-1198)
+- Coverage: "I already use this" offers the agents named on other steps; picking one links that agent to the step instead of asking for its name again (HRP-1199)
+- Demo: in Coverage a written skill closes an agent's step without registering an agent, and the skill window says in one line where to put the file (HRP-1201)
+- Coverage: generating a skill no longer holds you in a window - keep working on the process, and the step updates by itself when the file is ready or the generation fails (HRP-1202)
+- Coverage: each share on the summary names the steps and the hours behind it, and the summary says the percentages are of yearly hours, not of steps (HRP-1195)
+- Demo: the Coverage processes have new descriptions and goals, and their steps follow them (HRP-1193)
+- Coverage: a step your own agent already does names that agent instead of its agent type, and asks for that agent before the reviewer (HRP-1182)
+- Coverage: plainer Russian wording on the Coverage screens (HRP-1182)
+
+### Fixed
+- Coverage: skills started with "Generate N" on the To do tab show as ready once written, without reloading the page (HRP-1192)
+- Coverage: "Look inside the company first" opens only a talent market vacancy card, without a vacancy in Recruitment (HRP-801)
+
 ## [2.6.1] - 2026-11-11
 
 ### Fixed

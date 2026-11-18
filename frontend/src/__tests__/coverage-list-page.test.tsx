@@ -3,7 +3,8 @@
 // HRP-810 REDO: the list of processes and projects names each owner the way
 // every other screen shows a person - name, position, status chip when they
 // are not active - or says there is no owner. HRP-859 REDO: once a filter is
-// set, a Clear button resets them all, like /assessments.
+// set, a Clear button resets them all, like /assessments. HRP-1194: the
+// Already automated column explains its percent.
 
 import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
@@ -91,6 +92,15 @@ it("names the owner with position and status, or says there is none", async () =
   expect(owner.textContent).toContain("Head of Finance");
   expect(owner.textContent).toContain(enMessages.employees.statusOnLeave);
   expect(byId("coverage-row-c-2-owner")!.textContent).toBe(enMessages.coverage.accessOwnerNone);
+});
+
+// HRP-1194: the column says what its percent counts.
+it("explains the Already automated column under its header", async () => {
+  await render([ROW]);
+
+  expect(byId("coverage-col-automated-hint")!.textContent).toBe(
+    enMessages.coverage.colAutomatedHint,
+  );
 });
 
 async function type(el: HTMLInputElement, value: string) {

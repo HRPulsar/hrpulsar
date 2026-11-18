@@ -62,6 +62,7 @@ function row(id: string, overrides: Partial<CoverageStep>): CoverageStep {
     agent: null,
     human: null,
     human_backup: false,
+    executors: [],
     accountable: null,
     needs_accountable: false,
     gap_label: null,
@@ -89,7 +90,7 @@ function step(id: string, overrides: Partial<WorkStep> = {}): WorkStep {
     state: "accepted",
     gap_label: null,
     notes: null,
-    executor_employee_id: null,
+    executor_employee_ids: [],
     accountable_employee_id: null,
     review_human_share: null,
     manual_mode: null,
@@ -206,7 +207,11 @@ describe("the summary", () => {
 
     const automated = byTestId("coverage-roi-automated");
     expect(automated.dataset.hours).toBe("3");
-    expect(automated.textContent).toBe("Agents already do 3 of 131 h/year of this work.");
+    expect(automated.textContent).toContain("Agents already do 3 of 131 h/year of this work.");
+    // HRP-1194: and says what the figure counts.
+    expect(byTestId("coverage-roi-automated-hint").textContent).toContain(
+      "an agent your company already uses",
+    );
   });
 
   it("shows no automated line while no step carries an estimate", async () => {
@@ -254,6 +259,40 @@ describe("the summary", () => {
     expect(printed.reduce((a, b) => a + b, 0)).toBe(100);
     // The exact share stays on the element, whatever the printed one rounds to.
     expect(byTestId("coverage-share-moves").dataset.share).toBe(String(100 / 3));
+  });
+
+  // HRP-1195: 8% / 45% / 47% read as a share of steps; the base is hours.
+  it("puts the steps and the hours behind each percent, and names the base", async () => {
+    getCoverage.mockResolvedValue({
+      ...COVERAGE,
+      hours: { ...COVERAGE.hours, unestimated: 1 },
+      steps: [
+        ...COVERAGE.steps,
+        row("blank", { mode: "blocked_judgment", hours_per_year: null, review_human_share: null }),
+        row("boundary", { in_scope: false, mode: "blocked_physical", review_human_share: null }),
+      ],
+    });
+    await render();
+
+    // Four steps in scope; the unestimated one still counts as a step of its bucket.
+    for (const [bucket, steps, hours] of [
+      ["moves", "1", "3"],
+      ["to_review", "2", "124"],
+      ["stays", "1", "4"],
+    ]) {
+      const legend = byTestId(`coverage-share-${bucket}`);
+      expect(legend.dataset.steps).toBe(steps);
+      expect(legend.dataset.hours).toBe(hours);
+      expect(byTestId(`coverage-share-${bucket}-basis`).textContent).toBe(
+        `· ${steps} of 4 steps · ≈ ${hours} h/year`,
+      );
+    }
+    expect(byTestId("coverage-shares-base").textContent).toBe(
+      "Percentages are shares of yearly hours (hours per run × runs per year), not of the number of steps. " +
+        "1 step has no hours estimate and is in no share.",
+    );
+    // Said once: the note under the buckets no longer repeats it.
+    expect(byTestId("coverage-summary-weight-note")).toBeNull();
   });
 
   it("keeps an empty bucket in the legend and out of the bar", async () => {

@@ -2,8 +2,8 @@ import { test, expect } from "./fixtures";
 import { API_BASE, createEmployee, registerUser, setAuthTokens } from "./helpers";
 
 /**
- * HRP-809 — a step names the person who does it and the person who checks
- * and signs it.
+ * HRP-809 — a step names the people who do it (several since HRP-1197) and
+ * the person who checks and signs it.
  *
  * A judgement step (P6) on a fresh tenant is a gap. Assigning someone with
  * no matching skills closes it: the To do list empties, the Coverage row
@@ -42,14 +42,19 @@ test.describe("Coverage — step assignment", () => {
     await page.goto(`/coverage/${container.id}`);
     await expect(page.getByTestId("coverage-match-list")).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId(`coverage-verdict-${step.id}`)).toHaveAttribute("data-verdict", "gap");
+    // HRP-1206: "To do (N)" before the tab is opened.
+    await expect(page.getByTestId("coverage-tab-gaps")).toHaveAttribute("data-count", "1");
 
     // The executor, from the To do list.
     await page.getByTestId("coverage-tab-gaps").click();
     await page.getByTestId(`coverage-gap-row-${step.id}-btn-assign`).click();
     await expect(page.getByTestId("coverage-modal-assign")).toBeVisible();
+    // HRP-1197: the people who do a step are picked together, then saved.
     await page.getByTestId(`coverage-modal-assign-option-${employee.id}`).click();
+    await page.getByTestId("coverage-modal-assign-btn-save").click();
     await expect(page.getByTestId("coverage-modal-assign")).toBeHidden();
     await expect(page.getByTestId("coverage-gaps-empty")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("coverage-tab-gaps")).toHaveAttribute("data-count", "0");
 
     await page.getByTestId("coverage-tab-coverage").click();
     await expect(page.getByTestId(`coverage-verdict-${step.id}`)).toHaveAttribute(

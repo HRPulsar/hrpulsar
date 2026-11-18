@@ -1,8 +1,9 @@
 "use client";
 
 // HRP-760: a step's SKILL.md - generate it, read it, download it. Since W6
-// (§5.12) the generation runs in a Celery task, so the dialog follows the
-// row by polling and shows the shared progress strip meanwhile.
+// (§5.12) the generation runs in a Celery task. HRP-1202: the dialog does
+// not hold the reader while it runs - starting one closes it, and the
+// process page follows the step (use-skill-watch) until the file is ready.
 //
 // Used from the Coverage tab and from the To do tab's second section, so
 // it takes the smallest shape both rows have rather than a whole row.
@@ -21,20 +22,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { GenerationProgress } from "@/components/coverage/generation-progress";
 import { generationErrorText } from "@/components/coverage/generation-errors";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { useAuth } from "@/context/auth-context";
 import { useCostConfirmation } from "@/hooks/use-cost-confirmation";
 import { EECreditCostBadge } from "@/lib/ee-hooks";
 import { SKILL_ACTION, type SkillStatus, type StepSkill, workApi } from "@/lib/api/work";
 
-// The limit sits past the three-minute staleness timeout, after which the
-// row reads as failed anyway.
-const POLL_MS = 3_000;
-const POLL_LIMIT = 80;
-
 export interface SkillTarget {
   step_id: string;
+  position: number;
   title: string;
   skill_status: SkillStatus;
 }
@@ -51,9 +48,13 @@ export function SkillDialog({
   onChanged: () => void;
 }) {
   const t = useTranslations("coverage");
+  const tc = useTranslations("common");
+  // HRP-1201: a demo visitor has no agent runner of their own: one line
+  // says where the file goes instead of a skills folder they do not have.
+  const isDemo = !!useAuth().user?.tenant_is_demo;
   const [skill, setSkill] = useState<StepSkill | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [startedAt, setStartedAt] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   // One generation per opened dialog: Strict Mode replays the effect, and a
   // second POST would race the first on the step's unique skill row.
   const started = useRef(false);
@@ -96,19 +97,27 @@ export function SkillDialog({
   // The same price the bulk confirmation on the To do tab names.
   const { cost } = useCostConfirmation(SKILL_ACTION);
 
+  // Queued, not awaited: the page follows the step from here (HRP-1202),
+  // so the reader goes back to the process instead of a progress bar.
+  const leaveRunning = useCallback(() => {
+    toast.success(t("skillQueuedToast", { position: step.position }));
+    onChanged();
+    onClose();
+  }, [step.position, t, onChanged, onClose]);
+
   const generate = useCallback(async () => {
     setError(null);
+    setStarting(true);
     try {
-      // Queued: the row comes back generating and the poll below follows
-      // it to ready or failed.
-      setSkill(await workApi.generateSkill(step.step_id));
-      setStartedAt(new Date().toISOString());
-      onChanged();
+      await workApi.generateSkill(step.step_id);
+      leaveRunning();
     } catch (err) {
       setError(err instanceof Error ? err.message : t("skillFailed"));
       onChanged();
+    } finally {
+      setStarting(false);
     }
-  }, [step.step_id, t, onChanged]);
+  }, [step.step_id, t, onChanged, leaveRunning]);
 
   useEffect(() => {
     if (!confirmed || started.current) return;
@@ -117,12 +126,12 @@ export function SkillDialog({
       if (step.skill_status !== "none") {
         try {
           const existing = await workApi.getSkill(step.step_id);
-          setSkill(existing);
           if (existing.status === "generating") {
-            // Started elsewhere (another tab, a bulk run): follow it.
-            setStartedAt(new Date().toISOString());
+            // Started elsewhere (another tab, a bulk run): the page follows it.
+            leaveRunning();
             return;
           }
+          setSkill(existing);
           if (existing.status === "failed" && (existing.error_code || existing.error_message)) {
             setError(
               generationErrorText(t, existing.error_code, existing.error_message, "skillFailed"),
@@ -140,44 +149,11 @@ export function SkillDialog({
         }
       }
       if (canEdit) void generate();
+      else setError(tc("loadFailed"));
     })();
     // Runs once per opened step: the dialog is remounted per step.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step.step_id, confirmed]);
-
-  const generating = skill?.status === "generating";
-  useEffect(() => {
-    if (!generating) return;
-    let polls = 0;
-    const timer = window.setInterval(async () => {
-      polls += 1;
-      if (polls > POLL_LIMIT) {
-        window.clearInterval(timer);
-        setError(t("skillFailed"));
-        // Leaving the row "generating" keeps the progress strip animating
-        // next to the error and disables Regenerate for good.
-        setSkill((prev) => (prev ? { ...prev, status: "failed" } : prev));
-        // The row behind the dialog is still "generating" too: refresh it,
-        // or "Get skill" stays disabled until the page is reloaded.
-        onChanged();
-        return;
-      }
-      try {
-        const fresh = await workApi.getSkill(step.step_id);
-        if (fresh.status === "generating") return;
-        setSkill(fresh);
-        setError(
-          fresh.status === "failed"
-            ? generationErrorText(t, fresh.error_code, fresh.error_message, "skillFailed")
-            : null,
-        );
-        onChanged();
-      } catch {
-        // keep the last snapshot; the next tick retries
-      }
-    }, POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [generating, step.step_id, t, onChanged]);
 
   async function download() {
     try {
@@ -193,7 +169,9 @@ export function SkillDialog({
     }
   }
 
-  if (probing) return null;
+  // Nothing to show yet: the row is being read, or the generation is
+  // being queued and the dialog is about to close.
+  if (probing || (confirmed && !skill && !error)) return null;
   if (!confirmed) {
     return (
       <ConfirmDialog
@@ -215,20 +193,13 @@ export function SkillDialog({
       <DialogContent className="sm:max-w-3xl" data-testid="coverage-modal-skill">
         <DialogHeader>
           <DialogTitle>{t("skillTitle", { title: step.title })}</DialogTitle>
-          <DialogDescription>{t("skillText")}</DialogDescription>
+          <DialogDescription data-testid="coverage-skill-text">
+            {t(isDemo ? "skillTextDemo" : "skillText")}
+          </DialogDescription>
         </DialogHeader>
         {/* HRP-912: the file follows the workspace's AI content language,
             like every other generated text - say where that is set. */}
         <p className="text-xs text-muted-foreground">{t("skillLanguageHint")}</p>
-        {generating && (
-          <GenerationProgress
-            phase={1}
-            phases={1}
-            startedAt={startedAt}
-            caption={t("generatingSkill")}
-            testId="coverage-skill-progress"
-          />
-        )}
         {error && (
           <p className="text-sm text-destructive" data-testid="coverage-skill-error">
             {error}
@@ -246,7 +217,7 @@ export function SkillDialog({
           {canEdit && (
             <Button
               variant="outline"
-              disabled={generating}
+              disabled={starting}
               onClick={generate}
               data-testid="coverage-btn-skill-regenerate"
             >

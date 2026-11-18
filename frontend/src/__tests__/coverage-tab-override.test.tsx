@@ -41,6 +41,7 @@ const STEP: CoverageStep = {
   agent: null,
   human: null,
   human_backup: false,
+  executors: [],
   accountable: null,
   needs_accountable: false,
   gap_label: "hire",
@@ -182,6 +183,7 @@ it("keeps the verdict of a hand-set step a person is assigned to", async () => {
       verdict: "human",
       gap_label: null,
       human: { employee_id: "e-1", name: "Ada", position: null, label: "assigned", missing_codes: [] },
+      executors: [{ employee_id: "e-1", name: "Ada", position: null, label: "assigned", missing_codes: [] }],
     }),
   );
   await render(true);
@@ -344,6 +346,7 @@ it("offers to return a named agent type set by hand next to an assigned person",
       gap_label: null,
       agent: { pack_id: "p-1", pack_code: "drafting", pack_manual: true, agent_id: null, agent_name: null },
       human: { employee_id: "e-1", name: "Anna Weber", position: null, label: "assigned", missing_codes: [] },
+      executors: [{ employee_id: "e-1", name: "Anna Weber", position: null, label: "assigned", missing_codes: [] }],
     }),
   );
 

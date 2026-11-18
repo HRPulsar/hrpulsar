@@ -45,6 +45,7 @@ const GAP: CoverageStep = {
   agent: null,
   human: null,
   human_backup: false,
+  executors: [],
   accountable: null,
   needs_accountable: false,
   gap_label: "agency",
@@ -123,6 +124,19 @@ it("falls back to the Recruitment draft where the card is not the reader's", asy
 
   sections = [];
   await render(GAP);
+  expect(link()).toBeNull();
+});
+
+it("links the card a need opened without a vacancy (QA 12.11)", async () => {
+  const card = { id: "n-2", vacancy_id: null, label: "hire" as const, talent_card_id: "tc-2" };
+  await render({ ...GAP, hire_need: card });
+  expect(link()!.getAttribute("href")).toBe("/talent-market/tc-2");
+  expect(container.querySelector('[data-testid="coverage-btn-hire-s-1"]')).toBeNull();
+
+  // No Recruitment draft to fall back to: no link for a reader without the
+  // talent market.
+  sections = ["recruitment"];
+  await render({ ...GAP, hire_need: card });
   expect(link()).toBeNull();
 });
 

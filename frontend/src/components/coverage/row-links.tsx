@@ -57,6 +57,44 @@ export function PersonLink({
   );
 }
 
+/** HRP-1197: the rest of a step's people behind "+N" - a click lists them,
+ * each linked the way `PersonLink` links one. Nothing when nobody is left. */
+export function MorePeople({
+  people,
+  testId,
+}: {
+  people: { employee_id: string; name: string }[];
+  testId: string;
+}) {
+  const t = useTranslations("coverage");
+  if (people.length === 0) return null;
+  return (
+    <Popover>
+      <PopoverTrigger
+        className="rounded-sm underline decoration-dotted underline-offset-4 transition-colors hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={t("morePeopleAria", { count: people.length })}
+        data-testid={testId}
+      >
+        {t("morePeople", { count: people.length })}
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        className="w-64 max-w-[90vw] rounded-md p-3 text-sm"
+        data-testid={`${testId}-popover`}
+      >
+        <ul className="space-y-1">
+          {people.map((person) => (
+            <li key={person.employee_id}>
+              <PersonLink person={person} testId={`${testId}-${person.employee_id}`} />
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export const stepRowId = (stepId: string) => `coverage-step-${stepId}`;
 
 /** A step title in a summary bucket: scrolls to the step's row on the same
@@ -107,9 +145,9 @@ export function PackChip({ code, label, testId }: { code: string | null; label: 
   );
 }
 
-/** HRP-801 (QA 23.10): the vacancy a gap was handed to - its talent-market
- * card where "look inside first" put it, the Recruitment draft otherwise,
- * whichever of the two the reader may open; nothing when neither. */
+/** HRP-801: where a gap was handed to - the talent-market card "look inside
+ * first" opened (QA 12.11) or a vacancy's twin, the Recruitment draft
+ * otherwise, whichever of the two the reader may open; nothing when neither. */
 export function VacancyLink({
   need,
   label,

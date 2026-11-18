@@ -312,7 +312,7 @@ def localized_structures() -> list[Any]:
         INTERVIEW_SHAPES,
     )
     from app.modules.demo.seed_data_talent_market import TALENT_CARDS
-    from app.modules.demo.seed_data_work import WORK_CONTAINERS
+    from app.modules.demo.seed_data_work import DEMO_AGENTS, WORK_CONTAINERS
 
     return [
         VACANCIES,
@@ -341,6 +341,7 @@ def localized_structures() -> list[Any]:
         INTERVIEW_SHAPES,
         TALENT_CARDS,
         WORK_CONTAINERS,
+        DEMO_AGENTS,
     ]
 
 

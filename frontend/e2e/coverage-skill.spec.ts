@@ -12,8 +12,8 @@ const LIVE_LLM = process.env.E2E_LLM === "1";
  * judgement; with a live model the file is generated, previewed and
  * downloaded as SKILL.md.
  *
- * W6 (§5.12): the generation runs in a Celery task, so the dialog shows a
- * progress strip and polls the row rather than holding the request open.
+ * W6 (§5.12): the generation runs in a Celery task. HRP-1202: starting it
+ * closes the dialog, and the page polls until the row reads ready.
  */
 test.describe("Coverage — agent skill", () => {
   let accessToken: string;
@@ -101,15 +101,16 @@ test.describe("Coverage — agent skill", () => {
     await page.getByTestId(`coverage-btn-get-skill-${agentStepId}`).click();
     // HRP-960: the generation is a charge - it starts once confirmed.
     await page.getByTestId("coverage-skill-confirm-btn-confirm").click();
-    const modal = page.getByTestId("coverage-modal-skill");
-    await expect(modal).toBeVisible({ timeout: 10000 });
-    // Queued, not awaited: the strip and its clock are what the reader sees
-    // until the worker writes the file.
-    await expect(page.getByTestId("coverage-skill-progress")).toBeVisible({
-      timeout: 15000,
-    });
+    // Queued, not awaited: no modal holds the reader, the row says it is
+    // being written and turns ready by itself - no reload.
+    await expect(page.getByTestId("coverage-modal-skill")).toHaveCount(0);
+    const status = page.getByTestId(`coverage-skill-status-${agentStepId}`);
+    await expect(status).toHaveAttribute("data-status", "generating", { timeout: 15000 });
+    await expect(status).toHaveAttribute("data-status", "ready", { timeout: 120000 });
+    await page.getByTestId(`coverage-btn-get-skill-${agentStepId}`).click();
+    await expect(page.getByTestId("coverage-modal-skill")).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId("coverage-skill-preview")).toContainText("---", {
-      timeout: 120000,
+      timeout: 10000,
     });
     await expect(page.getByTestId("coverage-skill-preview")).toContainText(/name:/);
     const downloadPromise = page.waitForEvent("download");

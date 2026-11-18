@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -39,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import billing_hooks
 from app.core.errors import AppError, exception_summary
 from app.modules.auth.models import User
+from app.modules.company.models import Tenant
 from app.modules.employee.models import Employee
 from app.modules.position.models import Position
 from app.modules.primitives.catalog_data import CATALOG_VERSION
@@ -53,6 +55,7 @@ from app.modules.work.models import (
     WorkDecompositionSession,
     WorkHireNeed,
     WorkStep,
+    WorkStepExecutor,
     WorkStepPrimitive,
     WorkStepSkill,
 )
@@ -78,11 +81,12 @@ MAX_STEPS_PER_CONTAINER = 500
 UNKNOWN_CODES_ECHOED = 5
 CODE_ECHO_MAX = 10
 
-ASSIGNEE_FIELDS = frozenset({"executor_employee_id", "accountable_employee_id"})
+ASSIGNEE_FIELDS = frozenset({"accountable_employee_id"})
 # Fields a PATCH may change without touching the step's content.
 NON_CONTENT_FIELDS = (
     frozenset(
         {
+            "executor_employee_ids",
             "gap_label",
             "hours_per_run",
             "runs_per_year",
@@ -105,7 +109,6 @@ STEP_FIELDS = (
     "output_type",
     "gap_label",
     "notes",
-    "executor_employee_id",
     "accountable_employee_id",
     "review_human_share",
     "manual_mode",
@@ -710,16 +713,35 @@ async def _step_links(
     return out
 
 
+async def step_executor_ids(
+    db: AsyncSession, step_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, list[uuid.UUID]]:
+    """HRP-1197: the people named to do each step, earliest named first;
+    the people of one save share a timestamp and follow their row id."""
+    out: dict[uuid.UUID, list[uuid.UUID]] = {sid: [] for sid in step_ids}
+    if step_ids:
+        rows = await db.execute(
+            select(WorkStepExecutor.step_id, WorkStepExecutor.employee_id)
+            .where(WorkStepExecutor.step_id.in_(list(step_ids)))
+            .order_by(WorkStepExecutor.created_at, WorkStepExecutor.id)
+        )
+        for step_id, employee_id in rows.tuples().all():
+            out[step_id].append(employee_id)
+    return out
+
+
 async def _step_reads(
     db: AsyncSession, steps: Sequence[WorkStep]
 ) -> list[dict[str, Any]]:
     links = await _step_links(db, [s.id for s in steps])
+    executors = await step_executor_ids(db, [s.id for s in steps])
     return [
         {
             "id": s.id,
             "container_id": s.container_id,
             "position": s.position,
             **{field: getattr(s, field) for field in STEP_FIELDS},
+            "executor_employee_ids": executors[s.id],
             "state": s.state,
             "primitive_codes": [c["code"] for c in links[s.id]],
             "capabilities": links[s.id],
@@ -921,14 +943,51 @@ async def _ensure_active_employee(
         raise AppError("work_step_employee_invalid", 422)
 
 
+async def _set_executors(
+    db: AsyncSession, step: WorkStep, employee_ids: Sequence[uuid.UUID]
+) -> bool:
+    """HRP-1197: make the step's executors exactly ``employee_ids``; True
+    when that changed anything. A person added must be at work (HRP-809) -
+    one answer for a stranger, a missing id and an inactive employee; one
+    kept stays whatever their status, as the company named them."""
+    wanted = list(dict.fromkeys(employee_ids))
+    current = (await step_executor_ids(db, [step.id]))[step.id]
+    added = [e for e in wanted if e not in current]
+    if added:
+        found = (
+            await db.execute(
+                select(Employee.id).where(
+                    Employee.id.in_(added),
+                    Employee.tenant_id == step.tenant_id,
+                    Employee.status == "active",
+                )
+            )
+        ).scalars()
+        if len(set(found)) != len(added):
+            raise AppError("work_step_employee_invalid", 422)
+    dropped = [e for e in current if e not in wanted]
+    if dropped:
+        await db.execute(
+            delete(WorkStepExecutor).where(
+                WorkStepExecutor.step_id == step.id,
+                WorkStepExecutor.employee_id.in_(dropped),
+            )
+        )
+    db.add_all(
+        WorkStepExecutor(tenant_id=step.tenant_id, step_id=step.id, employee_id=e)
+        for e in added
+    )
+    return bool(added or dropped)
+
+
 async def update_step(
     db: AsyncSession, tenant_id: uuid.UUID, step_id: uuid.UUID, data: StepUpdate
 ) -> dict[str, Any]:
     step, container = await _writable_step(db, tenant_id, step_id)
+    fields = data.model_dump(exclude_unset=True)
+    executor_ids = fields.pop("executor_employee_ids", None)
     changes = {
-        key: value
-        for key, value in data.model_dump(exclude_unset=True).items()
-        if getattr(step, key) != value
+        key: value for key, value in fields.items() if getattr(step, key) != value
     }
     for key in ASSIGNEE_FIELDS & changes.keys():
         if changes[key] is not None:
@@ -943,7 +1002,10 @@ async def update_step(
         packs = await agents_service.list_packs(db, tenant_id)
         if coverage.manual_pack(changes["manual_pack_id"], packs) is None:
             raise AppError("work_step_pack_invalid", 422)
-    if changes:
+    people_changed = executor_ids is not None and await _set_executors(
+        db, step, executor_ids
+    )
+    if changes or people_changed:
         for key, value in changes.items():
             setattr(step, key, value)
         # The gap label is routing, the hours are arithmetic and the
@@ -1254,6 +1316,32 @@ async def latest_session(
     return rows.scalars().first()
 
 
+async def demo_preset(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    container: Mapping[str, Any],
+    *,
+    language: str | None = None,
+) -> dict[str, Any] | None:
+    """HRP-1208: the steps prepared with the demo seed for its own process,
+    while the description and the goal are still the seeded ones in the
+    tenant's content language; None otherwise. A demo sandbox only - not a
+    cache of breakdowns: any other company, and any edited text, gets a
+    real run. No model call stands behind the answer, so nothing is charged
+    for it. ``language`` is the content language when the caller has it."""
+    tenant = await db.get(Tenant, tenant_id)
+    if tenant is None or not tenant.is_demo:
+        return None
+    if language is None:
+        from app.modules.ai_settings import service as ai_settings_service
+
+        settings_row = await ai_settings_service.get_or_default(db, tenant_id)
+        language = settings_row.content_language
+    from app.modules.demo.seed_data_work import preset_breakdown
+
+    return preset_breakdown(container, language)
+
+
 async def create_session(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1261,10 +1349,16 @@ async def create_session(
     container_id: uuid.UUID,
     *,
     cost: float | None = None,
+    preset_language: str | None = None,
 ) -> WorkDecompositionSession:
     """Persist a ``pending`` run over a snapshot of the container's text, so
     an edit made while the model works does not change what was generated
-    against. One active run per container (partial unique index)."""
+    against. One active run per container (partial unique index).
+
+    ``preset_language`` (HRP-1208): the start found the demo's preset in this
+    content language and took no precheck and no hold. The run carries both,
+    so the worker matches in the same language, and knows a miss is unpaid
+    for."""
     from app.modules.work.prompts import PROMPT_VERSION
 
     container = await _writable_container(db, tenant_id, container_id)
@@ -1273,6 +1367,9 @@ async def create_session(
     params: dict[str, Any] = {"billing_action": BILLING_ACTION_START}
     if cost is not None:
         params["cost"] = cost
+    if preset_language is not None:
+        params["preset"] = True
+        params["content_language"] = preset_language
     row = WorkDecompositionSession(
         tenant_id=tenant_id,
         user_id=user_id,
@@ -1512,6 +1609,20 @@ HIRE_NEED_MAX_DESCRIPTION = 20_000
 # Language-neutral, like the rest of the text: the draft lands in the
 # tenant's language and we add no prose of our own.
 HIRE_NEED_TRUNCATED = "[...]"
+# ``TalentCardCreate.description``: the card holds the start of the steps.
+TALENT_CARD_DESCRIPTION_MAX = 250
+
+
+def _clip(text: str, limit: int) -> str:
+    """``text`` within ``limit``, cut at a word boundary and marked with
+    ``HIRE_NEED_TRUNCATED`` - a word cut in half reads as a typo. A text
+    with no space to cut at is cut where it stands."""
+    if len(text) <= limit:
+        return text
+    head = text[: limit - len(HIRE_NEED_TRUNCATED) - 1]
+    if not text[len(head)].isspace():
+        head = re.sub(r"\s+\S*$", "", head) or head
+    return f"{head.rstrip()} {HIRE_NEED_TRUNCATED}"
 
 
 async def create_hire_need(
@@ -1529,9 +1640,11 @@ async def create_hire_need(
     the selection that are not gaps are skipped: the screen may be stale.
     ``recruitment`` learns nothing about ``work``: the link lives here.
 
-    HRP-801 (QA 23.10): an agency need says so in the draft's title, in the
-    tenant's content language (d); "look inside first" also posts the draft
-    to the talent market (b) - see ``_post_to_talent_market``."""
+    HRP-801: an agency need says so in the draft's title, in the tenant's
+    content language (QA 23.10, d). "Look inside first" opens a talent card
+    instead, and no vacancy at all (QA 12.11, task 2) - see
+    ``_open_talent_card``; where the card cannot be had the need falls back
+    to the draft vacancy, internal search on, and the screen says so."""
     from app.core.i18n import translate
     from app.modules.ai_settings import service as ai_settings_service
     from app.modules.competence.models import Competence
@@ -1542,6 +1655,7 @@ async def create_hire_need(
     from app.modules.work import coverage
 
     container = await _writable_container(db, tenant_id, container_id)
+    container_title, owner_id = container.title, container.owner_id
     wanted = set(data.step_ids)
     # W6: ``gaps()`` also returns the steps an agent could take that nobody
     # has automated yet, and one does not hire for those. The filter is
@@ -1586,34 +1700,7 @@ async def create_hire_need(
         description, cut = description[:HIRE_NEED_MAX_DESCRIPTION].rstrip(), True
     if cut:
         description = f"{description}\n\n{HIRE_NEED_TRUNCATED}"
-    title = data.title or container.title
-    if data.label == "agency":
-        # The draft lands in the tenant's language, like the README of the
-        # agent bundle: the content language, not the reader's interface.
-        settings = await ai_settings_service.get_or_default(db, tenant_id)
-        language = settings.content_language
-        title = translate("work_hire_need.agency_title", language, title=title)
-    hiring_manager_id = None
-    if container.owner_id and await vacancy_service._is_hiring_manager_eligible(
-        db, tenant_id, container.owner_id
-    ):
-        hiring_manager_id = container.owner_id
-    # ponytail: create_vacancy commits on its own, so a failure below
-    # leaves a draft vacancy without its hire need; the draft is visible
-    # in Recruitment and harmless. Fold both into one transaction if it
-    # ever shows up.
-    vacancy = await vacancy_service.create_vacancy(
-        db,
-        tenant_id,
-        user_id,
-        VacancyCreate(
-            title=title[:VACANCY_TITLE_MAX],
-            description=description,
-            division_id=data.division_id,
-            hiring_manager_id=hiring_manager_id,
-            internal_search_allowed=data.internal_search_allowed,
-        ),
-    )
+    title = data.title or container_title
 
     # Reverse mapping primitive → competence: the competences the tenant
     # reads (its own and the shared library's) that overlap the gap, largest
@@ -1632,75 +1719,130 @@ async def create_hire_need(
                 Primitive.code.in_(codes),
             )
         )
-        for competence_id, title in rows.all():
-            count, _ = overlap.get(competence_id, (0, title))
-            overlap[competence_id] = (count + 1, title)
-    top = sorted(overlap, key=lambda cid: (-overlap[cid][0], overlap[cid][1], cid))
-    db.add_all(
-        VacancyCompetence(
-            tenant_id=tenant_id,
-            vacancy_id=vacancy["id"],
-            competence_id=cid,
-            source="ai",
-        )
-        for cid in top[:HIRE_NEED_COMPETENCES]
-    )
+        for competence_id, competence_title in rows.all():
+            count, _ = overlap.get(competence_id, (0, competence_title))
+            overlap[competence_id] = (count + 1, competence_title)
+    top = sorted(overlap, key=lambda cid: (-overlap[cid][0], overlap[cid][1], cid))[
+        :HIRE_NEED_COMPETENCES
+    ]
+
     need = WorkHireNeed(
         tenant_id=tenant_id,
-        container_id=container.id,
-        vacancy_id=vacancy["id"],
+        container_id=container_id,
         step_ids=[str(g["step_id"]) for g in gaps],
         label=data.label,
         created_by_id=user_id,
     )
+    # "Look inside first" is a hire, not an agency's job; the matcher needs
+    # a competence to match on, so a cold tenant goes straight to the draft.
+    if data.internal_search_allowed and data.label == "hire" and top:
+        need.talent_card_id = await _open_talent_card(
+            db,
+            tenant_id,
+            user_id,
+            title=title,
+            description=description,
+            division_id=data.division_id,
+            competence_ids=top,
+        )
+    if need.talent_card_id is None:
+        if data.label == "agency":
+            # The draft lands in the tenant's language, like the README of
+            # the agent bundle: the content language, not the reader's
+            # interface.
+            settings = await ai_settings_service.get_or_default(db, tenant_id)
+            language = settings.content_language
+            title = translate("work_hire_need.agency_title", language, title=title)
+        hiring_manager_id = None
+        if owner_id and await vacancy_service._is_hiring_manager_eligible(
+            db, tenant_id, owner_id
+        ):
+            hiring_manager_id = owner_id
+        # ponytail: create_vacancy commits on its own, so a failure below
+        # leaves a draft vacancy without its hire need; the draft is visible
+        # in Recruitment and harmless. Fold both into one transaction if it
+        # ever shows up.
+        vacancy = await vacancy_service.create_vacancy(
+            db,
+            tenant_id,
+            user_id,
+            VacancyCreate(
+                title=title[:VACANCY_TITLE_MAX],
+                description=description,
+                division_id=data.division_id,
+                hiring_manager_id=hiring_manager_id,
+                internal_search_allowed=data.internal_search_allowed,
+            ),
+        )
+        db.add_all(
+            VacancyCompetence(
+                tenant_id=tenant_id,
+                vacancy_id=vacancy["id"],
+                competence_id=cid,
+                source="ai",
+            )
+            for cid in top
+        )
+        need.vacancy_id = vacancy["id"]
     db.add(need)
     await db.commit()
     await db.refresh(need)
-    if data.internal_search_allowed:
-        await _post_to_talent_market(db, tenant_id, need, user_id=user_id)
     return need
 
 
-async def _post_to_talent_market(
-    db: AsyncSession, tenant_id: uuid.UUID, need: WorkHireNeed, *, user_id: uuid.UUID
-) -> None:
-    """HRP-801 (QA 23.10, b): "look inside first" puts the draft on the
-    talent market as its internal-mobility twin - the existing
-    ``vacancy_service.post_vacancy_to_talent_market``, through the module
-    so the EE wrappers bill (``talent_card.create``) and audit it. The link
-    is the vacancy's own ``talent_card_id``: no column on our side.
+async def _open_talent_card(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    title: str,
+    description: str,
+    division_id: uuid.UUID | None,
+    competence_ids: Sequence[uuid.UUID],
+) -> uuid.UUID | None:
+    """HRP-801 (QA 12.11, task 2): "look inside first" opens the need as a
+    card of the talent market and nothing in Recruitment. The card is
+    ``card_service.create_card``, through the module so the EE wrappers
+    bill (``talent_card.create``) and audit it; the competences the gap
+    overlaps are its Required Competences, at no level - what the vacancy
+    bridge copied for a hire need before - and the matcher fills its pool.
 
-    The twin needs a library competence on the vacancy, and a cold tenant
-    has none that overlaps the gap. Then - or when the bridge refuses for
-    any other reason, credits included - the need stands on the draft in
-    Recruitment, internal search still on: the recruiter adds competences
-    and posts it from the vacancy, and the step's link follows the card,
-    read live. The caller learns it from ``talent_card_id`` staying None."""
-    from app.modules.recruitment import vacancy_service
+    None when the talent market refuses the card - credits, or any other
+    refusal before it is written: the caller opens the draft vacancy then.
+    A matcher failure keeps the card: it is written and paid for, its
+    requirements stand, and Recompute on the card refills the pool."""
+    from app.modules.talent_market import card_service, matching
+    from app.modules.talent_market.models import TalentCardCompetence
+    from app.modules.talent_market.schemas import TalentCardCreate
 
-    need_id, vacancy_id = need.id, need.vacancy_id
-    assert vacancy_id is not None
     try:
-        await vacancy_service.post_vacancy_to_talent_market(
-            db, tenant_id, vacancy_id, user_id
+        card = await card_service.create_card(
+            db,
+            tenant_id,
+            user_id,
+            TalentCardCreate(
+                # The card's own bounds: a 100-character title, a 250 one.
+                title=title[:100],
+                description=_clip(description, TALENT_CARD_DESCRIPTION_MAX),
+                card_type="vacancy",
+                division_id=division_id,
+            ),
         )
     except AppError as exc:
-        # Every refusal comes before the bridge writes - its preconditions
-        # and the billing precheck - so there is nothing to undo (and a
-        # rollback would expire the caller's objects with it).
-        logger.info(
-            "hire need %s stays in Recruitment, no talent card: %s", need_id, exc.code
-        )
+        logger.info("hire need stays in Recruitment, no talent card: %s", exc.code)
+        return None
+    card_id: uuid.UUID = card["id"]
+    db.add_all(
+        TalentCardCompetence(card_id=card_id, competence_id=cid)
+        for cid in competence_ids
+    )
+    await db.commit()
+    try:
+        await matching._auto_populate_candidates(db, tenant_id, card_id)
     except Exception:
-        # The matcher failed after the card committed: the bridge deleted
-        # the card itself and re-raised, having rolled the session back.
-        # The need and its draft are committed - a 500 here would leave
-        # them behind a retry that answers 409 - so the need stays open
-        # like any refusal. The rollback clears whatever the bridge's own
-        # cleanup could not, and the need is read back for the response.
-        logger.exception("hire need %s stays in Recruitment, no talent card", need_id)
+        logger.exception("talent card %s opened without its candidate pool", card_id)
         await db.rollback()
-        await db.refresh(need)
+    return card_id
 
 
 async def hire_need_origin(
@@ -1710,9 +1852,11 @@ async def hire_need_origin(
     vacancy_id: uuid.UUID | None = None,
     card_id: uuid.UUID | None = None,
 ) -> WorkContainer | None:
-    """HRP-801 (QA 23.10): the container a vacancy - or the talent card
-    posted from it - was opened from, newest need first. Whether the
-    reader may see the vacancy or the card is the caller's guard."""
+    """HRP-801 (QA 23.10): the container a vacancy - or a talent card - was
+    opened from, newest need first. A card is the need's own (QA 12.11) or
+    the twin posted from its vacancy (a need opened before 2.6.2, or a
+    recruiter who posted the fallback draft later). Whether the reader may
+    see the vacancy or the card is the caller's guard."""
     from app.modules.recruitment.models import Vacancy
 
     query = (
@@ -1725,8 +1869,14 @@ async def hire_need_origin(
         .limit(1)
     )
     if card_id is not None:
-        query = query.join(Vacancy, Vacancy.id == WorkHireNeed.vacancy_id).where(
-            Vacancy.tenant_id == tenant_id, Vacancy.talent_card_id == card_id
+        query = query.outerjoin(
+            Vacancy,
+            and_(Vacancy.id == WorkHireNeed.vacancy_id, Vacancy.tenant_id == tenant_id),
+        ).where(
+            or_(
+                WorkHireNeed.talent_card_id == card_id,
+                Vacancy.talent_card_id == card_id,
+            )
         )
     else:
         query = query.where(WorkHireNeed.vacancy_id == vacancy_id)

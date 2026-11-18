@@ -52,6 +52,7 @@ const STEP: CoverageStep = {
   agent: null,
   human: HUMAN,
   human_backup: false,
+  executors: [],
   accountable: null,
   needs_accountable: false,
   gap_label: null,
@@ -153,7 +154,8 @@ it("words an expected match on its own and shows no score", async () => {
 });
 
 it("has nothing to open for an assigned executor", async () => {
-  await render({ ...STEP, human: { ...HUMAN, label: "assigned", passing_score: null, grounds: [] } });
+  const assigned = { ...HUMAN, label: "assigned" as const, passing_score: null, grounds: [] };
+  await render({ ...STEP, human: assigned, executors: [assigned] });
 
   expect(byId("coverage-executor-s-1")).not.toBeNull();
   expect(byId("coverage-btn-grounds-s-1")).toBeNull();

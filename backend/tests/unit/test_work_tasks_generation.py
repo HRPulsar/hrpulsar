@@ -1,4 +1,4 @@
-"""HRP-951 / HRP-949 / HRP-921: what the breakdown worker sends and keeps.
+"""HRP-951 / HRP-949 / HRP-921 / HRP-1208: what the breakdown worker sends and keeps.
 
 The prompt layout - the shared prefix alone in the first system block, the
 same bytes on the split, the classification and a reclassification - and
@@ -17,11 +17,18 @@ from unittest.mock import patch
 
 import pytest
 from app.core import billing_hooks
+from app.core.errors import AppError
 from app.core.redis import redis_client
 from app.modules.ai import llm_client
+from app.modules.ai_settings.models import TenantAISettings
+from app.modules.demo.seed_data_work import WORK_CONTAINERS
 from app.modules.primitives import catalog_data
 from app.modules.work import prompts, service, tasks
-from app.modules.work.schemas import ContainerCreate, DecompositionSchema
+from app.modules.work.schemas import (
+    ContainerCreate,
+    DecomposedStep,
+    DecompositionSchema,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -338,3 +345,209 @@ class TestResultCache:
             result = await tasks.execute_session(session_factory, sess.id)
         assert result["status"] == "ready"
         assert consumed == ["x"]  # a real call, charged as such
+
+
+ONBOARDING = next(spec for spec in WORK_CONTAINERS if spec.get("preset_steps"))
+
+
+async def _onboarding_run(
+    db, tenant, user, *, demo: bool, description: str, preset_language=None
+):
+    """The demo's onboarding process with the given description, its seeded
+    goal, and a pending run over it - started as the free preset run when
+    ``preset_language`` is given, the way the start endpoint records it."""
+    tenant.is_demo = demo
+    await db.commit()
+    data = ContainerCreate(
+        type="process",
+        title=ONBOARDING["title"],
+        description=description,
+        goal=ONBOARDING["goal"],
+    )
+    container = await service.create_container(db, tenant.id, data, user_id=user.id)
+    return await service.create_session(
+        db, tenant.id, user.id, container.id, preset_language=preset_language
+    )
+
+
+class TestDemoPreset:
+    """HRP-1208: the demo's own process, unchanged, is answered with the
+    steps prepared with the seed - no model call, no charge. An edited text,
+    or a company that is not a demo sandbox, gets a real run."""
+
+    async def _run(self, session_factory, sess, *, model_allowed: bool):
+        consumed: list[str] = []
+        released: list[dict] = []
+
+        async def _consume(*_a, **_k):
+            consumed.append("x")
+
+        async def _release(_db, _tenant_id, **kw):
+            released.append(kw)
+            return 1
+
+        async def _no_call(*_a, **_k):
+            raise AssertionError("the model must not be called on the preset")
+
+        with (
+            patch.object(
+                llm_client,
+                "generate_json",
+                side_effect=_answer if model_allowed else _no_call,
+            ),
+            patch.object(billing_hooks, "consume_action", side_effect=_consume),
+            patch.object(billing_hooks, "release_action", side_effect=_release),
+        ):
+            result = await tasks.execute_session(session_factory, sess.id)
+        return result, consumed, released
+
+    async def test_the_unchanged_preset_is_answered_without_a_call_or_a_charge(
+        self, db, tenant, user, seeded, session_factory
+    ):
+        # Spacing is not an edit: the text is compared normalised.
+        text = "  " + ONBOARDING["description"].replace(". ", ".\n\n", 2) + " "
+        sess = await _onboarding_run(db, tenant, user, demo=True, description=text)
+        result, consumed, released = await self._run(
+            session_factory, sess, model_allowed=False
+        )
+        assert result["status"] == "ready"
+        assert consumed == []
+        assert len(released) == 1  # the hold, had one been taken, goes
+        await db.refresh(sess)
+        assert sess.status == "ready" and sess.phase is None
+        # No model answered: the run names none.
+        assert sess.llm_model is None
+        steps = sess.payload["steps"]
+        assert [s["title"] for s in steps] == [
+            s["title"] for s in ONBOARDING["preset_steps"]
+        ]
+        # The shape the worker writes for a model's answer, so apply and
+        # the screen take it as one.
+        for step in steps:
+            DecomposedStep.model_validate(step)
+            assert step["evidence"] == []
+            assert step["first_pass_codes"] == step["primitives"]
+
+        applied = await service.apply_session(
+            db, tenant.id, sess.id, idempotency_key="preset-apply-1"
+        )
+        assert len(applied["created_steps"]) == len(ONBOARDING["preset_steps"])
+
+    async def test_an_edited_description_is_generated_and_charged(
+        self, db, tenant, user, seeded, session_factory
+    ):
+        sess = await _onboarding_run(
+            db,
+            tenant,
+            user,
+            demo=True,
+            description=f"{ONBOARDING['description']} {uuid.uuid4()}",
+        )
+        result, consumed, _ = await self._run(session_factory, sess, model_allowed=True)
+        assert result["status"] == "ready"
+        assert consumed == ["x"]
+        await db.refresh(sess)
+        assert [s["title"] for s in sess.payload["steps"]] == ["Intake", "Signature"]
+
+    async def test_a_company_with_the_same_text_is_generated_and_charged(
+        self, db, tenant, user, seeded, session_factory
+    ):
+        sess = await _onboarding_run(
+            db, tenant, user, demo=False, description=ONBOARDING["description"]
+        )
+        result, consumed, _ = await self._run(session_factory, sess, model_allowed=True)
+        assert result["status"] == "ready"
+        assert consumed == ["x"]
+
+    async def test_the_language_of_the_start_holds_until_the_worker(
+        self, db, tenant, user, seeded, session_factory
+    ):
+        """The content language changes between the start and the worker:
+        the preset is matched in the language the start found it in, so the
+        free start is not answered by a model call."""
+        sess = await _onboarding_run(
+            db,
+            tenant,
+            user,
+            demo=True,
+            description=ONBOARDING["description"],
+            preset_language="en",
+        )
+        assert sess.params["preset"] is True
+        db.add(TenantAISettings(tenant_id=tenant.id, content_language="de"))
+        await db.commit()
+
+        result, consumed, _ = await self._run(
+            session_factory, sess, model_allowed=False
+        )
+        assert result["status"] == "ready"
+        assert consumed == []
+        await db.refresh(sess)
+        assert [s["title"] for s in sess.payload["steps"]] == [
+            s["title"] for s in ONBOARDING["preset_steps"]
+        ]
+
+    async def test_a_free_start_that_misses_the_preset_is_refused_without_a_call(
+        self, db, tenant, user, seeded, session_factory
+    ):
+        """Started free - no precheck, no hold - but the snapshot is not the
+        preset: the balance is asked before any model call, and a refusal
+        ends the run with its code."""
+        sess = await _onboarding_run(
+            db,
+            tenant,
+            user,
+            demo=True,
+            description=f"{ONBOARDING['description']} {uuid.uuid4()}",
+            preset_language="en",
+        )
+
+        async def _refuse(*_a, **_k):
+            raise AppError("credits_demo_quota_exhausted", 429)
+
+        with patch.object(billing_hooks, "precheck_action", side_effect=_refuse):
+            result, consumed, _ = await self._run(
+                session_factory, sess, model_allowed=False
+            )
+        assert result["status"] == "error"
+        assert consumed == []
+        await db.refresh(sess)
+        assert (sess.status, sess.error_code) == (
+            "error",
+            "credits_demo_quota_exhausted",
+        )
+
+    async def test_a_free_start_that_misses_the_preset_is_prechecked_then_paid(
+        self, db, tenant, user, seeded, session_factory
+    ):
+        """The same miss with a balance that covers it: the precheck comes
+        first, then the model, then the charge."""
+        order: list[str] = []
+        sess = await _onboarding_run(
+            db,
+            tenant,
+            user,
+            demo=True,
+            description=f"{ONBOARDING['description']} {uuid.uuid4()}",
+            preset_language="en",
+        )
+
+        async def _precheck(*_a, **_k):
+            order.append("precheck")
+
+        def _model(*args, **kwargs):
+            order.append("model")
+            return _answer(*args, **kwargs)
+
+        async def _consume(*_a, **_k):
+            order.append("consume")
+
+        with (
+            patch.object(billing_hooks, "precheck_action", side_effect=_precheck),
+            patch.object(llm_client, "generate_json", side_effect=_model),
+            patch.object(billing_hooks, "consume_action", side_effect=_consume),
+        ):
+            result = await tasks.execute_session(session_factory, sess.id)
+        assert result["status"] == "ready"
+        assert order[0] == "precheck" and order[-1] == "consume"
+        assert "model" in order

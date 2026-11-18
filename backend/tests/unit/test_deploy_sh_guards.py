@@ -161,12 +161,14 @@ def test_prune_keeps_three_newest_per_app_repo_only(tmp_path: Path) -> None:
     script = r"""
 log() { :; }
 dc() { printf '%s\n' reg:5000/hrp/backend:2.5.3 reg:5000/hrp/backend:2.5.3 \
-    reg:5000/hrp/marketing:latest postgres:17.6; }
+    reg:5000/hrp/marketing:latest reg:5000/hrp/site-landing:latest \
+    postgres:17.6; }
 docker() {
     case "$1" in
         images) case "$2" in
             reg:5000/hrp/backend) printf '%s\n' b1 b2 b2 b3 b4 b5;;
             reg:5000/hrp/marketing) printf '%s\n' m1 m2;;
+            reg:5000/hrp/site-landing) printf '%s\n' g1 g2 g3 g4;;
             *) echo "unexpected repo $2" >&2; exit 9;;
         esac;;
         rmi|image) echo "$*" >> "$OUT";;
@@ -181,4 +183,6 @@ docker() {
         env={"PATH": "/usr/bin:/bin", "OUT": str(out)},
     )
     assert r.returncode == 0, r.stderr
-    assert out.read_text().splitlines() == ["rmi b4 b5", "image prune -f"]
+    # A site's own landing in the marketing slot (LANDING_IMAGE, *-landing)
+    # leaves a sha-* tag per deploy, like the flagship landing does.
+    assert out.read_text().splitlines() == ["rmi b4 b5", "rmi g4", "image prune -f"]

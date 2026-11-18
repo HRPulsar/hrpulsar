@@ -9,7 +9,7 @@ import pytest
 from app.core.errors import AppError
 from app.modules.company.models import Tenant
 from app.modules.work import coverage
-from app.modules.work.models import WorkStep
+from app.modules.work.models import WorkStep, WorkStepExecutor
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.unit.test_coverage_matching import (
@@ -67,13 +67,16 @@ async def test_other_tenants_employee_is_not_an_assignee(db, tenant, user, seede
     step = await _step(db, tenant, c, ["P6"], responsibility="formal")
     stranger = await _employee(db, await _other_tenant(db))
     row = await db.get(WorkStep, step["id"])
-    row.executor_employee_id = stranger.id
+    db.add(
+        WorkStepExecutor(tenant_id=tenant.id, step_id=row.id, employee_id=stranger.id)
+    )
     row.accountable_employee_id = stranger.id
     await db.commit()
     result = await coverage.compute(db, tenant.id, c.id)
     [coverage_row] = result["steps"]
     assert coverage_row["verdict"] == "gap"
     assert coverage_row["human"] is None
+    assert coverage_row["executors"] == []
     assert coverage_row["accountable"] is None
     assert coverage_row["needs_accountable"] is True
 

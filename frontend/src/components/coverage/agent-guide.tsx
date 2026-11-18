@@ -192,6 +192,9 @@ export function AgentGuide({
               {canRegisterAgent && group.packId && group.agentNames.length === 0 && (
                 <RegisterAgentInline
                   packId={group.packId}
+                  // One agent for the whole type: it has to cover every step.
+                  codes={group.steps.flatMap((s) => s.codes)}
+                  packManual={group.steps.every((s) => s.agent?.pack_manual)}
                   testId={`${testId}-use-agent`}
                   onRegistered={onChanged}
                 />

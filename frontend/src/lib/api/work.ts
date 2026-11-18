@@ -59,6 +59,17 @@ export interface ContainerAccess {
   history: AccessLogEntry[];
 }
 
+/** HRP-1197: an active employee as a candidate executor of a step, ranked
+ * by `match_percent` - the share of the step's capabilities they hold; null
+ * outside the reader's HR scope. */
+export interface StepPerson {
+  employee_id: string;
+  name: string;
+  email: string | null;
+  position_title: string | null;
+  match_percent: number | null;
+}
+
 /** HRP-810: someone an editor of a process can name - owner, rule or
  * assignee. `assignable` = at work, so a step can be given to them. */
 export interface ProcessPerson {
@@ -111,7 +122,8 @@ export interface WorkStep {
   gap_label: "hire" | "agency" | null;
   notes: string | null;
   /** HRP-809: who does the step and who checks and signs it. */
-  executor_employee_id: string | null;
+  /** HRP-1197: everyone who does the step, earliest named first. */
+  executor_employee_ids: string[];
   accountable_employee_id: string | null;
   /** HRP-861: percent of a reviewed step's hours that stays with the
    * checker; null is the default share. */
@@ -165,7 +177,7 @@ export type StepPatch = Partial<
     | "output_type"
     | "gap_label"
     | "notes"
-    | "executor_employee_id"
+    | "executor_employee_ids"
     | "accountable_employee_id"
     | "review_human_share"
     | "manual_mode"
@@ -241,10 +253,24 @@ export interface CoverageGround {
   codes: string[];
 }
 
+export type CoverageHuman = CoveragePerson & {
+  /** `assigned` (HRP-809): named on the step by the company. */
+  label: "assessed" | "expected" | "assigned";
+  /** The step's capabilities the person does not hold; only an assigned
+   * executor can have any. */
+  missing_codes: string[];
+  /** HRP-871: what the match stands on and the passing score it was held
+   * against; none for an assigned executor. */
+  passing_score?: number | null;
+  grounds?: CoverageGround[];
+};
+
 export interface CoverageStep {
   step_id: string;
   position: number;
   title: string;
+  /** HRP-1196: the step's description, the one the Steps tab shows. */
+  description?: string | null;
   state: StepState;
   codes: string[];
   required_codes: string[];
@@ -263,18 +289,12 @@ export interface CoverageStep {
     agent_id: string | null;
     agent_name: string | null;
   } | null;
-  human: CoveragePerson & {
-    /** `assigned` (HRP-809): named on the step by the company. */
-    label: "assessed" | "expected" | "assigned";
-    /** The step's capabilities the person does not hold; only an assigned
-     * executor can have any. */
-    missing_codes: string[];
-    /** HRP-871: what the match stands on and the passing score it was held
-     * against; none for an assigned executor. */
-    passing_score?: number | null;
-    grounds?: CoverageGround[];
-  } | null;
+  /** The first of `executors`, or the person the match found. */
+  human: CoverageHuman | null;
   human_backup: boolean;
+  /** HRP-1197: everyone the company named to do the step, by name. Read
+   * through `stepExecutors` (coverage-outcome.tsx). */
+  executors: CoverageHuman[];
   /** HRP-809: who checks and signs the step. */
   accountable: CoveragePerson | null;
   /** An agent drafts or needs review here, or somebody answers for the
@@ -283,7 +303,8 @@ export interface CoverageStep {
   gap_label: GapLabel | null;
   /** hours_per_run x runs_per_year; null when either is unset. */
   hours_per_year: number | null;
-  /** The newest hire need of this step that still points at a vacancy. */
+  /** The newest hire need of this step that still points at a vacancy or
+   * a talent card. */
   hire_need: GapHireNeed | null;
   skill_status: SkillStatus;
   /** HRP-776: not accepted yet, or resting on an unconfirmed low-confidence code. */
@@ -291,6 +312,8 @@ export interface CoverageStep {
   /** HRP-861: percent of the step's hours its checker keeps - the step's own
    * or the default; null outside the review bucket. */
   review_human_share: number | null;
+  /** HRP-1206: the To do group the step is listed in; none when it is not. */
+  todo?: GapKind | null;
 }
 
 export type SkillStatus = "none" | "generating" | "ready" | "failed";
@@ -378,8 +401,9 @@ export interface Coverage {
   steps: CoverageStep[];
 }
 
-/** W6 (§5.10): which To do section the row belongs to. */
-export type GapKind = "no_owner" | "not_automated_yet";
+/** W6 (§5.10): which To do section the row belongs to; HRP-1198: people do
+ * it and nobody is assigned (`unassigned`). */
+export type GapKind = "no_owner" | "not_automated_yet" | "unassigned";
 
 export interface Gap {
   step_id: string;
@@ -390,6 +414,9 @@ export interface Gap {
   /** Only a `no_owner` row is routed to hiring; the other kind has none. */
   gap_label: GapLabel | null;
   required_codes: string[];
+  /** Every code of the step: what an agent named on the row must cover
+   * to be matched to it (HRP-1199). */
+  codes: string[];
   /** The agent type covering a `not_automated_yet` row, so the screen can
    * register the agent the company already runs for it. */
   agent: {
@@ -402,6 +429,9 @@ export interface Gap {
   } | null;
   skill_status: SkillStatus;
   hire_need: GapHireNeed | null;
+  /** HRP-1198: on an `unassigned` row, the person the match found - null
+   * where nobody matched for this reader. Read through `stepMatches`. */
+  human?: CoverageHuman | null;
 }
 
 /** HRP-863: an agent pack visible to the tenant, as `GET /ai-workforce/packs`
@@ -412,6 +442,17 @@ export interface AgentPack {
   title_en: string;
   /** null for a built-in pack; set on the tenant's own. */
   tenant_id: string | null;
+}
+
+/** HRP-1199: an agent of the registry, as `/ai-workforce/agents` returns
+ * it - the fields "I already use this" needs to offer it on another step
+ * and to bind it there. */
+export interface RegisteredAgent {
+  id: string;
+  name: string;
+  pack_id: string | null;
+  primitive_overrides: { code: string; mode: "add" | "remove" }[];
+  effective_primitive_codes: string[];
 }
 
 /** The hire need a step was handed to. HRP-801: `talent_card_id` is the
@@ -482,6 +523,7 @@ export const workApi = {
   accept: (id: string) => api.post<WorkContainer>(`/work/containers/${id}/accept`),
   getAccess: (id: string) => api.get<ContainerAccess>(`/work/containers/${id}/access`),
   listPeople: (id: string) => api.get<ProcessPerson[]>(`/work/containers/${id}/people`),
+  stepPeople: (stepId: string) => api.get<StepPerson[]>(`/work/steps/${stepId}/people`),
   setAccess: (id: string, body: { visibility: Visibility; rules: AccessRule[] }) =>
     api.put<ContainerAccess>(`/work/containers/${id}/access`, body),
 
@@ -542,6 +584,15 @@ export const workApi = {
   registerAgent: (body: { name: string; pack_id: string }) =>
     api.post<{ id: string }>("/ai-workforce/agents", body),
   listPacks: () => api.get<AgentPack[]>("/ai-workforce/packs"),
+  // HRP-1199: the agents named before, offered on the next step; binding
+  // one adds the step's codes to it rather than registering it twice.
+  listAgents: () =>
+    api.get<{ items: RegisteredAgent[]; total: number }>(
+      "/ai-workforce/agents?is_active=true&limit=200",
+    ),
+  getAgent: (id: string) => api.get<RegisteredAgent>(`/ai-workforce/agents/${id}`),
+  setAgentPrimitives: (id: string, primitives: RegisteredAgent["primitive_overrides"]) =>
+    api.put<RegisteredAgent>(`/ai-workforce/agents/${id}/primitives`, { primitives }),
 
   startDecomposition: (containerId: string) =>
     api.post<DecompositionSession>("/work/decomposition/sessions", {

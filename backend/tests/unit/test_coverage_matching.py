@@ -698,7 +698,7 @@ class TestAssignment:
         c = await _container(db, tenant, user)
         step = await _step(db, tenant, c, ["P6", "P8", "B1"])
         emp = await _employee(db, tenant, last_name="Novak")
-        await _assign(db, tenant, step, executor_employee_id=emp.id)
+        await _assign(db, tenant, step, executor_employee_ids=[emp.id])
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["verdict"] == "human"
         assert row["human"] == {
@@ -717,7 +717,7 @@ class TestAssignment:
         c = await _container(db, tenant, user)
         step = await _step(db, tenant, c, ["P1"])
         emp = await _employee(db, tenant)
-        await _assign(db, tenant, step, executor_employee_id=emp.id)
+        await _assign(db, tenant, step, executor_employee_ids=[emp.id])
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["verdict"] == "human"
         assert row["human"]["label"] == "assigned"
@@ -734,7 +734,7 @@ class TestAssignment:
         step = await _step(db, tenant, c, ["P6"])
         emp = await _employee(db, tenant)
         await _done(db, tenant, emp, await _competence(db, tenant.id, ["P6"]), 90)
-        await _assign(db, tenant, step, executor_employee_id=emp.id)
+        await _assign(db, tenant, step, executor_employee_ids=[emp.id])
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["human"]["label"] == "assigned"
         assert row["human"]["missing_codes"] == []
@@ -743,7 +743,7 @@ class TestAssignment:
         c = await _container(db, tenant, user)
         step = await _step(db, tenant, c, [], responsibility="regulatory")
         emp = await _employee(db, tenant)
-        await _assign(db, tenant, step, executor_employee_id=emp.id)
+        await _assign(db, tenant, step, executor_employee_ids=[emp.id])
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["verdict"] == "out_of_scope"
         assert row["human"]["label"] == "assigned"
@@ -767,7 +767,7 @@ class TestAssignment:
             db,
             tenant,
             step,
-            executor_employee_id=emp.id,
+            executor_employee_ids=[emp.id],
             accountable_employee_id=emp.id,
         )
         emp.status = status
@@ -797,7 +797,7 @@ class TestAssignment:
         free = await _step(db, tenant, c, ["P6"])
         emp = await _employee(db, tenant)
         await _done(db, tenant, emp, await _competence(db, tenant.id, ["P6"]), 90)
-        await _assign(db, tenant, assigned, executor_employee_id=emp.id)
+        await _assign(db, tenant, assigned, executor_employee_ids=[emp.id])
         emp.status = "terminated"
         await db.commit()
         result = await coverage.compute(db, tenant.id, c.id)
@@ -845,8 +845,8 @@ class TestAssignment:
         await _step(db, tenant, c, ["P6", "P8"], **hours)
         before = await coverage.compute(db, tenant.id, c.id)
         emp = await _employee(db, tenant)
-        await _assign(db, tenant, moves, executor_employee_id=emp.id)
-        await _assign(db, tenant, gap, executor_employee_id=emp.id)
+        await _assign(db, tenant, moves, executor_employee_ids=[emp.id])
+        await _assign(db, tenant, gap, executor_employee_ids=[emp.id])
         after = await coverage.compute(db, tenant.id, c.id)
         assert before["shares"] is not None
         for key in ("shares", "hours", "quality", "candidate_step_ids"):
@@ -898,6 +898,89 @@ class TestGapsAndWeights:
         assert gaps[0]["skill_status"] == "none"
         # Boundary codes are not what one hires for (§6).
         assert gaps[1]["required_codes"] == ["P6"]
+
+    async def test_demo_closes_an_agent_step_on_its_skill_alone(
+        self, db, tenant, user, seeded
+    ):
+        """HRP-1201: a demo visitor has no agent of their own to register,
+        so a written skill takes the step off To do there; everywhere else
+        the step waits for the agent as before."""
+        from app.modules.work.models import WorkStepSkill
+
+        c = await _container(db, tenant, user)
+        written = await _step(db, tenant, c, ["P1"])
+        pending = await _step(db, tenant, c, ["P1"])
+        db.add(
+            WorkStepSkill(
+                tenant_id=tenant.id,
+                step_id=written["id"],
+                catalog_version=service.CATALOG_VERSION,
+                status="ready",
+                content="# skill",
+            )
+        )
+        await db.commit()
+
+        gaps = await coverage.gaps(db, tenant.id, c.id)
+        assert [(g["step_id"], g["kind"]) for g in gaps] == [
+            (written["id"], "not_automated_yet"),
+            (pending["id"], "not_automated_yet"),
+        ]
+
+        tenant.is_demo = True
+        await db.commit()
+        gaps = await coverage.gaps(db, tenant.id, c.id)
+        assert [(g["step_id"], g["kind"]) for g in gaps] == [
+            (pending["id"], "not_automated_yet")
+        ]
+        # The rule itself, both ways, on the written step's row.
+        row, _ = await _row(db, tenant, c, written["id"])
+        assert row["agent"]["agent_id"] is None
+        assert coverage.gap_kind(row) == "not_automated_yet"
+        assert coverage.gap_kind(row, agent_required=False) is None
+
+    async def test_an_agent_named_before_is_bound_not_registered_twice(
+        self, db, tenant, user, seeded
+    ):
+        """HRP-1199: "I already use this" on the next step offers the agent
+        named on the first one. The registry refuses a second agent with
+        the same name, and the agent is matched by codes - so picking it
+        adds the step's codes to it, and the step reads as that agent's."""
+        from app.core.errors import AppError
+
+        c = await _container(db, tenant, user)
+        first = await _step(db, tenant, c, ["P1"])
+        second = await _step(db, tenant, c, ["P1", "P5"])  # drafting, not extraction
+        agent = await _agent(db, tenant, user, "extraction", name="ChatGPT")
+        row, _ = await _row(db, tenant, c, first["id"])
+        assert row["agent"]["agent_id"] == agent["id"]
+        row, _ = await _row(db, tenant, c, second["id"])
+        assert (row["agent"]["pack_code"], row["agent"]["agent_id"]) == (
+            "drafting",
+            None,
+        )
+
+        with pytest.raises(AppError) as err:
+            await _agent(db, tenant, user, "drafting", name="chatgpt")
+        assert (err.value.code, err.value.status_code) == ("ai_agent_name_taken", 409)
+
+        # What the screen sends: the agent's overrides plus the missing code.
+        await agents_service.set_agent_primitives(
+            db,
+            tenant.id,
+            agent["id"],
+            [PrimitiveOverride(code="P5", mode="add")],
+            user_id=user.id,
+        )
+        row, _ = await _row(db, tenant, c, second["id"])
+        assert (row["agent"]["agent_id"], row["agent"]["agent_name"]) == (
+            agent["id"],
+            "ChatGPT",
+        )
+        row, _ = await _row(db, tenant, c, first["id"])
+        assert row["agent"]["agent_id"] == agent["id"]
+        _, total = await agents_service.list_agents(db, tenant.id)
+        assert total == 1
 
     async def test_shares_are_yearly_hours_of_estimated_steps(
         self, db, tenant, user, seeded
@@ -1124,6 +1207,21 @@ class TestRoutes:
         assert res.status_code == 200
         assert res.json()[0]["step_id"] == str(step["id"])
         assert res.json()[0]["gap_label"] == "agency"
+
+    async def test_a_row_carries_the_step_description(
+        self, db, tenant, user, seeded, auth_client
+    ):
+        """HRP-1196: the coverage row shows the Steps tab's text; the route's
+        ``response_model`` must not cut it."""
+        c = await _container(db, tenant, user)
+        await _step(db, tenant, c, ["P1"], description="Set up the org and accounts")
+        await _step(db, tenant, c, ["P6"])
+        res = await auth_client.get(f"/api/work/containers/{c.id}/coverage")
+        assert res.status_code == 200, res.text
+        assert [s["description"] for s in res.json()["steps"]] == [
+            "Set up the org and accounts",
+            None,
+        ]
 
     async def test_missing_container_is_404(self, seeded, auth_client):
         res = await auth_client.get(f"/api/work/containers/{uuid.uuid4()}/coverage")

@@ -386,3 +386,37 @@ class TestExplicitNulls:
         )
         assert kept.status_code == 200, kept.text
         assert len(kept.json()["steps"]) == 1
+
+
+def test_the_frontend_asks_the_registry_routes():
+    """HRP-1199: "I already use this" lists the agents named before, reads
+    one and binds it by its overrides - on the router's URLs."""
+    from pathlib import Path
+
+    from app.main import app
+
+    work_ts = Path(__file__).resolve().parents[3] / "frontend/src/lib/api/work.ts"
+    if not work_ts.exists():
+        pytest.skip("frontend tree not present")
+    source = work_ts.read_text()
+    routes = {
+        (getattr(r, "path", ""), method)
+        for r in app.routes
+        for method in getattr(r, "methods", None) or ()
+    }
+    for route, method, called in [
+        ("/api/ai-workforce/agents", "GET", '"/ai-workforce/agents?is_active=true'),
+        (
+            "/api/ai-workforce/agents",
+            "POST",
+            'api.post<{ id: string }>("/ai-workforce/agents"',
+        ),
+        ("/api/ai-workforce/agents/{agent_id}", "GET", "`/ai-workforce/agents/${id}`"),
+        (
+            "/api/ai-workforce/agents/{agent_id}/primitives",
+            "PUT",
+            "api.put<RegisteredAgent>(`/ai-workforce/agents/${id}/primitives`",
+        ),
+    ]:
+        assert (route, method) in routes
+        assert called in source

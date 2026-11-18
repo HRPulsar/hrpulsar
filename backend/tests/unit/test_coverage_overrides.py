@@ -284,7 +284,7 @@ class TestManualPack:
             tenant,
             step,
             manual_pack_id=await _pack_id(db, "drafting"),
-            executor_employee_id=emp.id,
+            executor_employee_ids=[emp.id],
         )
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["verdict"] == "human"

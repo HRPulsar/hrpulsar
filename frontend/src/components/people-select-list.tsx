@@ -10,6 +10,8 @@ export interface PersonRow {
   subtitle?: string | null;
   disabled?: boolean;
   disabledNote?: string;
+  /** A short note on the right of the row (a match percent). */
+  aside?: string | null;
 }
 
 interface Props {
@@ -103,6 +105,14 @@ export function PeopleSelectList({
               {row.disabled && row.disabledNote && (
                 <span className="text-xs text-muted-foreground">
                   {row.disabledNote}
+                </span>
+              )}
+              {row.aside && (
+                <span
+                  className="shrink-0 text-xs tabular-nums text-muted-foreground"
+                  data-testid={rowTestId?.(row.id) && `${rowTestId(row.id)}-aside`}
+                >
+                  {row.aside}
                 </span>
               )}
             </li>

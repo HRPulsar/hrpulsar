@@ -12,7 +12,7 @@ from app.core.errors import AppError
 from app.modules.ai_settings.models import TenantAISettings
 from app.modules.company.models import Tenant
 from app.modules.recruitment.models import Vacancy, VacancyCompetence
-from app.modules.talent_market.models import TalentCard
+from app.modules.talent_market.models import TalentCard, TalentCardCompetence
 from app.modules.work import coverage, service
 from app.modules.work.models import WorkHireNeed
 from app.modules.work.schemas import ContainerUpdate, HireNeedCreate, StepUpdate
@@ -105,7 +105,11 @@ async def test_top_five_by_overlap(db, tenant, user, seeded):
     # Created last, ranked first: it overlaps the gap on two codes.
     best = await _competence(db, tenant.id, ["P6", "P8"])
     need = await service.create_hire_need(
-        db, tenant.id, c.id, HireNeedCreate(step_ids=[step["id"]]), user_id=user.id
+        db,
+        tenant.id,
+        c.id,
+        HireNeedCreate(step_ids=[step["id"]], internal_search_allowed=False),
+        user_id=user.id,
     )
     rows = (
         (
@@ -207,7 +211,7 @@ async def test_assigned_step_is_not_hired_for(db, tenant, user, seeded):
     step = await _step(db, tenant, c, ["P6"])
     emp = await _employee(db, tenant)
     await service.update_step(
-        db, tenant.id, step["id"], StepUpdate(executor_employee_id=emp.id)
+        db, tenant.id, step["id"], StepUpdate(executor_employee_ids=[emp.id])
     )
     with pytest.raises(AppError) as exc:
         await service.create_hire_need(
@@ -390,40 +394,101 @@ async def _hand_over(auth_client, c, step, **body):
     return res.json()
 
 
-async def test_look_inside_first_lands_on_the_talent_market(
+async def test_look_inside_first_opens_only_a_talent_card(
     db, tenant, user, seeded, auth_client
 ):
-    """(b): the draft gets its internal-mobility twin, and the step links to
-    the card - the vacancy's own ``talent_card_id``, no column of ours."""
+    """QA 12.11, task 2: "look inside first" opens the talent card and
+    nothing in Recruitment; the need holds the card, the step links to it."""
     c = await _container(db, tenant, user)
-    step = await _step(db, tenant, c, ["P6"])
+    step = await _step(db, tenant, c, ["P6", "P8"], title="Settle the priorities")
+    competence = await _competence(db, tenant.id, ["P6"])
+    need = await _hand_over(
+        auth_client, c, step, label="hire", internal_search_allowed=True
+    )
+    assert need["vacancy_id"] is None
+    assert need["talent_card_id"] is not None
+    assert (
+        await db.execute(select(Vacancy.id).where(Vacancy.tenant_id == tenant.id))
+    ).first() is None
+    card = await db.get(TalentCard, uuid.UUID(need["talent_card_id"]))
+    assert card is not None
+    assert (card.card_type, card.status) == ("vacancy", "draft")
+    assert card.title == "Month-end close"
+    assert card.description == "Settle the priorities"
+    required = (
+        await db.execute(
+            select(TalentCardCompetence.competence_id).where(
+                TalentCardCompetence.card_id == card.id
+            )
+        )
+    ).scalars()
+    assert list(required) == [competence.id]
+    # The matcher ran: the pool is stamped even when nobody qualifies.
+    assert card.last_matched_at is not None
+    stored = await db.get(WorkHireNeed, uuid.UUID(need["id"]))
+    assert stored is not None and stored.talent_card_id == card.id
+
+    gaps = (await auth_client.get(f"/api/work/containers/{c.id}/gaps")).json()
+    assert gaps[0]["hire_need"] == {
+        "id": need["id"],
+        "vacancy_id": None,
+        "label": "hire",
+        "talent_card_id": need["talent_card_id"],
+    }
+    # A double click is refused like any handed-over step.
+    res = await auth_client.post(
+        f"/api/work/containers/{c.id}/gaps/hire-need",
+        json={"step_ids": [str(step["id"])], "internal_search_allowed": True},
+    )
+    assert res.status_code == 409
+    # A card deleted in the talent market drops the need off the screen
+    # (ON DELETE SET NULL), and the step can be handed over again.
+    await db.delete(card)
+    await db.commit()
+    gaps = (await auth_client.get(f"/api/work/containers/{c.id}/gaps")).json()
+    assert gaps[0]["hire_need"] is None
+
+
+def test_a_clipped_text_ends_on_a_whole_word():
+    limit, marker = 20, service.HIRE_NEED_TRUNCATED
+    assert service._clip("short", limit) == "short"
+    # Mid-word: back to the last whole word, then the marker.
+    assert service._clip("alpha beta gamma delta", limit) == f"alpha beta {marker}"
+    # The cut falls on a space: the word before it stays.
+    assert service._clip("alpha beta gam deltas", limit) == f"alpha beta gam {marker}"
+    # Nothing to cut at: cut where it stands, still marked and in bounds.
+    clipped = service._clip("x" * 40, limit)
+    assert clipped == f"{'x' * 14} {marker}" and len(clipped) == limit
+
+
+async def test_the_card_takes_the_start_of_the_steps_cut_at_a_word(
+    db, tenant, user, seeded, auth_client
+):
+    """``TalentCardCreate.description`` holds 250 characters: a longer text
+    is cut at a word and marked, not in the middle of one."""
+    c = await _container(db, tenant, user)
+    text = " ".join(f"word{i}" for i in range(80))
+    step = await _step(db, tenant, c, ["P6"], title="Judge", description=text)
     await _competence(db, tenant.id, ["P6"])
     need = await _hand_over(
         auth_client, c, step, label="hire", internal_search_allowed=True
     )
-    vacancy = await _vacancy(db, uuid.UUID(need["vacancy_id"]))
-    assert vacancy.internal_search_allowed is True
-    assert vacancy.talent_card_id is not None
-    assert need["talent_card_id"] == str(vacancy.talent_card_id)
-    card = await db.get(TalentCard, vacancy.talent_card_id)
-    assert card is not None and card.card_type == "vacancy"
-    gaps = (await auth_client.get(f"/api/work/containers/{c.id}/gaps")).json()
-    assert gaps[0]["hire_need"]["talent_card_id"] == need["talent_card_id"]
-    # A card deleted in the talent market drops the link back to the vacancy.
-    await db.delete(card)
-    await db.commit()
-    gaps = (await auth_client.get(f"/api/work/containers/{c.id}/gaps")).json()
-    assert gaps[0]["hire_need"]["talent_card_id"] is None
-    assert gaps[0]["hire_need"]["vacancy_id"] == need["vacancy_id"]
+    card = await db.get(TalentCard, uuid.UUID(need["talent_card_id"]))
+    assert card is not None
+    assert len(card.description) <= service.TALENT_CARD_DESCRIPTION_MAX
+    head, _, marker = card.description.rpartition(" ")
+    assert marker == service.HIRE_NEED_TRUNCATED
+    assert f"Judge\n{text}".startswith(head)
+    assert head.split()[-1] in text.split()
 
 
 async def test_without_a_library_competence_the_draft_stays_in_recruitment(
     db, tenant, user, seeded, auth_client
 ):
-    """The twin's precondition (a library competence on the vacancy) fails
-    on a cold tenant. Decision: the need still opens on the draft, internal
-    search on, and says so with ``talent_card_id`` None - the recruiter
-    posts it from the vacancy once it has competences."""
+    """A card matches nobody without a competence, and a cold tenant has
+    none that overlaps the gap. Decision: the need still opens, on a draft
+    vacancy with internal search on, and says so with ``talent_card_id``
+    None - the recruiter posts it from the vacancy once it has competences."""
     c = await _container(db, tenant, user)
     step = await _step(db, tenant, c, ["P6"])
     need = await _hand_over(
@@ -434,15 +499,46 @@ async def test_without_a_library_competence_the_draft_stays_in_recruitment(
     assert vacancy.internal_search_allowed is True
     assert vacancy.talent_card_id is None
     assert (await db.execute(select(WorkHireNeed.id))).first() is not None
+    assert (
+        await db.execute(select(TalentCard.id).where(TalentCard.tenant_id == tenant.id))
+    ).first() is None
 
 
-async def test_a_failed_talent_market_post_keeps_the_need_open(
+async def test_a_refused_talent_card_falls_back_to_the_draft(
     db, tenant, user, seeded, auth_client, monkeypatch
 ):
-    """The bridge commits the card, then the matcher fails: it deletes the
-    card itself and re-raises. The need and its draft are committed by then
-    - a 500 would strand them behind a retry that answers 409 - so the need
-    opens on the draft like any refusal, and the session still answers."""
+    """The talent market refuses the card (credits, in an EE build): the
+    need opens on the draft vacancy, internal search on, its competences
+    pre-filled - the same fallback as a cold tenant."""
+    from app.modules.talent_market import card_service
+
+    async def refused(*args, **kwargs):
+        raise AppError("credits_limit_reached", 402)
+
+    monkeypatch.setattr(card_service, "create_card", refused)
+    c = await _container(db, tenant, user)
+    step = await _step(db, tenant, c, ["P6"])
+    competence = await _competence(db, tenant.id, ["P6"])
+    need = await _hand_over(
+        auth_client, c, step, label="hire", internal_search_allowed=True
+    )
+    assert need["talent_card_id"] is None
+    vacancy = await _vacancy(db, uuid.UUID(need["vacancy_id"]))
+    assert vacancy.internal_search_allowed is True
+    rows = await db.execute(
+        select(VacancyCompetence.competence_id).where(
+            VacancyCompetence.vacancy_id == vacancy.id
+        )
+    )
+    assert list(rows.scalars()) == [competence.id]
+
+
+async def test_a_failed_match_keeps_the_card_and_the_need(
+    db, tenant, user, seeded, auth_client, monkeypatch
+):
+    """The matcher fails after the card is written: the card is paid for
+    and its requirements stand, so the need stays on it - no 500, no
+    vacancy, no stray retry answering 409 for a need nobody sees."""
     from app.modules.talent_market import matching
 
     async def broken_matcher(*args, **kwargs):
@@ -457,16 +553,13 @@ async def test_a_failed_talent_market_post_keeps_the_need_open(
     need = await _hand_over(
         auth_client, c, step, label="hire", internal_search_allowed=True
     )
-    assert need["talent_card_id"] is None
-    assert await db.get(WorkHireNeed, uuid.UUID(need["id"])) is not None
-    vacancy = await _vacancy(db, uuid.UUID(need["vacancy_id"]))
-    assert vacancy.talent_card_id is None and vacancy.internal_search_allowed
-    cards = await db.execute(
-        select(TalentCard.id).where(TalentCard.tenant_id == tenant_id)
-    )
-    assert cards.first() is None
+    assert need["vacancy_id"] is None
+    assert await db.get(TalentCard, uuid.UUID(need["talent_card_id"])) is not None
+    assert (
+        await db.execute(select(Vacancy.id).where(Vacancy.tenant_id == tenant_id))
+    ).first() is None
     gaps = (await auth_client.get(f"/api/work/containers/{container_id}/gaps")).json()
-    assert gaps[0]["hire_need"]["vacancy_id"] == need["vacancy_id"]
+    assert gaps[0]["hire_need"]["talent_card_id"] == need["talent_card_id"]
 
 
 @pytest.mark.parametrize("label", ["hire", "agency"])
@@ -481,6 +574,9 @@ async def test_outside_routes_never_reach_the_talent_market(
     )
     assert need["talent_card_id"] is None
     assert (await _vacancy(db, uuid.UUID(need["vacancy_id"]))).talent_card_id is None
+    assert (
+        await db.execute(select(TalentCard.id).where(TalentCard.tenant_id == tenant.id))
+    ).first() is None
 
 
 @pytest.mark.parametrize(
@@ -523,25 +619,68 @@ async def test_vacancy_and_card_name_the_process_they_came_from(
 ):
     """(b)-(d): "Based on {process}" - the work side answers by vacancy and by
     talent card; recruitment and talent_market learn nothing about work."""
+    from app.modules.recruitment import vacancy_service
+
     c = await _container(db, tenant, user)
-    step = await _step(db, tenant, c, ["P6"])
     await _competence(db, tenant.id, ["P6"])
-    need = await _hand_over(auth_client, c, step, internal_search_allowed=True)
     expected = {
         "container_id": str(c.id),
         "type": "process",
         "title": "Month-end close",
         "can_open": True,
     }
-    by_vacancy = await auth_client.get(
-        f"/api/work/origin/vacancies/{need['vacancy_id']}"
+    # The card "look inside first" opened.
+    need = await _hand_over(
+        auth_client,
+        c,
+        await _step(db, tenant, c, ["P6"]),
+        internal_search_allowed=True,
     )
-    assert by_vacancy.status_code == 200, by_vacancy.text
-    assert by_vacancy.json() == expected
     by_card = await auth_client.get(
         f"/api/work/origin/talent-cards/{need['talent_card_id']}"
     )
+    assert by_card.status_code == 200, by_card.text
     assert by_card.json() == expected
+    # The vacancy straight outside opened.
+    outside = await _hand_over(
+        auth_client,
+        c,
+        await _step(db, tenant, c, ["P6"]),
+        internal_search_allowed=False,
+    )
+    by_vacancy = await auth_client.get(
+        f"/api/work/origin/vacancies/{outside['vacancy_id']}"
+    )
+    assert by_vacancy.status_code == 200, by_vacancy.text
+    assert by_vacancy.json() == expected
+    # A fallback draft the recruiter posts to the talent market later: its
+    # twin names the process too, and the step's link follows the twin.
+    draft = await _hand_over(
+        auth_client,
+        c,
+        await _step(db, tenant, c, ["P8"]),
+        internal_search_allowed=True,
+    )
+    assert draft["talent_card_id"] is None
+    draft_id = uuid.UUID(draft["vacancy_id"])
+    db.add(
+        VacancyCompetence(
+            tenant_id=tenant.id,
+            vacancy_id=draft_id,
+            competence_id=(await _competence(db, tenant.id, ["P8"])).id,
+        )
+    )
+    await db.commit()
+    await vacancy_service.post_vacancy_to_talent_market(
+        db, tenant.id, draft_id, user.id
+    )
+    twin = (await _vacancy(db, draft_id)).talent_card_id
+    assert twin is not None
+    assert (
+        await auth_client.get(f"/api/work/origin/talent-cards/{twin}")
+    ).json() == expected
+    gaps = (await auth_client.get(f"/api/work/containers/{c.id}/gaps")).json()
+    assert gaps[-1]["hire_need"]["talent_card_id"] == str(twin)
 
     # A vacancy and a card nobody opened from a process: no line.
     other = await _container(db, tenant, user)

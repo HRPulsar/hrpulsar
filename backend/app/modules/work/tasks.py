@@ -46,6 +46,7 @@ from app.core.redis import redis_client
 from app.modules.ai.tasks import _run_with_async_session
 from app.modules.work import prompts
 from app.modules.work.models import (
+    ERROR_CODES,
     HOURS_PER_RUN_MAX,
     HOURS_PER_RUN_MIN,
     QUOTE_MAX,
@@ -59,7 +60,7 @@ from app.modules.work.schemas import (
     StepClassification,
     classification_schema,
 )
-from app.modules.work.service import release_session_hold
+from app.modules.work.service import demo_preset, release_session_hold
 
 logger = logging.getLogger(__name__)
 
@@ -505,14 +506,14 @@ async def _execute_body(
         language = (sess.params or {}).get("content_language")
         if language:
             # HRP-922: the public check answers in the visitor's language, not
-            # the sandbox's. Detached first: nothing may write it back.
+            # the sandbox's; HRP-1208: a demo preset run keeps the language it
+            # was started in. Detached first: nothing may write it back.
             if tenant_settings in db:
                 db.expunge(tenant_settings)
             tenant_settings.content_language = language
         effective_model = await ai_settings_service.get_effective_model_async(
             db, tenant_settings
         )
-        sess.llm_model = effective_model
         primitives = (
             (
                 await db.execute(
@@ -531,6 +532,16 @@ async def _execute_body(
         await db.refresh(sess, attribute_names=["status"])
         if sess.status == "cancelled":
             return {"status": "cancelled", "session_id": str(sess.id)}
+        # HRP-1208: the demo's own process, unchanged - the steps prepared
+        # with the seed, through the same flip as a model's answer, so the
+        # screen tells the two apart by speed alone. No call, no charge.
+        preset = await demo_preset(
+            db, sess.tenant_id, container, language=tenant_settings.content_language
+        )
+        if preset is not None:
+            return await _deliver(db, sess, preset, charge=False)
+        # Not on the preset: a model's answer, served now or from the cache.
+        sess.llm_model = effective_model
         codes = {p.code for p in primitives}
         cache_key = breakdown_cache_key(
             container,
@@ -545,6 +556,24 @@ async def _execute_body(
             # HRP-921: this text was broken down before - the stored steps,
             # no model call, no charge.
             return await _deliver(db, sess, cached, charge=False)
+        if (sess.params or {}).get("preset"):
+            # HRP-1208: started as the demo's preset - free, so neither
+            # prechecked nor held - and the snapshot no longer is the preset.
+            # A paid call is never made unchecked: the balance is asked now,
+            # and a refusal ends the run the way a refused start does.
+            action = sess.params.get("billing_action") or "work_decomposition.start"
+            try:
+                cost = await billing_hooks.resolve_cost(db, sess.tenant_id, action)
+                await billing_hooks.precheck_action(
+                    db, sess.tenant_id, action, amount_override=cost
+                )
+            except AppError as exc:
+                return await _terminate(
+                    db,
+                    sess,
+                    error_code=exc.code if exc.code in ERROR_CODES else "service_error",
+                    message="Could not start the decomposition",
+                )
         credentials = await ai_providers.resolve_generation_target(
             db, sess.tenant_id, effective_model
         )

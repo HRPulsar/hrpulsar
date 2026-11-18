@@ -118,7 +118,7 @@ class TestGrounds:
         emp = await _employee(db, tenant)
         await _done(db, tenant, emp, comp, 90)
         await service.update_step(
-            db, tenant.id, step["id"], StepUpdate(executor_employee_id=emp.id)
+            db, tenant.id, step["id"], StepUpdate(executor_employee_ids=[emp.id])
         )
         row, _ = await _row(db, tenant, c, step["id"])
         assert row["human"]["label"] == "assigned"

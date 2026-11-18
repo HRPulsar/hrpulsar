@@ -332,19 +332,19 @@ class TestSteps:
             tenant.id,
             step.id,
             StepUpdate(
-                executor_employee_id=doer.id, accountable_employee_id=checker.id
+                executor_employee_ids=[doer.id], accountable_employee_id=checker.id
             ),
         )
-        assert updated["executor_employee_id"] == doer.id
+        assert updated["executor_employee_ids"] == [doer.id]
         assert updated["accountable_employee_id"] == checker.id
         assert updated["state"] == "accepted"
         await db.refresh(c)
         assert c.status == "active"
 
         cleared = await service.update_step(
-            db, tenant.id, step.id, StepUpdate(executor_employee_id=None)
+            db, tenant.id, step.id, StepUpdate(executor_employee_ids=[])
         )
-        assert cleared["executor_employee_id"] is None
+        assert cleared["executor_employee_ids"] == []
         assert cleared["accountable_employee_id"] == checker.id
         assert cleared["state"] == "accepted"
 
@@ -358,16 +358,17 @@ class TestSteps:
         await db.commit()
         stranger = await _employee(db, other)
         gone = await _employee(db, tenant, status="terminated")
-        for field in ("executor_employee_id", "accountable_employee_id"):
-            for employee_id in (stranger.id, gone.id, uuid.uuid4()):
+        for employee_id in (stranger.id, gone.id, uuid.uuid4()):
+            for data in (
+                StepUpdate(executor_employee_ids=[employee_id]),
+                StepUpdate(accountable_employee_id=employee_id),
+            ):
                 with pytest.raises(AppError) as exc:
-                    await service.update_step(
-                        db, tenant.id, step.id, StepUpdate(**{field: employee_id})
-                    )
+                    await service.update_step(db, tenant.id, step.id, data)
                 assert exc.value.status_code == 422
                 assert exc.value.code == "work_step_employee_invalid"
         await db.refresh(step)
-        assert step.executor_employee_id is None
+        assert (await service.step_executor_ids(db, [step.id]))[step.id] == []
         assert step.accountable_employee_id is None
 
     async def test_deleting_the_added_step_restores_active(
@@ -562,10 +563,10 @@ class TestRouter:
         # HRP-809: a null assignee is how the screen takes the assignment off.
         unassigned = await client.patch(
             f"/api/work/steps/{step_id}",
-            json={"executor_employee_id": None, "accountable_employee_id": None},
+            json={"executor_employee_ids": [], "accountable_employee_id": None},
         )
         assert unassigned.status_code == 200, unassigned.text
-        assert unassigned.json()["executor_employee_id"] is None
+        assert unassigned.json()["executor_employee_ids"] == []
         assert cleared.json()["hours_per_run"] is None
         put = await client.put(
             f"/api/work/steps/{step_id}/primitives", json={"codes": ["B1", "P2"]}

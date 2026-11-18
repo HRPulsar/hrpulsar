@@ -3,32 +3,42 @@
 Coverage is the only surface of the demo that opened empty: the seed laid
 down people, competences and assessments but no work to cover, so a demo
 visitor met the cold-start screen on the one page the primitives story is
-about. Three broken-down containers fix that — two processes and one
-initiative — picked so the Coverage tab shows every verdict the arithmetic
+about. Three broken-down containers fix that - two processes and one
+initiative - picked so the Coverage tab shows every verdict the arithmetic
 can produce (``coverage.py`` §5.2) against the company the rest of the
-seed builds; a fourth is left for the visitor to break down:
+seed builds; a fourth is left for the visitor to break down. HRP-1193 gave
+all four the descriptions and goals the Russian demo is shown with, and
+the steps follow those descriptions:
 
-* ``customer_requests`` — Go-to-Market. Intake, classification, routing
-  and the knowledge-base lookup are strong codes on work nobody signs for,
-  so they move to an agent whole; the reply is drafted and sent under
-  review; the angry call and the refund stay with people. It carries the
-  seed's only boundary step (B4, showing the customer the fix hands on):
-  out of scope by design. And one legal judgement nobody in the company is
-  currently assessed for — the seed's ``hire`` gap. Per-step
-  ``runs_per_year`` differs on purpose: every request is classified, one
-  in five reaches an engineer, a handful a year are about personal data.
-* ``management_reporting`` — a monthly cycle (``runs_per_year=12``).
-  Collecting, reconciling and checking the numbers is half of the hours,
-  and all of it moves to an agent; the commentary is drafted under review; the
-  call on what the month means stays with the head of the function.
-* ``iso27001`` — an initiative, not a process: it runs once
-  (``runs_per_year=1``) and its unclosed step falls to ``agency`` through
-  the §5.1 suggestion rather than a hand-set label. A certification
-  project is what a company of this size actually outsources.
-* ``customer_onboarding`` — a process with a description and no steps
+* ``customer_requests`` - a request comes in through any channel, is
+  registered, qualified and routed to a specialist, who clarifies, solves,
+  keeps the customer informed and closes it; a rating request follows.
+  Registering, qualifying, routing, the knowledge-base lookup and the
+  closing are strong codes on work nobody signs for, so they move to an
+  agent whole; the replies are drafted and sent under review. It carries
+  the seed's only boundary step (B4, showing the customer the fix hands
+  on): out of scope by design. And one judgement nobody in the company is
+  currently assessed for - the disputed invoice that accounting decides -
+  the seed's ``hire`` gap. Per-step ``runs_per_year`` differs on purpose:
+  every request is registered, one in five reaches an engineer, a handful
+  a year are about money.
+* ``management_reporting`` - a monthly cycle (``runs_per_year=12``).
+  Exporting, checking, handing over, reconciling and tabling the numbers is
+  half of the hours, and all of it moves to an agent; the reports and the
+  explanations are drafted under review; the approval, the meeting and the
+  call on the strategy stay with the leadership. No step of it may be left
+  open: at twelve runs a year every gap would read as ``agency``.
+* ``iso27001`` - an initiative, not a process: it runs once
+  (``runs_per_year=1``) and its unclosed step (the internal audit) falls to
+  ``agency`` through the §5.1 suggestion rather than a hand-set label. A
+  certification project is what a company of this size actually outsources.
+* ``customer_onboarding`` - a process with a description and no steps
   (HRP-1176): what ``/coverage/new`` leaves behind before the first
   breakdown. The Coverage start route opens it, so the visitor runs
-  "Generate steps" on a page that really offers it.
+  "Generate steps" on a page that really offers it. Its ``preset_steps``
+  are what that run returns while the text is the seeded one (HRP-1208,
+  :func:`preset_breakdown`): the demo shows the result at once instead of
+  two minutes of a model call.
 
 Both processes are picked so that "moves to an agent" is at least 30 % of
 their yearly hours (HRP-870): the demo has to show the benefit. The pair
@@ -38,21 +48,30 @@ agent, so a visitor opened Coverage on a number that argued against it.
 ``test_demo_seed_work`` pins the share with the arithmetic of
 ``coverage.compute``, not by eye.
 
+``DEMO_AGENTS`` (HRP-1194) are the tools the company already runs, the
+rows "I already use this" writes - a name and an agent type. Without them
+"Already automated" read 0 % on every process. Two types of the ones the
+steps call for, so some of the work is automated today and the rest is
+still to do.
+
 ``COMPETENCE_PRIMITIVES`` is the other half. The human layer of coverage
 reads ``competence_primitives``, which is written by an LLM mapping run;
 without it every step would report "nobody here can do this" while the
 demo tenant is full of engineers. The demo has avoided live LLM calls
 since HRP-276, so the mapping is authored here and seeded as
-``reviewed`` — the same shape a company gets after confirming the AI's
+``reviewed`` - the same shape a company gets after confirming the AI's
 suggestion, and a status the next mapping run will not overwrite.
 
 Hours are the author's estimate for a company of this size, as in
 ``work/_examples.py``; the point is a believable ROI panel, not a
-benchmark. English is the single source — ``seed_i18n`` translates
-``title`` / ``description`` / ``goal`` at clone time.
+benchmark. English is the single source - ``seed_i18n`` translates
+``title`` / ``description`` / ``goal`` / ``name`` at clone time.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Competence → primitive mapping
@@ -109,6 +128,30 @@ COMPETENCE_PRIMITIVES: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
+# Agents the company already uses (HRP-1194)
+# ---------------------------------------------------------------------------
+#
+# Matched to steps by codes like any registered agent (``coverage._match_agent``);
+# ``pack`` is the built-in agent type's code. The names sort the same way in
+# every seed locale, so the step both agents could take goes to the same one.
+
+DEMO_AGENTS: list[dict] = [
+    {
+        "name": "Customer chatbot",
+        "pack": "scripted_dialogue",
+        "category": "chat",
+        "data_classification": "customer_data",
+    },
+    {
+        "name": "Scheduler",
+        "pack": "coordinator",
+        "category": "agent",
+        "data_classification": "internal",
+    },
+]
+
+
+# ---------------------------------------------------------------------------
 # Containers
 # ---------------------------------------------------------------------------
 #
@@ -128,31 +171,31 @@ WORK_CONTAINERS: list[dict] = [
         "gap_default_label": "hire",
         "title": "Handling inbound customer requests",
         "description": (
-            "Requests reach us by email, by chat and through the form in the "
-            "product. Each one is taken into a single record, classified and "
-            "given a priority by the published rules, routed to the team that "
-            "owns the product area, and answered from the knowledge base and "
-            "the past requests where an answer exists. A reply is drafted in "
-            "our tone, sent, and confirmed with the customer. What the "
-            "knowledge base cannot answer goes to the engineer on duty; a "
-            "customer who is stuck is shown the fix hands on, an angry one "
-            "gets a call, a refund or a contract exception gets a decision, "
-            "and a request about personal data gets a legal one. Closed "
-            "requests are tagged with their cause, and the questions that "
-            "keep coming back become knowledge-base articles."
+            "The process starts when a customer's request arrives through any "
+            "channel (phone, email, the website chat, messengers), where the "
+            "system registers it automatically and gives it a unique number. "
+            "Then comes the first qualification: an operator determines the "
+            "topic of the question and its urgency and sends the request to "
+            "the right specialist (for example, technical support, sales or "
+            "accounting). The specialist contacts the customer, clarifies the "
+            "details of the problem and does what is needed to solve it. If "
+            "the question needs a long investigation, the customer is told "
+            "the timeline and the current status. Once the problem is solved, "
+            "the specialist records the result in the system and closes the "
+            "request. At the end, the customer may be sent a request to rate "
+            "the quality of the service, and all the data is kept in the "
+            "database for later analysis."
         ),
         "goal": (
-            "Every request answered within the agreed time, and the team's "
-            "hours spent on the customers who need a person rather than on "
-            "sorting the queue."
+            "Resolve customers' questions quickly, well and on time, to keep "
+            "their satisfaction and loyalty high."
         ),
         "steps": [
             {
-                "title": "Take the request into one record, whatever channel it came by",
+                "title": "Register the request from any channel and give it a number",
                 "description": (
-                    "Who is asking, which account, which product area and "
-                    "what they actually want, out of the free text of an "
-                    "email, a chat or the form."
+                    "Who is asking, about what and through which channel, "
+                    "taken from the call, the email or the chat into one record."
                 ),
                 "primitives": ["P1"],
                 "responsibility": "none",
@@ -161,10 +204,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 2400,
             },
             {
-                "title": "Classify the request and set its priority",
+                "title": "Determine the topic and urgency of the request",
                 "description": (
-                    "Type and priority by the published rules: what is "
-                    "broken, for how many people, and on which plan."
+                    "Topic and priority by the published rules: what is "
+                    "broken, for how many people, and how fast it is needed."
                 ),
                 "primitives": ["P3"],
                 "responsibility": "none",
@@ -173,10 +216,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 2400,
             },
             {
-                "title": "Route the request to the team that owns the product area",
+                "title": "Send the request to the right specialist",
                 "description": (
-                    "The queue the type and the product area point at, by "
-                    "the routing table rather than by who happens to be online."
+                    "Technical support, sales or accounting — by the routing "
+                    "table, not by who happens to be online."
                 ),
                 "primitives": ["P3"],
                 "responsibility": "none",
@@ -185,11 +228,22 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 2400,
             },
             {
-                "title": "Search the knowledge base and the past requests for an answer",
+                "title": "Contact the customer and clarify the details of the problem",
+                "description": (
+                    "The standard questions for this type of request: what "
+                    "exactly happens, since when, on which account."
+                ),
+                "primitives": ["P12"],
+                "responsibility": "reputational",
+                "output_type": "draft",
+                "hours_per_run": 0.15,
+                "runs_per_year": 1200,
+            },
+            {
+                "title": "Look for an answer in the knowledge base and past requests",
                 "description": (
                     "The article or the closed request that matches, checked "
-                    "against this customer's version and setup before it is "
-                    "trusted."
+                    "against this customer's setup before it is trusted."
                 ),
                 "primitives": ["P1", "P2"],
                 "responsibility": "none",
@@ -198,35 +252,11 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 2400,
             },
             {
-                "title": "Draft the reply in our tone",
-                "description": (
-                    "The answer written for this customer: what happened, "
-                    "what to do, and what we are doing about it."
-                ),
-                "primitives": ["P5"],
-                "responsibility": "reputational",
-                "output_type": "draft",
-                "hours_per_run": 0.2,
-                "runs_per_year": 2400,
-            },
-            {
-                "title": "Send the reply and confirm that it solved the problem",
-                "description": (
-                    "The reply out, the follow-up at the agreed interval, and "
-                    "the customer's yes or no recorded on the request."
-                ),
-                "primitives": ["P12"],
-                "responsibility": "reputational",
-                "output_type": "external_change",
-                "hours_per_run": 0.1,
-                "runs_per_year": 2400,
-            },
-            {
-                "title": "Work out with the engineer on duty what is actually broken",
+                "title": "Find the cause together with the engineer on duty",
                 "description": (
                     "For what the knowledge base cannot answer: the "
                     "customer's report, the logs and the recent releases, "
-                    "until there is a cause rather than a symptom."
+                    "until the cause is clear."
                 ),
                 "primitives": ["P4"],
                 "responsibility": "none",
@@ -237,9 +267,8 @@ WORK_CONTAINERS: list[dict] = [
             {
                 "title": "Show the customer the fix hands on",
                 "description": (
-                    "A screen-share with the customer's admin doing the "
-                    "setup themselves, corrected as they go, so the same "
-                    "request does not come back next week."
+                    "A screen share where the customer's admin makes the "
+                    "change themselves, corrected as they go."
                 ),
                 "primitives": ["B4"],
                 "responsibility": "none",
@@ -248,65 +277,65 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 240,
             },
             {
-                "title": "Call the customer who is angry",
+                "title": "Tell the customer the timeline and the current status",
                 "description": (
-                    "A conversation with no script: what went wrong for "
-                    "them, what they need to hear, and what we can promise."
+                    "When the investigation takes longer: what is being done, "
+                    "when to expect an answer, and an update when the status "
+                    "changes."
                 ),
-                "primitives": ["P7"],
+                "primitives": ["P5"],
                 "responsibility": "reputational",
                 "output_type": "external_change",
-                "hours_per_run": 0.5,
-                "runs_per_year": 240,
+                "hours_per_run": 0.1,
+                "runs_per_year": 480,
             },
             {
-                "title": "Decide on a refund, a credit or a contract exception",
+                "title": "Write the customer the solution",
                 "description": (
-                    "What the customer is worth, what the precedent costs, "
-                    "and what the contract actually says."
+                    "The answer for this customer: what happened, what to do, "
+                    "and what we are doing about it."
                 ),
-                "primitives": ["P6"],
+                "primitives": ["P5"],
+                "responsibility": "reputational",
+                "output_type": "draft",
+                "hours_per_run": 0.2,
+                "runs_per_year": 2400,
+            },
+            {
+                "title": "Decide on a disputed invoice: refund, discount or refusal",
+                "description": (
+                    "What the contract says, what the customer is worth to us "
+                    "and what the precedent costs — and the call on the money."
+                ),
+                "primitives": ["P2", "P6"],
                 "responsibility": "formal",
                 "output_type": "external_change",
                 "hours_per_run": 0.5,
                 "runs_per_year": 120,
             },
             {
-                "title": "Decide whether a request is about personal data and what the law requires",
+                "title": "Record the result and close the request",
                 "description": (
-                    "Access, deletion and correction requests against the "
-                    "regulation and its deadlines, and the call on what we "
-                    "must hand over or erase."
+                    "What was done, the cause and the product area, by the "
+                    "closing checklist, so the data is ready for analysis."
                 ),
-                "primitives": ["P2", "P6"],
-                "responsibility": "regulatory",
-                "output_type": "external_change",
-                "hours_per_run": 1,
-                "runs_per_year": 24,
-            },
-            {
-                "title": "Close the request and tag what caused it",
-                "description": (
-                    "Cause, product area and whether the knowledge base had "
-                    "the answer, by the closing checklist."
-                ),
-                "primitives": ["P3"],
+                "primitives": ["P1", "P3"],
                 "responsibility": "none",
                 "output_type": "draft",
-                "hours_per_run": 0.05,
+                "hours_per_run": 0.1,
                 "runs_per_year": 2400,
             },
             {
-                "title": "Turn the questions that keep coming back into knowledge-base articles",
+                "title": "Ask the customer to rate the service",
                 "description": (
-                    "Once a month: the most repeated causes written up as "
-                    "articles a customer can follow without us."
+                    "The survey goes out after closing, a reminder follows if "
+                    "there is no answer, and the score lands on the request."
                 ),
-                "primitives": ["P5"],
+                "primitives": ["P11"],
                 "responsibility": "none",
                 "output_type": "draft",
-                "hours_per_run": 3,
-                "runs_per_year": 12,
+                "hours_per_run": 0.02,
+                "runs_per_year": 2400,
             },
         ],
     },
@@ -318,30 +347,32 @@ WORK_CONTAINERS: list[dict] = [
         "gap_default_label": "hire",
         "title": "Monthly management reporting",
         "description": (
-            "In the first week of every month the leadership gets one pack "
-            "about the month before. The numbers are pulled out of billing, "
-            "the CRM, the product analytics and the HR system, reconciled "
-            "between the systems, and the owners are chased for what is "
-            "missing or does not add up. The pack is assembled to the "
-            "standing template and checked against last month's and against "
-            "the metric definitions; the deviations from the plan are "
-            "explained, the commentary is drafted, the head of the function "
-            "reviews it and decides what it means for the quarter, the pack "
-            "goes out to the agreed list, the leadership team walks through "
-            "it, and the actions are filed."
+            "The process starts at the end of the calendar month, when the "
+            "departments (sales, marketing, production, finance) export the "
+            "primary data from their own systems (CRM, ERP, accounting). The "
+            "data is checked for completeness and correctness and then handed "
+            "over to the analytics team or the finance department. The "
+            "specialists consolidate the information, resolve the "
+            "discrepancies between the systems and bring all the figures into "
+            "single tables. From the collected data they build reports with "
+            "the key metrics (KPIs), an analysis of the deviations from the "
+            "plan and the trends. The prepared report pack is then reviewed "
+            "by the middle managers and approved by the top management. The "
+            "final documents are presented at a meeting and sent to the "
+            "stakeholders, who use them for further management decisions and "
+            "to adjust the strategy for the next period."
         ),
         "goal": (
-            "The pack on the table by the fifth working day, with the people "
-            "who own the numbers spending their time on what the numbers "
-            "mean rather than on collecting them."
+            "Give the company's leadership a complete and reliable picture of "
+            "the month's results, so that management decisions are well "
+            "founded and the business strategy is adjusted in time."
         ),
         "steps": [
             {
-                "title": "Pull the month's numbers out of the systems",
+                "title": "Export the month's primary data from CRM, ERP and accounting",
                 "description": (
-                    "Revenue and churn from billing, the pipeline from the "
-                    "CRM, usage from the product analytics, headcount and "
-                    "hiring from the HR system."
+                    "Sales, marketing, production and finance figures, each "
+                    "out of the system it lives in."
                 ),
                 "primitives": ["P1"],
                 "responsibility": "none",
@@ -350,23 +381,22 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 12,
             },
             {
-                "title": "Reconcile the numbers between the systems",
+                "title": "Check the data for completeness and correctness",
                 "description": (
-                    "Billing against the CRM against the bank: every figure "
-                    "that appears in two places, and the list of the ones "
-                    "that disagree."
+                    "Every department and every period in place, totals that "
+                    "add up, no empty or duplicated rows."
                 ),
                 "primitives": ["P2"],
                 "responsibility": "none",
                 "output_type": "draft",
-                "hours_per_run": 5,
+                "hours_per_run": 4,
                 "runs_per_year": 12,
             },
             {
-                "title": "Chase the owners for what is missing or does not add up",
+                "title": "Hand the data over to the analytics team or finance",
                 "description": (
-                    "Down the list of open figures, owner by owner, until "
-                    "each one is confirmed or corrected."
+                    "Who has handed over their data and who has not, with a "
+                    "reminder to the late ones."
                 ),
                 "primitives": ["P11"],
                 "responsibility": "none",
@@ -375,10 +405,34 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 12,
             },
             {
-                "title": "Assemble the pack to the standing template",
+                "title": "Reconcile the figures between the systems",
                 "description": (
-                    "Tables, charts and the one-page summary, in the layout "
-                    "the leadership already knows how to read."
+                    "Every number that appears in two systems compared, and "
+                    "each discrepancy resolved with its owner."
+                ),
+                "primitives": ["P2"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 6,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Bring all the figures into single tables",
+                "description": (
+                    "One set of tables in the agreed structure, each metric "
+                    "computed the way its definition says."
+                ),
+                "primitives": ["P1"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 4,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Build the KPI reports",
+                "description": (
+                    "The key metrics against the plan, in the layout the "
+                    "leadership already knows how to read."
                 ),
                 "primitives": ["P5"],
                 "responsibility": "none",
@@ -387,22 +441,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 12,
             },
             {
-                "title": "Check the pack against last month's and the metric definitions",
+                "title": "Explain the deviations from the plan and the trends",
                 "description": (
-                    "Every metric computed the way its definition says, and "
-                    "every jump from last month either real or a mistake."
-                ),
-                "primitives": ["P2"],
-                "responsibility": "none",
-                "output_type": "draft",
-                "hours_per_run": 2,
-                "runs_per_year": 12,
-            },
-            {
-                "title": "Find what explains the deviations from the plan",
-                "description": (
-                    "The deals, the releases, the hires and the outages "
-                    "behind each number that moved, until the story holds."
+                    "The deals, releases, hires and outages behind every "
+                    "figure that moved, until the explanation holds."
                 ),
                 "primitives": ["P4"],
                 "responsibility": "none",
@@ -411,22 +453,22 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 12,
             },
             {
-                "title": "Draft the commentary for the leadership",
+                "title": "Have the middle managers review the report pack",
                 "description": (
-                    "A page of plain language: what moved, why, and what to "
-                    "watch next month."
+                    "Each manager checks the figures of their area against "
+                    "what they know happened in the month."
                 ),
-                "primitives": ["P5"],
-                "responsibility": "reputational",
+                "primitives": ["P2"],
+                "responsibility": "formal",
                 "output_type": "draft",
                 "hours_per_run": 3,
                 "runs_per_year": 12,
             },
             {
-                "title": "Review the pack and decide what it means for the quarter",
+                "title": "Approve the report pack",
                 "description": (
-                    "The head of the function reads the pack before anyone "
-                    "else does and makes the call on the forecast."
+                    "The top management reads the pack and signs it off as "
+                    "the company's official numbers for the month."
                 ),
                 "primitives": ["P6"],
                 "responsibility": "formal",
@@ -435,22 +477,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 12,
             },
             {
-                "title": "Send the pack to the leadership and the board list",
+                "title": "Present the results at the meeting",
                 "description": (
-                    "The agreed recipients, the agreed day, and the "
-                    "acknowledgement that it arrived."
-                ),
-                "primitives": ["P11"],
-                "responsibility": "formal",
-                "output_type": "external_change",
-                "hours_per_run": 0.5,
-                "runs_per_year": 12,
-            },
-            {
-                "title": "Walk the leadership team through the pack and agree the actions",
-                "description": (
-                    "Everyone's reading of the same numbers, argued down to "
-                    "the few actions worth taking."
+                    "The leadership walks through the same numbers together "
+                    "and agrees what to do about them."
                 ),
                 "primitives": ["P8"],
                 "responsibility": "none",
@@ -459,15 +489,27 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 12,
             },
             {
-                "title": "File the agreed actions with owners and due dates",
+                "title": "Send the final documents to the stakeholders",
                 "description": (
-                    "Into the tracker, with an owner and a date, and chased "
-                    "until they close."
+                    "The agreed list, the agreed day, and a confirmation that "
+                    "it arrived."
                 ),
-                "primitives": ["P1", "P11"],
-                "responsibility": "none",
-                "output_type": "draft",
+                "primitives": ["P11"],
+                "responsibility": "formal",
+                "output_type": "external_change",
                 "hours_per_run": 0.5,
+                "runs_per_year": 12,
+            },
+            {
+                "title": "Decide how to adjust the strategy for the next period",
+                "description": (
+                    "What the month means for the plan: what to keep, what to "
+                    "change, and who does it."
+                ),
+                "primitives": ["P6"],
+                "responsibility": "formal",
+                "output_type": "draft",
+                "hours_per_run": 2,
                 "runs_per_year": 12,
             },
         ],
@@ -486,27 +528,37 @@ WORK_CONTAINERS: list[dict] = [
         "gap_default_label": "agency",
         "title": "Getting ISO 27001 certified",
         "description": (
-            "Enterprise deals keep stalling on the security questionnaire, "
-            "so we are getting certified. We map the scope and the data "
-            "flows, run a gap analysis against the controls, assess the "
-            "risks and agree the treatment, write the policies and the "
-            "Statement of Applicability, build the technical controls we do "
-            "not have, roll out awareness training, collect the evidence per "
-            "control, run an internal audit, hold the management review, go "
-            "through the external stage 1 and stage 2 audits, close the "
-            "non-conformities and set up the surveillance cycle."
+            "Getting ISO 27001 certified starts with defining the boundaries "
+            "of the security management system and analysing the company's "
+            "current state to find the weak spots. Then the internal "
+            "documentation is written: the security rules, the risk "
+            "assessment method and the information protection plan. Next, "
+            "the company puts the necessary technical and organisational "
+            "controls in place (for example, access settings, encryption, "
+            "rules for employees), trains the staff and collects the evidence "
+            "that all the processes work. Before the external auditors are "
+            "invited, an internal audit and a readiness review by the "
+            "management are mandatory. After that, the company applies to an "
+            "accredited certification body, which first examines the "
+            "submitted documents (stage 1 of the audit) and then comes for an "
+            "on-site audit (stage 2). Once every check is passed, the company "
+            "receives a certificate valid for three years; to keep it, the "
+            "company passes a surveillance audit every year and renews the "
+            "certificate every three years."
         ),
         "goal": (
-            "Certificate in hand before the next enterprise renewal round, "
-            "and the security questionnaire off the critical path of a deal."
+            "Officially confirm that the company meets the international "
+            "information security standard (ISO 27001), to guarantee reliable "
+            "data protection, raise the trust of customers and partners, and "
+            "gain a competitive advantage in the market."
         ),
         "steps": [
             {
-                "title": "Map the scope: systems, data flows and third parties",
+                "title": "Define the boundaries of the security system",
                 "description": (
-                    "What is in scope, what data moves where, and who else "
-                    "touches it — out of the architecture docs, the contracts "
-                    "and the vendor list."
+                    "Which systems, data, offices and suppliers are in scope, "
+                    "out of the architecture docs, the contracts and the "
+                    "vendor list."
                 ),
                 "primitives": ["P1"],
                 "responsibility": "none",
@@ -515,10 +567,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
             {
-                "title": "Gap analysis against the controls",
+                "title": "Analyse the current state and find the weak spots",
                 "description": (
-                    "Every control against what the company actually does "
-                    "today, and the difference written down."
+                    "Every requirement of the standard against what the "
+                    "company actually does today, with the gaps written down."
                 ),
                 "primitives": ["P2"],
                 "responsibility": "none",
@@ -527,22 +579,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
             {
-                "title": "Assess the risks and agree the treatment",
+                "title": "Write the security rules and the risk assessment method",
                 "description": (
-                    "Which risks we accept, which we mitigate and which we "
-                    "transfer — a business call, signed by the owner."
-                ),
-                "primitives": ["P6"],
-                "responsibility": "formal",
-                "output_type": "draft",
-                "hours_per_run": 32,
-                "runs_per_year": 1,
-            },
-            {
-                "title": "Write the policies and the Statement of Applicability",
-                "description": (
-                    "The policy set and the statement, in the register the "
-                    "standard expects and the wording an auditor reads."
+                    "The policy set and the method of scoring risks, in the "
+                    "wording an auditor expects."
                 ),
                 "primitives": ["P5"],
                 "responsibility": "formal",
@@ -551,10 +591,22 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
             {
-                "title": "Build the missing technical controls",
+                "title": "Assess the risks and approve the protection plan",
                 "description": (
-                    "Logging, access review, backup and restore, key "
-                    "handling — the ones the gap analysis found missing."
+                    "Which risks we accept, which we reduce and which we "
+                    "transfer: a business call, signed by the owner."
+                ),
+                "primitives": ["P6"],
+                "responsibility": "formal",
+                "output_type": "draft",
+                "hours_per_run": 32,
+                "runs_per_year": 1,
+            },
+            {
+                "title": "Set up the technical controls",
+                "description": (
+                    "Access settings, encryption, logging, backup and restore "
+                    "— the ones the analysis found missing."
                 ),
                 "primitives": ["P9"],
                 "responsibility": "none",
@@ -563,10 +615,11 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
             {
-                "title": "Roll out awareness training and confirm completion",
+                "title": "Introduce the rules for employees and train the staff",
                 "description": (
-                    "Everyone assigned, reminded and chased until the "
-                    "completion record is whole."
+                    "Everyone gets the rules and the course, reminders go "
+                    "out, and the completion record is chased until it is "
+                    "whole."
                 ),
                 "primitives": ["P11"],
                 "responsibility": "formal",
@@ -575,10 +628,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
             {
-                "title": "Collect the evidence for each control",
+                "title": "Collect the evidence that the processes work",
                 "description": (
-                    "Screenshots, exports, tickets and logs, pulled from the "
-                    "systems and filed against the control they prove."
+                    "Screenshots, exports, tickets and logs, filed against "
+                    "the requirement they prove."
                 ),
                 "primitives": ["P1", "P2"],
                 "responsibility": "none",
@@ -587,10 +640,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
             {
-                "title": "Internal audit against the controls",
+                "title": "Run the internal audit",
                 "description": (
-                    "An independent pass over the evidence, and a judgement "
-                    "on whether each control is genuinely operating."
+                    "An independent pass over the evidence, and a verdict on "
+                    "whether each control really works."
                 ),
                 "primitives": ["P2", "P6"],
                 "responsibility": "formal",
@@ -599,10 +652,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
             {
-                "title": "Hold the management review",
+                "title": "Hold the management readiness review",
                 "description": (
-                    "The findings, the objections and the resourcing, "
-                    "resolved into decisions the leadership stands behind."
+                    "The audit findings, the open issues and the resources, "
+                    "settled into decisions the leadership stands behind."
                 ),
                 "primitives": ["P8"],
                 "responsibility": "formal",
@@ -611,10 +664,34 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
             {
-                "title": "Go through the external stage 1 and stage 2 audits",
+                "title": "Apply to an accredited certification body",
                 "description": (
-                    "The auditor's questions, on their terms, about work we "
-                    "have to explain rather than recite."
+                    "The application form filled in from our scope, policies "
+                    "and evidence, and sent with the documents."
+                ),
+                "primitives": ["P1"],
+                "responsibility": "formal",
+                "output_type": "external_change",
+                "hours_per_run": 6,
+                "runs_per_year": 1,
+            },
+            {
+                "title": "Pass stage 1: the auditor's review of the documents",
+                "description": (
+                    "The auditor's questions about the documents, about work "
+                    "we have to explain rather than recite."
+                ),
+                "primitives": ["P7"],
+                "responsibility": "regulatory",
+                "output_type": "external_change",
+                "hours_per_run": 16,
+                "runs_per_year": 1,
+            },
+            {
+                "title": "Pass stage 2: the on-site audit",
+                "description": (
+                    "The auditors on site, talking to the people who run the "
+                    "controls and looking at how the work is done."
                 ),
                 "primitives": ["P7"],
                 "responsibility": "regulatory",
@@ -623,23 +700,10 @@ WORK_CONTAINERS: list[dict] = [
                 "runs_per_year": 1,
             },
             {
-                "title": "Close the non-conformities from the audit report",
+                "title": "Plan the annual surveillance audits and the renewal",
                 "description": (
-                    "Each finding fixed, the fix evidenced, and the evidence "
-                    "back with the auditor."
-                ),
-                "primitives": ["P9"],
-                "responsibility": "formal",
-                "output_type": "external_change",
-                "hours_per_run": 24,
-                "runs_per_year": 1,
-            },
-            {
-                "title": "Set up the surveillance cycle",
-                "description": (
-                    "Annual internal audit, quarterly access review, the "
-                    "management review on the calendar — scheduled, not "
-                    "remembered."
+                    "A surveillance audit every year and the recertification "
+                    "in three years — on the calendar, not in someone's memory."
                 ),
                 "primitives": ["P11"],
                 "responsibility": "none",
@@ -660,22 +724,208 @@ WORK_CONTAINERS: list[dict] = [
         "gap_default_label": "hire",
         "title": "Onboarding a new customer",
         "description": (
-            "A signed contract reaches us from sales with the handover "
-            "notes. We set up the customer's workspace and accounts, import "
-            "their data from the files they send and check it against the "
-            "source, connect the integrations they use, and configure roles "
-            "and permissions the way their company is organised. The admins "
-            "are trained on a live call and the rest of the team gets a "
-            "recorded walkthrough. For the first month we watch the usage, "
-            "answer the questions that come up and chase whatever blocks "
-            "the rollout. Then the launch is reviewed with the customer's "
-            "sponsor, the open items are agreed, and the account is handed "
-            "over to support."
+            "Onboarding a new customer starts when the data about the closed "
+            "deal is handed over and a card is created in the CRM; within 24 "
+            "hours comes the first contact, with a welcome letter and the "
+            "implementation plan. Then a kick-off meeting is held to get to "
+            "know each other, clarify the goals and draw up an individual "
+            "launch checklist, from which the working account is created, "
+            "access is issued and the basic settings of the system are "
+            "configured. Next, the first training demo is run for the "
+            "customer's staff, after which the customer takes the first "
+            "practical steps in the system on their own under a curator's "
+            "supervision. Alongside this, the customer is introduced to the "
+            "rules for contacting support and given access to the knowledge "
+            "base, and two weeks after the launch a check-in call is held to "
+            "collect feedback and resolve the difficulties that came up. The "
+            "process ends with the first invoice issued under the contract, "
+            "the customer moved to the “Active” status and handed "
+            "over to regular service."
         ),
         "goal": (
-            "Every new customer live within thirty days of signing, with "
-            "their own admins running the product rather than waiting on us."
+            "Move a new customer from “buyer” to “active "
+            "user” quickly and painlessly, helping them learn the "
+            "product, get the first value out of it and build loyalty to the "
+            "company."
         ),
         "steps": [],
+        # HRP-1208: what "Generate steps" returns at once while the
+        # description and the goal are the seeded ones - see
+        # ``preset_breakdown``. Written by the rules of the steps above.
+        "preset_steps": [
+            {
+                "title": "Create the customer card in the CRM from the closed deal",
+                "description": (
+                    "Company, contacts, plan and contract terms, taken from "
+                    "the deal sales handed over."
+                ),
+                "primitives": ["P1"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 0.5,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Send the welcome letter and the implementation plan within 24 hours",
+                "description": (
+                    "The first contact: who the customer's curator is, what "
+                    "happens next and by when."
+                ),
+                "primitives": ["P5"],
+                "responsibility": "reputational",
+                "output_type": "external_change",
+                "hours_per_run": 1,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Hold the kick-off meeting and clarify the goals",
+                "description": (
+                    "Getting to know the customer's team: what they want from "
+                    "the product and what success looks like for them."
+                ),
+                "primitives": ["P7"],
+                "responsibility": "reputational",
+                "output_type": "draft",
+                "hours_per_run": 1.5,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Draw up the individual launch checklist",
+                "description": (
+                    "What needs to be configured, imported and trained for "
+                    "this customer, out of the kick-off notes."
+                ),
+                "primitives": ["P5"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 1,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Create the account, issue access and configure the basic settings",
+                "description": (
+                    "The workspace, the users and their roles, and the "
+                    "settings from the checklist."
+                ),
+                "primitives": ["P9"],
+                "responsibility": "none",
+                "output_type": "external_change",
+                "hours_per_run": 3,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Run the first training demo for the customer's staff",
+                "description": (
+                    "A live demo on the customer's own data, prepared for "
+                    "their tasks, with questions answered on the spot."
+                ),
+                "primitives": ["P5", "B4"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 2,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Supervise the customer's first practical steps in the system",
+                "description": (
+                    "The customer does the first real tasks themselves, and "
+                    "the curator corrects them as they go."
+                ),
+                "primitives": ["B4"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 2,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Introduce the support rules and give access to the knowledge base",
+                "description": (
+                    "How and where to ask for help, what answer times to "
+                    "expect, and a login to the knowledge base."
+                ),
+                "primitives": ["P5"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 0.5,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Schedule the check-in call two weeks after the launch",
+                "description": (
+                    "The date on both calendars and a reminder the day before."
+                ),
+                "primitives": ["P11"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 0.1,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Hold the check-in call: collect feedback and resolve the difficulties",
+                "description": (
+                    "What works, what gets in the way, and what we fix for "
+                    "the customer and by when."
+                ),
+                "primitives": ["P7"],
+                "responsibility": "reputational",
+                "output_type": "draft",
+                "hours_per_run": 1,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Issue the first invoice under the contract",
+                "description": (
+                    "The amount, the period and the details from the "
+                    "contract, checked before it goes out."
+                ),
+                "primitives": ["P1", "P2"],
+                "responsibility": "formal",
+                "output_type": "external_change",
+                "hours_per_run": 0.5,
+                "runs_per_year": 60,
+            },
+            {
+                "title": "Move the customer to “Active” and hand them over to regular service",
+                "description": (
+                    "The status changed in the CRM and the account assigned "
+                    "to the support team by the rota."
+                ),
+                "primitives": ["P3"],
+                "responsibility": "none",
+                "output_type": "draft",
+                "hours_per_run": 0.3,
+                "runs_per_year": 60,
+            },
+        ],
     },
 ]
+
+
+def _same_text(a: object, b: object) -> bool:
+    """Equal after whitespace normalisation: a trailing space or a line
+    break pasted back in is not an edit of the process."""
+    return " ".join(str(a or "").split()) == " ".join(str(b or "").split())
+
+
+def preset_breakdown(container: Mapping[str, Any], language: str) -> dict | None:
+    """HRP-1208: the prepared breakdown of a seeded process whose
+    description and goal are still the ones the seed wrote in ``language``
+    (the tenant's content language), in the payload shape the decomposition
+    worker writes; None for any other text. The caller decides who gets it
+    - the demo sandbox only, never a cache of other companies' breakdowns."""
+    from app.modules.demo.seed_i18n import localize
+
+    for spec in WORK_CONTAINERS:
+        if not spec.get("preset_steps"):
+            continue
+        local = localize(spec, language)
+        if _same_text(container.get("description"), local["description"]) and (
+            _same_text(container.get("goal"), local["goal"])
+        ):
+            return {
+                "steps": [
+                    {**step, "evidence": [], "first_pass_codes": step["primitives"]}
+                    for step in local["preset_steps"]
+                ]
+            }
+    return None

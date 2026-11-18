@@ -49,6 +49,7 @@ from app.modules.work.schemas import (
     SkillRead,
     StepCreate,
     StepOrder,
+    StepPersonRead,
     StepPrimitivesUpdate,
     StepRead,
     StepUpdate,
@@ -259,6 +260,19 @@ async def update_step(
     return await service.update_step(db, actor.tenant_id, step_id, data)
 
 
+@router.get("/steps/{step_id}/people", response_model=list[StepPersonRead])
+async def list_step_people(
+    step_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: access.Actor = Depends(access.edit_step),
+    current_user: User = Depends(get_current_user),
+):
+    """HRP-1197: who can do the step, ranked by how much of it they hold -
+    the assign dialog's list, for the editors who name the executors."""
+    visible = await get_visible_employee_ids(db, current_user)
+    return await coverage.step_people(db, actor.tenant_id, step_id, visible=visible)
+
+
 @router.delete("/steps/{step_id}", status_code=204)
 async def delete_step(
     step_id: uuid.UUID,
@@ -351,13 +365,18 @@ async def list_gaps(
     container_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     actor: access.Actor = Depends(access.read_container),
+    current_user: User = Depends(get_current_user),
 ):
+    """HRP-1198: an ``unassigned`` row names the person the match found,
+    within the reader's HR scope - the coverage read's own rule."""
+    visible = await get_visible_employee_ids(db, current_user)
     return await coverage.gaps(
         db,
         actor.tenant_id,
         container_id,
         user_id=actor.user_id,
         schedule_mapping=actor.manage,
+        visible=visible,
     )
 
 
@@ -385,9 +404,7 @@ async def create_hire_need(
     )
     cards = await coverage.live_talent_cards(db, actor.tenant_id, {need.vacancy_id})
     return HireNeedRead.model_validate(need).model_copy(
-        update={
-            "talent_card_id": cards.get(need.vacancy_id) if need.vacancy_id else None
-        }
+        update={"talent_card_id": coverage.need_link(need, cards)["talent_card_id"]}
     )
 
 
@@ -608,16 +625,42 @@ async def create_session(
     actor: access.Actor = Depends(access.current_actor),
 ):
     # The container arrives in the body, so the edit check is here.
-    await access.ensure(db, actor, data.container_id, edit=True)
+    container = await access.ensure(db, actor, data.container_id, edit=True)
+    # HRP-1208: the demo's own process, unchanged, is answered by the worker
+    # without a model call - it costs nothing, so it is neither prechecked
+    # nor held. The decision is frozen on the session with the language it
+    # was made in: the worker matches the preset in that language, and a
+    # free run that misses it asks the balance before any paid call.
+    from app.modules.ai_settings import service as ai_settings_service
+
+    language = (
+        await ai_settings_service.get_or_default(db, actor.tenant_id)
+    ).content_language
+    free = (
+        await service.demo_preset(
+            db,
+            actor.tenant_id,
+            {"description": container.description, "goal": container.goal},
+            language=language,
+        )
+        is not None
+    )
     # Precheck before the row exists: a 402 must not leave a pending row
     # holding the container's one-active-run slot.
     action = service.BILLING_ACTION_START
-    cost = await billing_hooks.resolve_cost(db, actor.tenant_id, action)
-    await billing_hooks.precheck_action(
-        db, actor.tenant_id, action, amount_override=cost
-    )
+    cost = None
+    if not free:
+        cost = await billing_hooks.resolve_cost(db, actor.tenant_id, action)
+        await billing_hooks.precheck_action(
+            db, actor.tenant_id, action, amount_override=cost
+        )
     sess = await service.create_session(
-        db, actor.tenant_id, actor.user_id, data.container_id, cost=cost
+        db,
+        actor.tenant_id,
+        actor.user_id,
+        data.container_id,
+        cost=cost,
+        preset_language=language if free else None,
     )
     session_id = sess.id
     # Imported here like the other routers: Celery stays out of the
@@ -632,16 +675,17 @@ async def create_session(
         # them passes the same balance check before the first worker
         # deducts anything. The TTL is the reaper's cutoff - past it no
         # worker of this run is left to charge.
-        await billing_hooks.reserve_action(
-            db,
-            actor.tenant_id,
-            actor.user_id,
-            action,
-            entity_type=service.DECOMPOSITION_RESERVE_ENTITY,
-            entity_id=session_id,
-            ttl=timedelta(minutes=tasks.REAPER_STUCK_AGE_MINUTES),
-            amount_override=cost,
-        )
+        if not free:
+            await billing_hooks.reserve_action(
+                db,
+                actor.tenant_id,
+                actor.user_id,
+                action,
+                entity_type=service.DECOMPOSITION_RESERVE_ENTITY,
+                entity_id=session_id,
+                ttl=timedelta(minutes=tasks.REAPER_STUCK_AGE_MINUTES),
+                amount_override=cost,
+            )
         await db.commit()
         result = enqueue_task(
             tasks.run_decomposition_session,

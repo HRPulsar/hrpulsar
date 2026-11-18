@@ -6,7 +6,8 @@
 // out of ten looked like one. HRP-801 (QA 23.10, e): a gap row carries no
 // Hire / Agency label any more - the hire window chooses the route, for one
 // row or for a selection - and a row already handed over links to its
-// vacancy instead.
+// vacancy instead. HRP-1198: three groups - people with nobody assigned,
+// an agent still missing something, nobody at all - each with its next step.
 
 import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
@@ -20,13 +21,14 @@ import type { Gap } from "@/lib/api/work";
 const listGaps = vi.fn();
 const generateSkill = vi.fn();
 const createHireNeed = vi.fn();
+const stepPeople = vi.fn();
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
 const toastWarning = vi.fn();
 
 vi.mock("@/lib/api/work", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/work")>()),
-  workApi: { listGaps, generateSkill, createHireNeed },
+  workApi: { listGaps, generateSkill, createHireNeed, stepPeople },
 }));
 vi.mock("@/hooks/use-permissions", () => ({
   usePermissions: () => ({ canViewSection: () => true }),
@@ -49,6 +51,7 @@ const GAP: Gap = {
   mode: "automatable",
   gap_label: null,
   required_codes: [],
+  codes: [],
   agent: null,
   skill_status: "none",
   hire_need: null,
@@ -74,7 +77,7 @@ afterEach(() => {
   container.remove();
 });
 
-async function render() {
+async function render(onLoaded?: (count: number) => void) {
   await act(async () => {
     root.render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -85,6 +88,7 @@ async function render() {
           canOpenHireNeed
           canRegisterAgent
           onStepsChanged={() => {}}
+          onLoaded={onLoaded}
         />
       </NextIntlClientProvider>,
     );
@@ -159,7 +163,8 @@ it("links a handed-over row to its vacancy, named by how it is filled", async ()
       ...NO_OWNER,
       step_id: "s-2",
       position: 2,
-      hire_need: { id: "n-2", vacancy_id: "v-2", label: "hire", talent_card_id: "tc-2" },
+      // QA 12.11: "look inside first" opened the card alone.
+      hire_need: { id: "n-2", vacancy_id: null, label: "hire", talent_card_id: "tc-2" },
     },
     { ...NO_OWNER, step_id: "s-3", position: 3 },
   ]);
@@ -176,6 +181,8 @@ it("links a handed-over row to its vacancy, named by how it is filled", async ()
   // No label to pick on any row, and a handed-over row is not offered again.
   expect(document.querySelector('[data-testid$="-select-label"]')).toBeNull();
   expect(byTestId("coverage-gap-row-s-1-btn-hire")).toBeNull();
+  expect(byTestId("coverage-gap-row-s-2-btn-hire")).toBeNull();
+  expect(byTestId("coverage-gap-row-s-2-checkbox")!.hasAttribute("data-disabled")).toBe(true);
   const handedOver = byTestId("coverage-gap-row-s-1-checkbox")!;
   expect(handedOver.hasAttribute("data-disabled")).toBe(true);
   expect(handedOver.getAttribute("title")).toBe(enMessages.coverage.gapHandedOverHint);
@@ -235,4 +242,50 @@ it("says when looking inside first could not reach the talent market", async () 
   });
   expect(toastWarning).toHaveBeenCalledWith(enMessages.coverage.hireNeedNotOnTalentMarket);
   expect(toastSuccess).not.toHaveBeenCalled();
+});
+
+const PEOPLE: Gap = { ...GAP, kind: "unassigned", mode: "blocked_judgment" };
+const OLGA = { employee_id: "e-olga", name: "Olga Berg", position: null, label: "assessed" as const, missing_codes: [] };
+
+it("splits To do into people, agent and nobody, in that order (HRP-1198)", async () => {
+  const onLoaded = vi.fn();
+  listGaps.mockResolvedValue([
+    { ...NO_OWNER, step_id: "s-3", position: 3 },
+    { ...GAP, step_id: "s-2", position: 2 },
+    { ...PEOPLE, human: OLGA },
+    { ...PEOPLE, step_id: "s-4", position: 4, human: null },
+  ]);
+  await render(onLoaded);
+
+  const sections = [...document.querySelectorAll("section")].map((el) => el.dataset.testid);
+  expect(sections).toEqual(["coverage-todo-people", "coverage-todo-not-automated", "coverage-todo-no-owner"]);
+  // HRP-1206: the page's counter follows what the tab lists.
+  expect(onLoaded).toHaveBeenLastCalledWith(4);
+  // Each group says what to do next.
+  expect(byTestId("coverage-todo-people")!.textContent).toContain(enMessages.coverage.todoPeopleHint);
+  expect(byTestId("coverage-todo-not-automated")!.textContent).toContain(enMessages.coverage.todoAgentNext);
+  expect(byTestId("coverage-todo-no-owner")!.textContent).toContain(enMessages.coverage.gapsHint);
+
+  // Matched, not assigned - the outcome block's split - and Confirm.
+  expect(byTestId("coverage-people-row-s-1-matched")!.textContent).toBe("Matched, not assigned:Olga Berg");
+  expect(byTestId("coverage-people-row-s-1-btn-confirm")!.textContent).toBe(enMessages.coverage.todoConfirmPeople);
+  // Nobody this reader may see: not assigned, and Assign.
+  expect(byTestId("coverage-people-row-s-4-unassigned")!.textContent).toBe(enMessages.coverage.todoNoExecutor);
+  expect(byTestId("coverage-people-row-s-4-btn-assign")).not.toBeNull();
+  // The "?" of the step type, on every group.
+  expect(byTestId("coverage-people-row-s-1-mode-help")).not.toBeNull();
+  expect(byTestId("coverage-todo-row-s-2-mode-help")).not.toBeNull();
+  expect(byTestId("coverage-gap-row-s-3-mode-help")).not.toBeNull();
+});
+
+it("confirms the people the match found in the executors' dialog (HRP-1198)", async () => {
+  listGaps.mockResolvedValue([{ ...PEOPLE, human: OLGA }]);
+  stepPeople.mockResolvedValue([
+    { employee_id: "e-olga", name: "Olga Berg", email: null, position_title: null, match_percent: 100 },
+  ]);
+  await render();
+
+  await click("coverage-people-row-s-1-btn-confirm");
+  expect(stepPeople).toHaveBeenCalledWith("s-1");
+  expect(byTestId("coverage-modal-assign-option-e-olga")!.hasAttribute("data-checked")).toBe(true);
 });
