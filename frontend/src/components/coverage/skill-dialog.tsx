@@ -198,8 +198,9 @@ export function SkillDialog({
           </DialogDescription>
         </DialogHeader>
         {/* HRP-912: the file follows the workspace's AI content language,
-            like every other generated text - say where that is set. */}
-        <p className="text-xs text-muted-foreground">{t("skillLanguageHint")}</p>
+            like every other generated text - say where that is set. HRP-1182:
+            only under a file - ru says it "was prepared". */}
+        {skill?.content && <p className="text-xs text-muted-foreground">{t("skillLanguageHint")}</p>}
         {error && (
           <p className="text-sm text-destructive" data-testid="coverage-skill-error">
             {error}

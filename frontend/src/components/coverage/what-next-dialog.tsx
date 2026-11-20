@@ -82,7 +82,8 @@ export function WhatNextDialog({ steps, onClose }: { steps: CoverageStep[]; onCl
           <DialogTitle>{t("whatNextTitle")}</DialogTitle>
           <DialogDescription>{t("whatNextIntro")}</DialogDescription>
         </DialogHeader>
-        <CoverageOutcome steps={steps} linkSteps={false} />
+        {/* HRP-1182 (QA 20.11): the intro leads into the block - no second heading. */}
+        <CoverageOutcome steps={steps} linkSteps={false} titled={false} />
         <div className="space-y-1.5 text-sm">
           <p className="font-medium">{t("whatNextHowTitle")}</p>
           <ol className="list-decimal space-y-1 pl-5" data-testid="coverage-what-next-steps">

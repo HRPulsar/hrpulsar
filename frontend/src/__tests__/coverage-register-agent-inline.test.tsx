@@ -119,6 +119,15 @@ async function type(value: string) {
   });
 }
 
+it("opens the form in a window, not inline", async () => {
+  await open();
+
+  const dialog = byId("use-dialog")!;
+  expect(dialog.textContent).toContain(enMessages.coverage.useAgentTitle);
+  expect(dialog.contains(byId("use-input"))).toBe(true);
+  expect(container.contains(byId("use-input"))).toBe(false);
+});
+
 it("offers the agents named before and binds the picked one to the step", async () => {
   await open();
 
@@ -136,6 +145,7 @@ it("offers the agents named before and binds the picked one to the step", async 
   expect(registerAgent).not.toHaveBeenCalled();
   expect(toastSuccess).toHaveBeenCalledWith(enMessages.coverage.agentLinked);
   expect(onRegistered).toHaveBeenCalled();
+  expect(byId("use-dialog")).toBeNull();
 });
 
 it("binds an agent typed again by name instead of registering a twin", async () => {

@@ -356,9 +356,9 @@ function ContainerView({ id }: { id: string }) {
             {t(`status_${container.status}`)}
           </Badge>
           {coverage?.steps.some((s) => s.in_scope) && (
+            // HRP-1182 (QA 20.11): filled, like the other buttons that matter.
             <Button
               size="sm"
-              variant="outline"
               onClick={() => void refreshCoverage().then(() => setWhatNextOpen(true))}
               data-testid="coverage-btn-what-next"
             >

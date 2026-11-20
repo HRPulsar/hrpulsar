@@ -257,14 +257,15 @@ it("opens what every step type means from the ? by a step's mode (HRP-1204)", as
   expect(popover.textContent).toContain("What the step types mean");
   for (const [mode, label, meaning] of [
     ["automatable", "Automatable", "An agent closes the step by itself; no reviewer is needed."],
-    ["draft_then_review", "Draft, then review", "the agent prepares a draft"],
-    ["review_required", "Review required", "someone answers for the result or signs it"],
-    ["blocked_judgment", "Needs a person's judgement", "Stays with people"],
+    ["draft_then_review", "Draft, then review", "a person reviews and finishes it. That is why a reviewer is needed."],
+    ["review_required", "Review required", "a person answers for the result — confirms or signs it"],
+    ["blocked_judgment", "Needs a person's judgement", "so an agent does not decide it"],
     ["blocked_physical", "Needs a person on site", "someone on site"],
-    ["tentative", "Preliminary", "nobody has confirmed"],
   ]) {
     const entry = byId(`coverage-mode-help-s-2-${mode}`)!;
     expect(entry.textContent).toContain(label);
     expect(entry.textContent).toContain(meaning);
   }
+  // HRP-1182 (QA 20.11): Preliminary is not a mode - it has its own "?".
+  expect(popover.textContent).not.toContain(enMessages.coverage.tentativeVerdict);
 });

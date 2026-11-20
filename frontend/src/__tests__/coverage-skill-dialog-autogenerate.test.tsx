@@ -176,6 +176,15 @@ it("says the file follows the AI content language (HRP-912)", async () => {
   expect(document.body.textContent).toContain(enMessages.coverage.skillLanguageHint);
 });
 
+it("keeps the language line off a window with no file in it (HRP-1182)", async () => {
+  getSkill.mockResolvedValue({ ...SKILL, content: "" });
+
+  await open("ready");
+
+  expect(byId("coverage-modal-skill")).not.toBeNull();
+  expect(document.body.textContent).not.toContain(enMessages.coverage.skillLanguageHint);
+});
+
 // HRP-1201: a demo visitor has no agent of their own - the dialog says in
 // one line where the file goes, next to the download; nothing asks for an
 // agent first. Outside the demo the text is the one it always was.

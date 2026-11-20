@@ -38,7 +38,9 @@ the steps follow those descriptions:
   "Generate steps" on a page that really offers it. Its ``preset_steps``
   are what that run returns while the text is the seeded one (HRP-1208,
   :func:`preset_breakdown`): the demo shows the result at once instead of
-  two minutes of a model call.
+  two minutes of a model call. One of them is a ``hire`` gap - the call on
+  whether the launch is complete - so the route's next step, opening a
+  hire need, can be done on the steps just generated.
 
 Both processes are picked so that "moves to an agent" is at least 30 % of
 their yearly hours (HRP-870): the demo has to show the benefit. The pair
@@ -881,6 +883,22 @@ WORK_CONTAINERS: list[dict] = [
                 "primitives": ["P1", "P2"],
                 "responsibility": "formal",
                 "output_type": "external_change",
+                "hours_per_run": 0.5,
+                "runs_per_year": 60,
+            },
+            {
+                # The preset's ``hire`` gap, as the disputed invoice is in
+                # ``customer_requests``: the Coverage route's hire step can
+                # be done on the steps just generated.
+                "title": "Decide whether the launch is complete or needs more time",
+                "description": (
+                    "What on the checklist is done, what is not and what it "
+                    "risks — and the call: the customer goes to “Active” "
+                    "or the launch is extended."
+                ),
+                "primitives": ["P2", "P6"],
+                "responsibility": "formal",
+                "output_type": "draft",
                 "hours_per_run": 0.5,
                 "runs_per_year": 60,
             },

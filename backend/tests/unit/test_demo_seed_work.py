@@ -485,8 +485,8 @@ async def test_the_applied_onboarding_preset_gives_a_working_coverage(
     db: AsyncSession, tenant, user
 ):
     """HRP-1208: the steps the demo hands out at once are a breakdown the
-    Coverage tab can answer for - shares, agent and person verdicts,
-    nothing unclassified - as on the seeded processes."""
+    Coverage tab can answer for - shares, agent and person verdicts, one
+    ``hire`` gap, nothing unclassified - as on the seeded processes."""
     await _seed(db, tenant, user)
     spec = next(s for s in WORK_CONTAINERS if s["key"] == "customer_onboarding")
     container = (
@@ -513,6 +513,13 @@ async def test_the_applied_onboarding_preset_gives_a_working_coverage(
     verdicts = {row["verdict"] for row in report["steps"]}
     assert len(report["steps"]) == len(spec["preset_steps"])
     assert "unclassified" not in verdicts
-    assert {"agent", "human"} <= verdicts, verdicts
+    assert {"agent", "human", "gap"} <= verdicts, verdicts
+    # HRP-1208 REDO: the route's hire step is done on these steps - one of
+    # them is a gap a hire need can be opened for, as the guide looks for it.
+    gaps = await coverage_service.gaps(
+        db, tenant.id, container.id, user_id=user.id, schedule_mapping=False
+    )
+    no_owner = [g for g in gaps if g["kind"] == "no_owner" and not g["hire_need"]]
+    assert [g["gap_label"] for g in no_owner] == ["hire"], gaps
     assert report["shares"] is not None
     assert report["shares"]["moves"] > 0 and report["shares"]["stays"] > 0

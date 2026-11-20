@@ -296,6 +296,11 @@ describe("the popup", () => {
       "Download the instruction for the agent: on the To do tab, or with the button next to the step.",
     );
     expect(byId("coverage-what-next-bot")!.textContent).toContain("the agent is not built into the product");
+    // HRP-1182 (QA 20.11): the intro leads into the block, which has no heading of its own here.
+    const popup = byId("coverage-what-next")!;
+    expect(popup.textContent).toContain("The steps are split between people and agents:");
+    expect(popup.textContent).not.toContain(enMessages.coverage.outcomeTitle);
+    expect(popup.textContent).toContain(enMessages.coverage.whatNextHowTitle);
   });
 
   it("drops the reviewer and executor steps once nothing lacks one", async () => {

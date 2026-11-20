@@ -148,15 +148,19 @@ function StepList({
 }
 
 /** HRP-1200: the who-does / who-checks block under the summary. `onAssign`
- * opens "Who checks?" or the executor's Assign for a step that lacks one. */
+ * opens "Who checks?" or the executor's Assign for a step that lacks one.
+ * HRP-1182 (QA 20.11): `titled` off where the text above already leads in
+ * (the closing popup). */
 export function CoverageOutcome({
   steps,
   onAssign,
   linkSteps = true,
+  titled = true,
 }: {
   steps: CoverageStep[];
   onAssign?: (row: CoverageStep, field: AssigneeField) => void;
   linkSteps?: boolean;
+  titled?: boolean;
 }) {
   const t = useTranslations("coverage");
   const o = outcomeOf(steps);
@@ -164,8 +168,8 @@ export function CoverageOutcome({
 
   return (
     <section className="rounded-lg border p-4" data-testid="coverage-outcome">
-      <h2 className="text-sm font-semibold">{t("outcomeTitle")}</h2>
-      <ul className="mt-2 space-y-2 text-sm">
+      {titled && <h2 className="mb-2 text-sm font-semibold">{t("outcomeTitle")}</h2>}
+      <ul className="space-y-2 text-sm">
         <OutcomeLine
           testId="coverage-outcome-agent-alone"
           icon={<Bot className="size-4 text-muted-foreground" />}

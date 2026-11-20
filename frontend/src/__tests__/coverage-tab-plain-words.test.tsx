@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
-// HRP-1182: the Coverage tab says what the product does in plain words. The
-// thesis stands on the tab itself, not only on the site; the company's own
-// agent reads by its name instead of "<agent type> via <name>"; and the
-// agent the company already uses is asked for before the checker of its work.
+// HRP-1182: the Coverage tab in plain words. The company's own agent reads
+// by its name instead of "<agent type> via <name>", and the agent the company
+// already uses is asked for before the checker of its work. QA 20.11: the
+// thesis left the tab (it goes to the section's help), "Who does the work"
+// sits under the three shares, and Preliminary has its own "?".
 
 import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
@@ -109,10 +110,20 @@ async function render(step: CoverageStep) {
 
 const byId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
-it("states the thesis on the tab", async () => {
+it("puts who does the work under the three shares", async () => {
   await render(STEP);
 
-  expect(byId("coverage-thesis")!.textContent).toBe(enMessages.coverage.coverageThesis);
+  const stays = byId("coverage-summary-blocked")!;
+  const outcome = byId("coverage-outcome")!;
+  expect(stays.compareDocumentPosition(outcome) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it("explains Preliminary with its own question mark", async () => {
+  await render({ ...STEP, tentative: true });
+
+  const help = byId("coverage-tentative-help-s-1")!;
+  expect(help.getAttribute("aria-label")).toBe(enMessages.coverage.tentativeVerdictHint);
+  expect(byId("coverage-tentative-s-1")!.hasAttribute("title")).toBe(false);
 });
 
 it("names the company's own agent without gluing it to the agent type", async () => {

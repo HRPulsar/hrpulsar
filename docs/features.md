@@ -555,9 +555,8 @@ Break a process or a project down into steps, see who covers each step - an AI a
 
 ### Coverage
 
-- The Coverage tab opens with what the product does: it splits a process between people and agents, finds employees for the people's steps and writes an instruction for the agents' steps. The agent is not built into the product - you give the instruction to your own bot, and the instruction comes before the prompt: without it the prompt sets no frame for the work
 - Per step: the executor verdict - an agent type from the built-in packs (or an agent you registered, named on the row as the one that already does the step), a person whose assessments or grade profile carry the capabilities, or a gap - and the automation mode (automatable, draft then review, review required, blocked by judgement or by physical work)
-- A "?" next to a step's automation mode - on its coverage row and on To do - opens what every mode means, side by side with its badge - which steps an agent closes by itself, which an agent does while a person checks, which stay with people - and what "Preliminary" means
+- A "?" next to a step's automation mode - on its coverage row and on To do - opens what every mode means, side by side with its badge - which steps an agent closes by itself, which an agent does while a person checks, which stay with people; a "Preliminary" badge has a "?" of its own
 - A step you added without capabilities and never classified is marked Not classified, with a hint to pick its capabilities or reclassify it - it no longer passes for a step that needs no capability; saving the capability picker empty says the step needs none
 - A person's coverage comes from completed assessments against the passing score of their grade, or from the competence matrix of their position; the matched person is shown with their position
 - The tab opens on two plaques: what share of this work moves to an agent, and what the work costs in hours a year and in your own money

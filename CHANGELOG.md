@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.6.3] - 2026-11-20
+
+### Changed
+- Coverage: plainer step type definitions, a "?" of its own for Preliminary, "Who does the work" under the three shares, a filled "What's next", and naming the agent you already use opens a window (HRP-1182)
+
+### Removed
+- Coverage: the paragraph on what the product does is off the Coverage tab (HRP-1182)
+
+### Fixed
+- Demo: the onboarding steps returned at once include one nobody in the company covers, so the Coverage route's hire step can be done right there (HRP-1208)
+
 ## [2.6.2] - 2026-11-18
 
 ### Added

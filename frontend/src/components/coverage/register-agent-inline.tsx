@@ -10,12 +10,22 @@
 // an agent is matched to a step by codes, so the step's codes are added to
 // that agent - a second agent with the same name would be refused (the
 // registry keeps names unique) and would split one tool in two.
+//
+// HRP-1182 (QA 20.11): a link, so it reads as something to click, and what it
+// opens is a window over the page, not a form pushing the row apart.
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { type RegisteredAgent, workApi } from "@/lib/api/work";
 
@@ -48,8 +58,8 @@ export function RegisterAgentInline({
    * matched to an agent of that pack only, whatever its codes - so only
    * those are offered. */
   packManual?: boolean;
-  /** Prefix: the input is `${testId}-input`, the submit `${testId}-save`,
-   * a known agent `${testId}-agent-${id}`. */
+  /** Prefix: the window is `${testId}-dialog`, its input `${testId}-input`,
+   * the submit `${testId}-save`, a known agent `${testId}-agent-${id}`. */
   testId: string;
   onRegistered: () => void;
 }) {
@@ -116,50 +126,62 @@ export function RegisterAgentInline({
     });
   }
 
-  if (!open) {
-    return (
-      <Button size="sm" variant="link" className="h-auto p-0" onClick={() => setOpen(true)} data-testid={testId}>
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="link"
+        className="h-auto p-0 underline"
+        onClick={() => setOpen(true)}
+        data-testid={testId}
+      >
         {t("useAgent")}
       </Button>
-    );
-  }
-
-  return (
-    <div className="max-w-md space-y-2">
-      {agents.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2" data-testid={`${testId}-known`}>
-          <span className="text-sm text-muted-foreground">{t("agentPickExisting")}</span>
-          {agents.map((agent) => (
-            <Button
-              key={agent.id}
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={saving}
-              onClick={() => void run(() => bind(agent))}
-              data-testid={`${testId}-agent-${agent.id}`}
-            >
-              {agent.name}
-            </Button>
-          ))}
-        </div>
+      {open && (
+        <Dialog open onOpenChange={(next) => !next && setOpen(false)}>
+          <DialogContent className="sm:max-w-md" data-testid={`${testId}-dialog`}>
+            <DialogHeader>
+              <DialogTitle>{t("useAgentTitle")}</DialogTitle>
+            </DialogHeader>
+            {agents.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2" data-testid={`${testId}-known`}>
+                <span className="text-sm text-muted-foreground">{t("agentPickExisting")}</span>
+                {agents.map((agent) => (
+                  <Button
+                    key={agent.id}
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={saving}
+                    onClick={() => void run(() => bind(agent))}
+                    data-testid={`${testId}-agent-${agent.id}`}
+                  >
+                    {agent.name}
+                  </Button>
+                ))}
+              </div>
+            )}
+            <form onSubmit={submit} className="grid gap-4">
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t("agentNamePlaceholder")}
+                maxLength={200}
+                autoFocus
+                data-testid={`${testId}-input`}
+              />
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                  {t("cancel")}
+                </Button>
+                <Button type="submit" disabled={saving || !name.trim()} data-testid={`${testId}-save`}>
+                  {t("registerAgent")}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       )}
-      <form onSubmit={submit} className="flex gap-2">
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t("agentNamePlaceholder")}
-          maxLength={200}
-          autoFocus
-          data-testid={`${testId}-input`}
-        />
-        <Button type="submit" size="sm" disabled={saving || !name.trim()} data-testid={`${testId}-save`}>
-          {t("registerAgent")}
-        </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>
-          {t("cancel")}
-        </Button>
-      </form>
-    </div>
+    </>
   );
 }

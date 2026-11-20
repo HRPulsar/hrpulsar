@@ -279,10 +279,6 @@ export function CoverageTab({
 
   return (
     <div className="space-y-6">
-      {/* HRP-1182: what the product does and does not do, on the screen itself. */}
-      <p className="max-w-3xl text-sm" data-testid="coverage-thesis">
-        {t("coverageThesis")}
-      </p>
       <p className="max-w-3xl text-sm text-muted-foreground">{t("coverageHint")}</p>
 
       {coverage.mapping_pending && !pollExhausted && (
@@ -295,12 +291,6 @@ export function CoverageTab({
       )}
 
       <CoverageSummary coverage={coverage} />
-
-      {/* HRP-1200: the same buckets as who does and who checks. */}
-      <CoverageOutcome
-        steps={coverage.steps}
-        onAssign={canEdit ? (row, field) => setAssign({ row, field }) : undefined}
-      />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <SummaryCard
@@ -345,6 +335,13 @@ export function CoverageTab({
           </Button>
         )}
       </div>
+
+      {/* HRP-1200: the same buckets as who does and who checks. HRP-1182
+          (QA 20.11): under the three shares it spells out, not above them. */}
+      <CoverageOutcome
+        steps={coverage.steps}
+        onAssign={canEdit ? (row, field) => setAssign({ row, field }) : undefined}
+      />
 
       <AgentGuide
         containerId={containerId}
@@ -637,11 +634,18 @@ function MatchRow({
               <Badge
                 variant="outline"
                 className="border-dashed text-muted-foreground"
-                title={t("tentativeVerdictHint")}
                 data-testid={`coverage-tentative-${row.step_id}`}
               >
                 {t("tentativeVerdict")}
               </Badge>
+            )}
+            {/* HRP-1182 (QA 20.11): its own "?", by the badge, like the mode's. */}
+            {row.tentative && (
+              <Hint
+                text={t("tentativeVerdictHint")}
+                className="-ml-1"
+                data-testid={`coverage-tentative-help-${row.step_id}`}
+              />
             )}
           </div>
           {/* HRP-1196: the Steps tab's description; none, nothing. */}
@@ -818,15 +822,18 @@ function MatchRow({
           </div>
 
           {/* HRP-1182 (QA 17.11): the agent the company uses first, the
-              checker of its work after it. */}
+              checker of its work after it. QA 20.11: close under the agent
+              type and its Change, apart from Who checks below. */}
           {canRegisterAgent && !assigned && row.agent?.pack_id && !row.agent.agent_id && (
-            <RegisterAgentInline
-              packId={row.agent.pack_id}
-              codes={row.codes}
-              packManual={row.agent.pack_manual}
-              testId={`coverage-btn-use-agent-${row.step_id}`}
-              onRegistered={onChanged}
-            />
+            <div className="-mt-1 pb-1">
+              <RegisterAgentInline
+                packId={row.agent.pack_id}
+                codes={row.codes}
+                packManual={row.agent.pack_manual}
+                testId={`coverage-btn-use-agent-${row.step_id}`}
+                onRegistered={onChanged}
+              />
+            </div>
           )}
 
           <AccountableLine row={row} canEdit={canEdit} t={t} onAssign={() => onAssign("accountable_employee_id")} />

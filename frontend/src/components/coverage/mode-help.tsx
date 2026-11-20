@@ -4,7 +4,8 @@
 // mode side by side - its badge, in its colour, and what it means - so a
 // reader learns the whole scale at once instead of one label at a time.
 // Hover, focus and a click (touch) open it. One component wherever the mode
-// badge shows.
+// badge shows. HRP-1182 (QA 20.11): the modes only - Preliminary has its own
+// "?" - and the "?" sits by the badge it explains, not halfway to the next one.
 
 import { CircleHelp } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -25,7 +26,7 @@ export function ModeHelp({ testId }: { testId: string }) {
         openOnHover
         delay={150}
         aria-label={t("modeHelpTitle")}
-        className="inline-flex shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="-ml-1 inline-flex shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         data-testid={testId}
       >
         <CircleHelp className="size-3.5" />
@@ -46,14 +47,6 @@ export function ModeHelp({ testId }: { testId: string }) {
               <dd className="mt-0.5 text-muted-foreground">{t(`modeHelp_${mode}`)}</dd>
             </div>
           ))}
-          <div data-testid={`${testId}-tentative`}>
-            <dt>
-              <Badge variant="outline" className="border-dashed text-muted-foreground">
-                {t("tentativeVerdict")}
-              </Badge>
-            </dt>
-            <dd className="mt-0.5 text-muted-foreground">{t("tentativeVerdictHint")}</dd>
-          </div>
         </dl>
       </PopoverContent>
     </Popover>
