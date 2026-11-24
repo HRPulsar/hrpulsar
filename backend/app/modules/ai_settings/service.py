@@ -64,7 +64,8 @@ DEFAULT_LANGUAGE = "en"
 # ---------------------------------------------------------------------------
 # Allowed-model whitelist
 #
-# In community/self-hosted deployments only the preset models are reachable
+# In community/self-hosted deployments every model the registry names is
+# reachable — the presets, the flagship and the previous tier models
 # (multiplier 1.0× across the board). Enterprise calls `register_models()`
 # during `ee.register_enterprise(app)` to publish the YAML-loaded list with
 # real `credit_multiplier` values. Mirrors the `billing_hooks` rebinding
@@ -73,29 +74,43 @@ DEFAULT_LANGUAGE = "en"
 
 
 def _default_allowed_models() -> list[dict[str, Any]]:
-    """Derive a community-edition whitelist from the preset models (×1.0)."""
+    """Community-edition whitelist (×1.0): every model the registry names.
+
+    The preset models, the optional flagship and the previous tier models —
+    the same set the catalog seed makes pickable. HRP-1240: the previous
+    tier models left the presets, and a workspace pinned to one could not
+    save its settings again on an install whose catalog was not seeded yet.
+    """
+    pairs = [
+        (provider, model)
+        for preset in EFFORT_PRESETS.values()
+        for provider, model in preset["models"].items()
+    ]
+    pairs.append(("anthropic", model_registry.ANTHROPIC_FABLE))
+    pairs.extend(
+        (provider, model) for provider, model, _tier in model_registry.PREVIOUS_MODELS
+    )
     seen: set[tuple[str, str]] = set()
     models: list[dict[str, Any]] = []
-    for preset in EFFORT_PRESETS.values():
-        for provider, model in preset["models"].items():
-            key = (provider, model)
-            if key in seen:
-                continue
-            seen.add(key)
-            models.append(
-                {
-                    "provider": provider,
-                    "model": model,
-                    "label": model,
-                    "credit_multiplier": 1.0,
-                }
-            )
+    for key in pairs:
+        if key in seen:
+            continue
+        seen.add(key)
+        provider, model = key
+        models.append(
+            {
+                "provider": provider,
+                "model": model,
+                "label": model,
+                "credit_multiplier": 1.0,
+            }
+        )
     return models
 
 
 _allowed_models: list[dict[str, Any]] = _default_allowed_models()
 
-# The config-declared whitelist (credits.yaml / community presets), frozen
+# The config-declared whitelist (credits.yaml / community registry list), frozen
 # at registration. `_allowed_models` is mutated at runtime by moderation
 # upserts in whichever worker served the request; this snapshot is not, so
 # it is identical in every worker for the life of the process. Catalog rows

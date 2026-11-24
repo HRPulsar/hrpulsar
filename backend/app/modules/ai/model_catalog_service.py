@@ -839,7 +839,7 @@ async def sync_registry_from_catalog(db: AsyncSession) -> int:
         if row.credit_multiplier is None:
             continue
         if ai_settings_service._model_lookup(row.model_id) is not None:
-            # Curated entries (credits.yaml / community presets) win.
+            # Curated entries (credits.yaml / community registry list) win.
             continue
         ai_settings_service.upsert_allowed_model(
             {

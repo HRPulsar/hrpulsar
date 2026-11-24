@@ -154,6 +154,26 @@ class TestServiceModelWhitelist:
             for provider_model in preset["models"].values():
                 assert provider_model in models
 
+    def test_community_whitelist_keeps_the_previous_tier_models(self) -> None:
+        # HRP-1240: the community list (no credits.yaml) was built from the
+        # presets only, so a model that left them — a workspace's old pin —
+        # could no longer be saved before the catalog was seeded.
+        # It must name exactly what the catalog seed makes pickable: a model
+        # added to one list only is pickable but unsavable (or the reverse)
+        # on an install whose catalog is not seeded yet.
+        from app.modules.ai import model_catalog_service
+
+        listed = {
+            (entry["provider"], entry["model"])
+            for entry in service._default_allowed_models()
+        }
+        seeded = {
+            (row["provider"], row["model_id"])
+            for row in model_catalog_service._seed_rows()
+        }
+        assert listed == seeded
+        assert ("anthropic", model_registry.ANTHROPIC_FABLE) in listed
+
     async def test_effective_credit_multiplier_default_is_one(
         self, db: AsyncSession, tenant
     ) -> None:

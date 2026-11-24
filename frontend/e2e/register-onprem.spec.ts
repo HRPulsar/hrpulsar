@@ -70,7 +70,11 @@ test.describe("Self-hosted entry", () => {
     const email = uniqueEmail();
     const password = "selfhost123";
     await registerViaUI(page, email, password);
-    await expect(page).toHaveURL(/\/(onboarding|dashboard)/, {
+    // A fresh tenant admin lands on /dashboard first, which then sends it
+    // on to the onboarding wizard. Wait for the wizard: clearing the tokens
+    // while that hop is still running made the wizard's own status check
+    // answer 401 and redirect to /login under our goto (net::ERR_ABORTED).
+    await expect(page.getByTestId("onboarding-form")).toBeVisible({
       timeout: 15000,
     });
 
