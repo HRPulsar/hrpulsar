@@ -20,6 +20,7 @@ import Link from "next/link";
 import { BADGE_COLOR } from "@/lib/badge-tones";
 import { usePermissions } from "@/hooks/use-permissions";
 import type { AutomationMode, Coverage, CoverageStep, Quality } from "@/lib/api/work";
+import { wholePercents as largestRemainder } from "@/lib/whole-percents";
 
 /** The bar's segments and the legend's dots, in bar order: one list, so the
  * two cannot drift apart. The labels are the bucket cards' own. The grey is
@@ -52,22 +53,14 @@ export function bucketsOf(steps: CoverageStep[]): Record<BucketKey, CoverageStep
   return out;
 }
 
-/** Largest remainder. Rounded one by one, three shares of 33.33 print "33%"
- * three times and the reader adds up 99; these always add up to 100. The
- * headline, the bar and the legend all read them, so the three readings of
- * one set of shares cannot disagree either. */
-function wholePercents(shares: Shares): Record<BucketKey, number> {
-  const whole = { moves: 0, to_review: 0, stays: 0 };
-  for (const { key } of BUCKETS) whole[key] = Math.floor(shares[key]);
-  const short = 100 - BUCKETS.reduce((sum, b) => sum + whole[b.key], 0);
-  // The `short` largest fractions round up; a tie goes to the bar's order.
-  BUCKETS.map((b) => b.key)
-    .sort((a, b) => (shares[b] % 1) - (shares[a] % 1))
-    .slice(0, Math.max(0, short))
-    .forEach((key) => {
-      whole[key] += 1;
-    });
-  return whole;
+/** The shares as whole percents that add up to 100 - what the headline, the
+ * bar, the legend and the cards under the summary (HRP-1148) all print. A
+ * tie goes to the bar's order. */
+export function wholePercents(shares: Shares): Record<BucketKey, number> {
+  return largestRemainder(
+    shares,
+    BUCKETS.map((b) => b.key),
+  );
 }
 
 export const QUALITY_BADGE: Record<Quality, string> = {
@@ -80,7 +73,14 @@ export const QUALITY_BADGE: Record<Quality, string> = {
 /** Where an admin sets the rate: the tenant settings it lives on. */
 export const RATE_SETTINGS_HREF = "/company/profile";
 
-export function CoverageSummary({ coverage }: { coverage: Coverage }) {
+export function CoverageSummary({
+  coverage,
+  note,
+}: {
+  coverage: Coverage;
+  /** Why the shares are not there yet, when they are not (HRP-1207). */
+  note?: string | null;
+}) {
   const t = useTranslations("coverage");
   const locale = useLocale();
   // HRP-622: the rate lives on the company profile, which only the admin
@@ -109,7 +109,7 @@ export function CoverageSummary({ coverage }: { coverage: Coverage }) {
 
   return (
     <div className="grid gap-3 lg:grid-cols-2">
-      <div className="rounded-lg border p-4" data-testid="coverage-headline">
+      <div className="flex flex-col rounded-lg border p-4" data-testid="coverage-headline">
         {shares === null ? (
           <>
             <p className="text-sm text-muted-foreground">{t("headlineNoSharesTitle")}</p>
@@ -126,6 +126,15 @@ export function CoverageSummary({ coverage }: { coverage: Coverage }) {
             round={round}
             t={t}
           />
+        )}
+        {/* At the foot of the card, set like the note on the agent's cost. */}
+        {note && (
+          <p
+            className="mt-auto pt-3 text-xs text-muted-foreground"
+            data-testid="coverage-summary-weight-note"
+          >
+            {note}
+          </p>
         )}
       </div>
 

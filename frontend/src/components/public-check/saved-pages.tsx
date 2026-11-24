@@ -21,7 +21,7 @@ import {
 } from "@/lib/api/public-check";
 
 import { runErrorKey } from "./errors";
-import { ResultView } from "./result-view";
+import { ResultView, wholeShares } from "./result-view";
 import { LinkRequestForm } from "./save-results";
 
 /** Pages of saving by email (HRP-926), reached from the letters' links. */
@@ -280,10 +280,10 @@ export function SavedChecksPage({
                 >
                   {check.title}
                 </Link>
-                {check.share_moves != null ? (
+                {check.shares ? (
                   <span className="shrink-0 text-sm tabular-nums">
                     {t("myShare", {
-                      share: format.number(check.share_moves / 100, {
+                      share: format.number(wholeShares(check.shares).moves / 100, {
                         style: "percent",
                         maximumFractionDigits: 0,
                       }),

@@ -1,10 +1,12 @@
-"""HRP-951 / HRP-949 / HRP-921 / HRP-1208: what the breakdown worker sends and keeps.
+"""HRP-951 / HRP-949 / HRP-921 / HRP-1208 / HRP-1239: what the breakdown worker
+sends and keeps.
 
 The prompt layout - the shared prefix alone in the first system block, the
 same bytes on the split, the classification and a reclassification - and
 the pinned sampling; the first pass's codes kept in the payload next to the
 final ones; the result cache that answers a repeated text without a model
-call and without a charge.
+call and without a charge; the check that the steps came back in the
+content language, with its one retry.
 """
 
 from __future__ import annotations
@@ -103,7 +105,13 @@ class TestPromptLayout:
         assert len(prefix) > 20_000  # the part worth caching
         assert [k["system"][0] for k in seen] == [prefix] * 3
         directive = tasks._language(_settings())
-        assert [k["system"][-1] for k in seen] == [directive] * 3
+        # HRP-1239: the split, the one call that writes prose, is also told
+        # that the description's language does not decide the steps'.
+        assert [k["system"][-1] for k in seen] == [
+            f"{directive} {prompts.LANGUAGE_RULE}",
+            directive,
+            directive,
+        ]
         assert seen[1]["system"][1] == seen[2]["system"][1]
         assert "Task of this call" in seen[1]["system"][1]
         # Joined, the blocks are the v8 system prompt byte for byte: the
@@ -551,3 +559,322 @@ class TestDemoPreset:
         assert result["status"] == "ready"
         assert order[0] == "precheck" and order[-1] == "consume"
         assert "model" in order
+
+
+# HRP-1239. Russian sample text as escapes - the public sync guard refuses
+# Cyrillic in this file: "Intake of the request", "Signing of the contract",
+# "A lawyer checks every counterparty contract before signing.", a bank
+# product's name, and "Code review in" / "Rollout to" for the mixed titles.
+_RU_INTAKE = "\u041f\u0440\u0438\u0451\u043c \u0437\u0430\u044f\u0432\u043a\u0438"
+_RU_SIGNING = (
+    "\u041f\u043e\u0434\u043f\u0438\u0441\u0430\u043d\u0438\u0435 "
+    "\u0434\u043e\u0433\u043e\u0432\u043e\u0440\u0430"
+)
+_RU_DESCRIPTION = (
+    "\u042e\u0440\u0438\u0441\u0442 \u043f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u0442 "
+    "\u043a\u0430\u0436\u0434\u044b\u0439 \u0434\u043e\u0433\u043e\u0432\u043e\u0440 "
+    "\u043a\u043e\u043d\u0442\u0440\u0430\u0433\u0435\u043d\u0442\u0430 "
+    "\u043f\u0435\u0440\u0435\u0434 "
+    "\u043f\u043e\u0434\u043f\u0438\u0441\u0430\u043d\u0438\u0435\u043c."
+)
+_RU_BANK = (
+    "\u0421\u0431\u0435\u0440\u0431\u0430\u043d\u043a "
+    "\u0411\u0438\u0437\u043d\u0435\u0441 \u041e\u043d\u043b\u0430\u0439\u043d"
+)
+_RU_REVIEW_IN = "\u0420\u0435\u0432\u044c\u044e \u043a\u043e\u0434\u0430 \u0432"
+_RU_ROLLOUT_TO = "\u0412\u044b\u043a\u043b\u0430\u0434\u043a\u0430 \u043d\u0430"
+_RU_SPLIT = {
+    "steps": [
+        {"title": _RU_INTAKE},
+        {"title": _RU_SIGNING, "description": _RU_DESCRIPTION},
+    ]
+}
+
+
+def _titled(*titles: str) -> list[dict]:
+    return [{"title": title} for title in titles]
+
+
+class TestContentLanguage:
+    """HRP-1239: the steps are written in the content language whatever
+    language the description is in. The split's answer is read by its
+    script; one in the wrong language is asked for once more, and a second
+    one ends the run as a failed generation - not charged, its hold
+    released, nothing cached."""
+
+    def test_the_check_reads_the_script_of_the_generated_text(self):
+        russian, english = _RU_SPLIT["steps"], _SPLIT["steps"]
+        assert tasks._in_content_language(english, "en")
+        assert tasks._in_content_language(english, "de")
+        assert tasks._in_content_language(russian, "ru")
+        assert not tasks._in_content_language(russian, "en")
+        assert not tasks._in_content_language(russian, "de")
+        assert not tasks._in_content_language(english, "ru")
+        # A name quoted from a Russian description is not a wrong language...
+        assert tasks._in_content_language(
+            _titled(
+                "Intake of the invoice",
+                "Approval by the CFO",
+                f"Payment via {_RU_BANK}",
+            ),
+            "en",
+        )
+        # Titles kept as the source words them, over translated
+        # descriptions, are the wrong language: the titles answer for
+        # themselves, however many letters the descriptions bring.
+        assert not tasks._in_content_language(
+            [
+                {
+                    "title": _RU_INTAKE,
+                    "description": "The request is registered and gets a number.",
+                },
+                {
+                    "title": _RU_SIGNING,
+                    "description": "A lawyer checks every counterparty contract first.",
+                },
+            ],
+            "en",
+        )
+        # ...nor are the Latin names and terms Russian is written with.
+        assert tasks._in_content_language(
+            _titled(
+                "Code review",
+                f"{_RU_REVIEW_IN} GitHub",
+                f"{_RU_ROLLOUT_TO} staging",
+            ),
+            "ru",
+        )
+        # A code the directive does not know is answered in English.
+        assert not tasks._in_content_language(russian, "fr")
+        # No letters, nothing to judge by.
+        assert tasks._in_content_language([], "en")
+        assert tasks._in_content_language(_titled("2026"), "ru")
+
+    def test_a_quoted_name_passes_an_untranslated_step_does_not(self):
+        """Review of HRP-1239: a breakdown has few descriptions, so one
+        sentence naming a Russian document is most of their letters; and a
+        few titles left in Russian among ten are no majority of anything."""
+        english = [f"Step {n} of the purchase" for n in range(10)]
+        assert tasks._in_content_language(
+            [
+                *_titled(*english[:-1]),
+                {"title": english[-1], "description": f"Per {_RU_BANK}."},
+            ],
+            "en",
+        )
+        partial = _titled(
+            *english[:6], _RU_INTAKE, _RU_SIGNING, _RU_INTAKE, _RU_SIGNING
+        )
+        assert not tasks._in_content_language(partial, "en")
+        assert not tasks._in_content_language(partial, "de")
+        # Steps that each carry a Latin name: a share of the whole still
+        # judges a short breakdown.
+        assert not tasks._in_content_language(
+            _titled(
+                f"{_RU_REVIEW_IN} GitHub",
+                f"{_RU_ROLLOUT_TO} staging",
+                f"{_RU_REVIEW_IN} GitLab",
+            ),
+            "en",
+        )
+        # Two steps, one of them naming a long Russian product, are not
+        # judged as a whole: the name would be most of their letters.
+        payroll = "1\u0421:\u0417\u0430\u0440\u043f\u043b\u0430\u0442\u0430 \u0438 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u043e\u043c"
+        assert tasks._in_content_language(
+            _titled(f"Export from {payroll}", "Pay"), "en"
+        )
+        assert tasks._in_content_language(
+            _titled(f"Export aus {payroll}", "Zahlen"), "de"
+        )
+        # A name of a few letters may stand for itself.
+        assert tasks._in_content_language(
+            _titled(*english[:9], "\u0421\u0431\u0435\u0440"), "en"
+        )
+        # Russian: English titles over one Russian description are English.
+        assert not tasks._in_content_language(
+            [
+                *_titled(*english[:-1]),
+                {"title": english[-1], "description": _RU_DESCRIPTION},
+            ],
+            "ru",
+        )
+
+    async def test_an_answer_in_the_wrong_language_is_asked_for_once_more(self):
+        """The reported case: the description in Russian, the content
+        language English, and the model mirrors the description."""
+        asked: list[str] = []
+        sampling: list[tuple] = []
+
+        async def _mirrors_then_obeys(prompt, *, schema=None, **kwargs):
+            asked.append(prompt)
+            sampling.append(
+                tuple(kwargs.get(k) for k in ("temperature", "top_p", "seed"))
+            )
+            return schema.model_validate(_RU_SPLIT if len(asked) == 1 else _SPLIT)
+
+        with patch.object(llm_client, "generate_json", side_effect=_mirrors_then_obeys):
+            steps = await tasks.split_steps(
+                {**CONTAINER, "description": _RU_DESCRIPTION},
+                primitives=PRIMITIVES,
+                tenant_settings=_settings(),
+                credentials=None,
+                model="claude-sonnet-5",
+                max_attempts=1,
+            )
+        assert [s["title"] for s in steps] == ["Intake", "Signature"]
+        first, second = asked
+        # Every split is told the description's language decides nothing;
+        # only the retry is told what was wrong with the answer before it.
+        assert first.endswith(prompts.LANGUAGE_RULE)
+        assert second == f"{first}\n\n{prompts.LANGUAGE_CORRECTION}"
+        # The retry samples: pinned, it would come back the same.
+        assert sampling[0] == (0.0, 1.0, 0)
+        assert sampling[1] != sampling[0]
+
+    async def test_no_retry_for_a_run_nobody_wants_any_more(self):
+        calls: list[str] = []
+
+        async def _mirrors(prompt, *, schema=None, **_kwargs):
+            calls.append(prompt)
+            return schema.model_validate(_RU_SPLIT)
+
+        async def _cancelled() -> bool:
+            return False
+
+        with (
+            patch.object(llm_client, "generate_json", side_effect=_mirrors),
+            pytest.raises(RuntimeError, match="cancelled"),
+        ):
+            await tasks.split_steps(
+                CONTAINER,
+                primitives=PRIMITIVES,
+                tenant_settings=_settings(),
+                credentials=None,
+                model="claude-sonnet-5",
+                max_attempts=1,
+                still_wanted=_cancelled,
+            )
+        assert len(calls) == 1
+
+    async def _run_retried(
+        self, db, tenant, user, session_factory, answers, monkeypatch
+    ):
+        """A run whose split answers ``answers`` in turn; what was charged,
+        how many splits were asked for, and what went to the cache."""
+        consumed: list[str] = []
+        splits: list[str] = []
+        remembered: list[dict] = []
+
+        async def _consume(*_a, **_k):
+            consumed.append("x")
+
+        async def _remember(_key, payload):
+            remembered.append(payload)
+
+        def _split_in_turn(prompt, *, schema=None, **kwargs):
+            if schema is not DecompositionSchema:
+                return _answer(prompt, schema=schema, **kwargs)
+            splits.append(prompt)
+            return schema.model_validate(answers[len(splits) - 1])
+
+        monkeypatch.setattr(tasks, "_remember_breakdown", _remember)
+        sess = await _session(db, tenant, user, f"{_RU_DESCRIPTION} {uuid.uuid4()}")
+        with (
+            patch.object(llm_client, "generate_json", side_effect=_split_in_turn),
+            patch.object(billing_hooks, "consume_action", side_effect=_consume),
+        ):
+            result = await tasks.execute_session(session_factory, sess.id)
+        await db.refresh(sess)
+        return sess, result, consumed, splits, remembered
+
+    async def test_the_retried_answer_is_delivered_charged_once_and_kept(
+        self, db, tenant, user, seeded, session_factory, monkeypatch
+    ):
+        sess, result, consumed, splits, remembered = await self._run_retried(
+            db, tenant, user, session_factory, [_RU_SPLIT, _SPLIT], monkeypatch
+        )
+        assert result["status"] == "ready"
+        assert len(splits) == 2
+        assert consumed == ["x"]  # one breakdown, however many calls it took
+        assert [s["title"] for s in sess.payload["steps"]] == ["Intake", "Signature"]
+        # The answer that passed serves the next run on the same text.
+        assert remembered == [sess.payload]
+
+    async def test_a_russian_workspace_gets_its_steps_in_russian(
+        self, db, tenant, user, seeded, session_factory, monkeypatch
+    ):
+        db.add(TenantAISettings(tenant_id=tenant.id, content_language="ru"))
+        await db.commit()
+        sess, result, consumed, splits, _ = await self._run_retried(
+            db, tenant, user, session_factory, [_SPLIT, _RU_SPLIT], monkeypatch
+        )
+        assert result["status"] == "ready"
+        assert len(splits) == 2
+        assert consumed == ["x"]
+        assert [s["title"] for s in sess.payload["steps"]] == [_RU_INTAKE, _RU_SIGNING]
+
+    async def test_a_run_cancelled_during_the_answer_is_not_asked_again(
+        self, db, tenant, user, seeded, session_factory, monkeypatch
+    ):
+        splits: list[str] = []
+        sess = await _session(db, tenant, user, f"{_RU_DESCRIPTION} {uuid.uuid4()}")
+
+        async def _cancelled_meanwhile(prompt, *, schema=None, **_kwargs):
+            splits.append(prompt)
+            async with session_factory() as other:
+                await service.cancel_session(other, tenant.id, sess.id)
+            return schema.model_validate(_RU_SPLIT)
+
+        with patch.object(
+            llm_client, "generate_json", side_effect=_cancelled_meanwhile
+        ):
+            result = await tasks.execute_session(session_factory, sess.id)
+        assert result == {"status": "cancelled", "session_id": str(sess.id)}
+        assert len(splits) == 1
+
+    async def test_a_second_answer_in_the_wrong_language_ends_the_run_unbilled(
+        self, db, tenant, user, seeded, session_factory, monkeypatch
+    ):
+        consumed: list[str] = []
+        released: list[dict] = []
+        remembered: list[dict] = []
+        asked: list[type] = []
+
+        async def _consume(*_a, **_k):
+            consumed.append("x")
+
+        async def _release(_db, _tenant_id, **kw):
+            released.append(kw)
+            return 1
+
+        async def _remember(_key, payload):
+            remembered.append(payload)
+
+        def _mirrors(*_a, schema=None, **_k):
+            asked.append(schema)
+            return schema.model_validate(_RU_SPLIT)
+
+        monkeypatch.setattr(tasks, "_remember_breakdown", _remember)
+        sess = await _session(db, tenant, user, f"{_RU_DESCRIPTION} {uuid.uuid4()}")
+        with (
+            patch.object(llm_client, "generate_json", side_effect=_mirrors),
+            patch.object(billing_hooks, "consume_action", side_effect=_consume),
+            patch.object(billing_hooks, "release_action", side_effect=_release),
+        ):
+            result = await tasks.execute_session(session_factory, sess.id)
+        assert result == {
+            "status": "error",
+            "session_id": str(sess.id),
+            "error_code": "wrong_language",
+        }
+        # The answer and its one retry; steps nobody will see are not classified.
+        assert asked == [DecompositionSchema] * 2
+        assert consumed == []
+        assert len(released) == 1  # the hold of the run goes
+        assert remembered == []
+        await db.refresh(sess)
+        assert (sess.status, sess.phase, sess.payload) == ("error", None, None)
+        assert sess.error_code == "wrong_language"
+        assert sess.error_message == "The steps came back in the wrong language"
+        # The container is free for the next attempt.
+        await service.create_session(db, tenant.id, user.id, sess.container_id)

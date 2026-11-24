@@ -62,6 +62,8 @@ test.describe("Coverage — AI decomposition UI", () => {
     await expect(page.getByTestId("coverage-btn-submit")).toBeDisabled();
 
     await page.goto(`/coverage/${stepContainerId}`);
+    // HRP-1228: the page's actions sit behind a kebab.
+    await page.getByTestId("coverage-btn-actions").click();
     await page.getByTestId("coverage-btn-edit").click();
     await page.getByTestId("coverage-edit-textarea-description").fill("");
     await expect(page.getByTestId("coverage-btn-edit-save")).toBeDisabled();

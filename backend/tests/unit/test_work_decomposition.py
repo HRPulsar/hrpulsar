@@ -839,6 +839,7 @@ class TestApply:
             db, tenant.id, sess.id, idempotency_key="k1", force=True
         )
         assert len(result["created_steps"]) == 3
+        assert result["container_id"] == str(c.id)
         steps = await service.list_steps(db, tenant.id, c.id)
         assert [s["position"] for s in steps] == [1, 2, 3]
         assert {s["state"] for s in steps} == {"system_suggested"}

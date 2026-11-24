@@ -216,6 +216,8 @@ class TestSentryPiiFilter:
                     "last_name": "Doe",
                     "phone": "+1234567890",
                     "password": "secret123",
+                    "new_password": "secret456",
+                    "current_password": "secret789",
                     "company_name": "Acme",
                 }
             }
@@ -228,7 +230,32 @@ class TestSentryPiiFilter:
         assert data["last_name"] == "[Filtered]"
         assert data["phone"] == "[Filtered]"
         assert data["password"] == "[Filtered]"
+        assert data["new_password"] == "[Filtered]"
+        assert data["current_password"] == "[Filtered]"
         assert data["company_name"] == "Acme"  # not PII
+
+    def test_a_stack_trace_carries_no_password(self):
+        """HRP-1161 review: an event would carry every frame's variables,
+        FastAPI's raw request body among them - so it carries none. Should
+        they come back, the names go to the SDK's scrubber and a request
+        model shows no secret in its repr."""
+        from app.core.sentry import init_sentry
+        from app.modules.auth.schemas import MagicLoginRequest
+
+        with (
+            patch("app.core.sentry.settings") as mock_settings,
+            patch("sentry_sdk.init") as sdk_init,
+        ):
+            mock_settings.sentry_dsn = "https://key@example.invalid/1"
+            init_sentry()
+        assert sdk_init.call_args.kwargs["include_local_variables"] is False
+        scrubber = sdk_init.call_args.kwargs["event_scrubber"]
+        data = MagicLoginRequest(token="the-link", new_password="secret-pw-1")
+        frame = {"vars": {"new_password": "secret-pw-1", "data": repr(data)}}
+        event = {"exception": {"values": [{"stacktrace": {"frames": [frame]}}]}}
+        scrubber.scrub_event(event)
+        assert "secret-pw-1" not in str(event)
+        assert "the-link" not in str(event)
 
     def test_strip_pii_from_user_context(self):
         from app.core.sentry import _strip_pii

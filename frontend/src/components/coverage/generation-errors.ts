@@ -11,6 +11,7 @@ const ERROR_KEYS: Record<string, string> = {
   overload: "genErrorOverload",
   insufficient_data: "genErrorInsufficientData",
   parse_error: "genErrorParse",
+  wrong_language: "genErrorLanguage",
   reaped_stuck: "genErrorNotFinished",
   work_skill_not_applicable: "genErrorNotApplicable",
   work_skill_pack_unavailable: "genErrorPackUnavailable",

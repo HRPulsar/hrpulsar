@@ -26,6 +26,7 @@ type Starts = {
 
 const env = vi.hoisted(() => ({
   pathname: "/coverage",
+  search: "",
   persona: "admin" as "admin" | "employee",
   /** What `POST /demo/guide` answers; null fails the request. */
   starts: null as Starts | null,
@@ -34,6 +35,7 @@ const env = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({
   usePathname: () => env.pathname,
+  useSearchParams: () => new URLSearchParams(env.search),
   useRouter: () => ({ push: env.push }),
 }));
 vi.mock("@/context/auth-context", () => ({
@@ -49,6 +51,8 @@ vi.mock("@/lib/demo", () => ({
 }));
 
 import { DemoGuide } from "@/components/dashboard/demo-guide";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { MUTATION_EVENT, type MutationEventDetail } from "@/lib/api";
 import { chooseDemoGuide } from "@/lib/demo";
 
@@ -91,17 +95,19 @@ function reload() {
 }
 
 /** A page change: the old page's buttons go with it. */
-async function goTo(pathname: string) {
-  env.pathname = pathname;
+async function goTo(href: string) {
+  [env.pathname, env.search = ""] = href.split("?");
   page.replaceChildren();
   await act(async () => render());
 }
 
 /** A button of the current page, put on screen the way a list that has
- * loaded or a tab that was opened does it: after the strip rendered. */
-async function show(testId: string) {
+ * loaded or a tab that was opened does it: after the strip rendered.
+ * `off` is the kit's mark of a control that cannot be pressed. */
+async function show(testId: string, off = false) {
   const el = document.createElement("button");
   el.dataset.testid = testId;
+  if (off) el.dataset.disabled = "";
   await act(async () => {
     page.appendChild(el);
   });
@@ -147,6 +153,7 @@ function mutate(detail: Partial<MutationEventDetail>) {
 beforeEach(() => {
   storage.clear();
   env.pathname = "/coverage";
+  env.search = "";
   env.persona = "admin";
   env.starts = SEEDED;
   env.push.mockClear();
@@ -429,17 +436,171 @@ describe("the route strip", () => {
       "Step 2 of 2: Open the To do tab, select a step under Nobody does this yet, " +
         "click Open hire need and confirm.Go",
     );
-    // The fresh breakdown may hold no such step: "Go" knows a process
-    // that does - until this one shows the button.
-    expect(go()).toBe(GAP);
-    await show("coverage-gap-btn-hire-need");
-    expect(go()).toBeNull();
-    expect(ringed()).toEqual(["coverage-gap-btn-hire-need"]);
+    // "Go" opens To do of the process just broken down (HRP-1234): the
+    // visitor stays with the steps they made.
+    expect(go()).toBe(`${EMPTY}?tab=gaps`);
+    // From anywhere else it is the way back to that tab, too...
+    await goTo(PROCESS);
+    expect(go()).toBe(`${EMPTY}?tab=gaps`);
+    // ...but on the prepared process "Go" stays there: it never sends the
+    // visitor to the other process and back.
+    for (const tab of ["", "?tab=coverage", "?tab=steps"]) {
+      await goTo(`${GAP}${tab}`);
+      expect(go()).toBe(`${GAP}?tab=gaps`);
+    }
 
-    await goTo(GAP);
+    // On that tab the page is open: nowhere to go while the list loads...
+    await goTo(`${EMPTY}?tab=gaps`);
     expect(go()).toBeNull();
+    // ...and once it has loaded with no step to hand over - a fresh
+    // breakdown promises none - "Go" knows a process that has one.
+    await show("coverage-gaps-empty");
+    expect(go()).toBe(`${GAP}?tab=gaps`);
+    await goTo(`${GAP}?tab=gaps`);
+    expect(go()).toBeNull();
+    await show("coverage-todo-no-owner");
+    expect(go()).toBeNull();
+
+    // Nothing checked: the button is off. The ring follows the step's own
+    // order - a step to check (not one handed over already), the button
+    // once it is on, the window's confirm.
+    const hire = await show("coverage-gap-btn-hire-need", true);
+    await show("coverage-gap-row-s1-checkbox", true);
+    expect(ringed()).toEqual([]);
+    const box = await show("coverage-gap-row-s2-checkbox");
+    await show("coverage-gap-row-s3-checkbox");
+    expect(ringed()).toEqual(["coverage-gap-row-s2-checkbox"]);
+    await act(async () => {
+      box.dataset.checked = "";
+      hire.removeAttribute("data-disabled");
+    });
+    expect(ringed()).toEqual(["coverage-gap-btn-hire-need"]);
+    // Off again while the tab is busy: the ring is not on the box
+    // already checked.
+    await act(async () => {
+      hire.dataset.disabled = "";
+    });
+    expect(ringed()).toEqual(["coverage-gap-row-s3-checkbox"]);
+    await act(async () => hire.removeAttribute("data-disabled"));
+    await show("coverage-btn-hire-submit");
+    expect(ringed()).toEqual(["coverage-btn-hire-submit"]);
+
     mutate({ path: "/work/containers/c1/gaps/hire-need" });
     expect(strip()?.dataset.step).toBe("done");
+    expect(strip()?.textContent).toBe("Done — that's the whole route. Keep exploring the demo.");
+  });
+
+  it("the kit marks a control that is off the way the hire step reads it", async () => {
+    const kit = createRoot(page);
+    await act(async () =>
+      kit.render(
+        <>
+          <Button disabled data-testid="off" />
+          <Checkbox disabled data-testid="off-box" />
+          <Button data-testid="on" />
+          <Checkbox defaultChecked data-testid="on-box" />
+        </>,
+      ),
+    );
+    expect(
+      ["off", "off-box", "on", "on-box"].map((id) => byTestId(id)!.hasAttribute("data-disabled")),
+    ).toEqual([true, true, false, false]);
+    expect(
+      ["off-box", "on-box"].map((id) => byTestId(id)!.hasAttribute("data-checked")),
+    ).toEqual([false, true]);
+    act(() => kit.unmount());
+  });
+
+  it("with a step to hand over in the process just broken down, Go leads nowhere else", async () => {
+    render();
+    await pick("coverage");
+    mutate({ path: "/work/decomposition/sessions/s1/apply" });
+    await goTo(`${EMPTY}?tab=gaps`);
+    await show("coverage-todo-no-owner");
+    await show("coverage-gap-row-s1-checkbox");
+    expect(ringed()).toEqual(["coverage-gap-row-s1-checkbox"]);
+    expect(go()).toBeNull();
+  });
+
+  it("Go stays with the process actually broken down, not the anchor", async () => {
+    render();
+    await pick("coverage");
+    await goTo(PROCESS);
+    mutate({ path: "/work/decomposition/sessions/s1/apply" });
+    expect(strip()?.dataset.step).toBe("2");
+    expect(go()).toBe(`${PROCESS}?tab=gaps`);
+    await goTo(EMPTY);
+    expect(go()).toBe(`${PROCESS}?tab=gaps`);
+    // Nothing to hand over there: on to the prepared process, and no
+    // further.
+    await goTo(`${PROCESS}?tab=gaps`);
+    await show("coverage-gaps-empty");
+    expect(go()).toBe(`${GAP}?tab=gaps`);
+    await goTo(`${GAP}?tab=gaps`);
+    await show("coverage-gaps-empty");
+    expect(go()).toBeNull();
+  });
+
+  it("Go follows a second breakdown made on the hire step", async () => {
+    render();
+    await pick("coverage");
+    await goTo(PROCESS);
+    mutate({ path: "/work/decomposition/sessions/s1/apply" });
+    const another = "/coverage/d0d0d0d0-0000-4000-8000-000000000006";
+    await goTo(another);
+    mutate({ path: "/work/decomposition/sessions/s2/apply" });
+    expect(strip()?.dataset.step).toBe("2");
+    expect(go()).toBe(`${another}?tab=gaps`);
+  });
+
+  it("Go leads to the process the answer names, not the page open when it came", async () => {
+    render();
+    await pick("coverage");
+    await goTo("/coverage");
+    mutate({
+      path: "/work/decomposition/sessions/s1/apply",
+      data: { created_steps: [], container_id: PROCESS.split("/").at(-1) },
+    });
+    expect(strip()?.dataset.step).toBe("2");
+    expect(go()).toBe(`${PROCESS}?tab=gaps`);
+  });
+
+  it("broken down on the prepared process, Go never leads to the anchor", async () => {
+    render();
+    await pick("coverage");
+    await goTo(GAP);
+    mutate({ path: "/work/decomposition/sessions/s1/apply" });
+    expect(go()).toBe(`${GAP}?tab=gaps`);
+    await goTo(EMPTY);
+    expect(go()).toBe(`${GAP}?tab=gaps`);
+    await goTo(`${GAP}?tab=gaps`);
+    await show("coverage-gaps-empty");
+    expect(go()).toBeNull();
+  });
+
+  it("the process broken down is gone: Go leads to the prepared one", async () => {
+    render();
+    await pick("coverage");
+    mutate({ path: "/work/decomposition/sessions/s1/apply" });
+    await goTo(`${EMPTY}?tab=gaps`);
+    expect(go()).toBeNull();
+    await show("coverage-detail-not-found");
+    expect(go()).toBe(`${GAP}?tab=gaps`);
+  });
+
+  it("with no page to go back to, Go never links to the tab it stands on", async () => {
+    env.starts = { assessment_id: null, process_id: null, gap_process_id: id(GAP) };
+    render();
+    await pick("coverage");
+    // Reached on the list, the hire step has no process to stay with.
+    mutate({ path: "/work/decomposition/sessions/s1/apply" });
+    expect(strip()?.textContent).toContain("Step 3 of 3:");
+    expect(go()).toBe(`${GAP}?tab=gaps`);
+    await goTo(GAP);
+    expect(go()).toBe(`${GAP}?tab=gaps`);
+    await goTo(`${GAP}?tab=gaps`);
+    await show("coverage-gaps-empty");
+    expect(go()).toBeNull();
   });
 
   it("a hire need straight away skips the breakdown", async () => {

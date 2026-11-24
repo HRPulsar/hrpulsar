@@ -7,7 +7,7 @@
 import { NextIntlClientProvider } from "next-intl";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import enMessages from "../../messages/en.json";
 import type { Coverage, CoverageStep, Gap, WorkContainer } from "@/lib/api/work";
@@ -18,17 +18,40 @@ const listPrimitives = vi.fn();
 const latestDecomposition = vi.fn();
 const getCoverage = vi.fn();
 const listGaps = vi.fn();
+const updateContainer = vi.fn();
+const deleteContainer = vi.fn();
+const startDecomposition = vi.fn();
+const push = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "p-1" }),
-  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/coverage/p-1",
+  // The open tab rides in `?tab=` (HRP-1234), written through the History API.
+  useSearchParams: () => new URLSearchParams(window.location.search),
+  useRouter: () => ({ push }),
 }));
 vi.mock("@/lib/api/work", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/work")>()),
-  workApi: { getContainer, listSteps, listPrimitives, latestDecomposition, getCoverage, listGaps },
+  workApi: {
+    getContainer,
+    listSteps,
+    listPrimitives,
+    latestDecomposition,
+    getCoverage,
+    listGaps,
+    updateContainer,
+    deleteContainer,
+    startDecomposition,
+  },
 }));
 vi.mock("@/context/auth-context", () => ({ useAuth: () => ({ user: null }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+// The access dialog reads the server by itself; here it only changes the owner.
+vi.mock("@/components/coverage/access-dialog", () => ({
+  AccessDialog: ({ onOwnerChanged }: { onOwnerChanged: () => void }) => (
+    <button type="button" data-testid="access-dialog-stub" onClick={onOwnerChanged} />
+  ),
+}));
 
 const { default: ContainerPage } = await import("@/app/(dashboard)/coverage/[id]/page");
 
@@ -104,12 +127,17 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/coverage/p-1");
   getContainer.mockReset().mockResolvedValue(CONTAINER);
   listSteps.mockReset().mockResolvedValue([]);
   listPrimitives.mockReset().mockResolvedValue([]);
   latestDecomposition.mockReset().mockResolvedValue(null);
   getCoverage.mockReset();
   listGaps.mockReset();
+  updateContainer.mockReset();
+  deleteContainer.mockReset();
+  startDecomposition.mockReset();
+  push.mockReset();
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -131,6 +159,84 @@ async function render() {
     );
   });
 }
+
+/** A click on a tab writes the address; the router, which follows the
+ * History API, then renders the page again. */
+async function open(tabId: string) {
+  await act(async () =>
+    document.querySelector<HTMLElement>(`[data-testid="coverage-tab-${tabId}"]`)!.click(),
+  );
+  await render();
+}
+
+it("opens the tab the address names, so a link can lead to To do", async () => {
+  window.history.replaceState(null, "", "?tab=gaps");
+  getCoverage.mockResolvedValue(coverageOf([row("a", "no_owner")]));
+  listGaps.mockResolvedValue([gap("a")]);
+  await render();
+
+  expect(tab().dataset.state).toBe("active");
+  expect(document.querySelector('[data-testid="coverage-todo-no-owner"]')).not.toBeNull();
+  // The Coverage tab never mounted: the page read the coverage itself.
+  expect(document.querySelector('[data-testid="coverage-btn-what-next"]')).not.toBeNull();
+
+  await open("steps");
+  expect(window.location.search).toBe("?tab=steps");
+  expect(tab().dataset.state).toBe("inactive");
+});
+
+// HRP-1229: the goal and the description sit in two cards, the goal first,
+// and a long text shows its beginning until it is unfolded.
+it("shows the goal and the description side by side and folds a long one", async () => {
+  const long = "Every month Finance closes the books. ".repeat(12).trim();
+  getContainer.mockResolvedValue({ ...CONTAINER, goal: "Close in five days", description: long });
+  getCoverage.mockResolvedValue(coverageOf([]));
+  await render();
+
+  const goal = document.querySelector<HTMLElement>('[data-testid="coverage-detail-goal"]')!;
+  const description = document.querySelector<HTMLElement>(
+    '[data-testid="coverage-detail-description"]',
+  )!;
+  expect(goal.textContent).toBe("GoalClose in five days");
+  expect(goal.compareDocumentPosition(description) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(goal.querySelector("button")).toBeNull();
+
+  const toggle = description.querySelector<HTMLElement>(
+    '[data-testid="coverage-detail-description-toggle"]',
+  )!;
+  expect(description.textContent).not.toContain(long);
+  expect(toggle.textContent).toBe("Show more");
+  await act(async () => toggle.click());
+  expect(description.textContent).toContain(long);
+  expect(toggle.textContent).toBe("Show less");
+});
+
+it("folds a description that is short in characters and long in lines", async () => {
+  const list = ["one", "two", "three", "four", "five", "six"].join("\n");
+  getContainer.mockResolvedValue({ ...CONTAINER, description: list });
+  getCoverage.mockResolvedValue(coverageOf([]));
+  await render();
+
+  const description = document.querySelector<HTMLElement>(
+    '[data-testid="coverage-detail-description"]',
+  )!;
+  expect(description.querySelector("p")!.textContent).toBe("one\ntwo\nthree\nfour…");
+  await act(async () =>
+    description
+      .querySelector<HTMLElement>('[data-testid="coverage-detail-description-toggle"]')!
+      .click(),
+  );
+  expect(description.querySelector("p")!.textContent).toBe(list);
+});
+
+it("opened on Steps, still counts To do and offers What's next", async () => {
+  window.history.replaceState(null, "", "?tab=steps");
+  getCoverage.mockResolvedValue(coverageOf([row("a", "unassigned"), row("b", "no_owner")]));
+  await render();
+
+  expect(tab().textContent).toBe("To do (2)");
+  expect(document.querySelector('[data-testid="coverage-btn-what-next"]')).not.toBeNull();
+});
 
 it("counts the steps To do lists from the coverage, before the tab is opened", async () => {
   getCoverage.mockResolvedValue(
@@ -162,10 +268,72 @@ it("follows the tab's own reload, and says (0) when nothing is left", async () =
   await render();
   expect(tab().textContent).toBe("To do (2)");
 
-  await act(async () => tab().click());
+  await open("gaps");
   expect(tab().textContent).toBe("To do (1)");
 
   getCoverage.mockResolvedValue(coverageOf([row("a", null)]));
-  await act(async () => document.querySelector<HTMLElement>('[data-testid="coverage-tab-coverage"]')!.click());
+  await open("coverage");
   expect(tab().textContent).toBe("To do (0)");
+});
+
+// HRP-1228: the page's own kebab - what it archived shows at once, a
+// delete leaves for the list, and neither a breakdown nor an archive starts
+// while the other is on its way.
+describe("the kebab on the page", () => {
+  const MANAGED = { ...CONTAINER, my_access: "manage" } as WorkContainer;
+  const byId = (testId: string) =>
+    document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+  const off = (testId: string) => byId(testId)!.hasAttribute("data-disabled");
+
+  beforeEach(() => {
+    getContainer.mockResolvedValue(MANAGED);
+    getCoverage.mockResolvedValue(coverageOf([]));
+  });
+
+  async function pick(item: string) {
+    await act(async () => byId("coverage-btn-actions")!.click());
+    await act(async () => byId(`coverage-btn-${item}`)!.click());
+  }
+
+  it("holds Generate while archiving, then shows the process archived", async () => {
+    let answer!: (archived: WorkContainer) => void;
+    updateContainer.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    await render();
+
+    await pick("archive");
+    expect(off("coverage-btn-generate")).toBe(true);
+
+    await act(async () => answer({ ...MANAGED, status: "archived" }));
+    expect(byId("coverage-detail-status")!.dataset.status).toBe("archived");
+    expect(byId("coverage-btn-generate")).toBeNull();
+  });
+
+  it("keeps Archive and Delete off while a breakdown starts", async () => {
+    startDecomposition.mockReturnValue(new Promise(() => {}));
+    await render();
+
+    await act(async () => byId("coverage-btn-generate")!.click());
+    await act(async () => byId("coverage-btn-actions")!.click());
+    expect(off("coverage-btn-archive")).toBe(true);
+    expect(off("coverage-btn-delete")).toBe(true);
+  });
+
+  it("leaves for the list once the process is deleted", async () => {
+    deleteContainer.mockResolvedValue(undefined);
+    await render();
+
+    await pick("delete");
+    await act(async () => byId("coverage-btn-delete-confirm")!.click());
+    expect(deleteContainer).toHaveBeenCalledExactlyOnceWith("p-1");
+    expect(push).toHaveBeenCalledExactlyOnceWith("/coverage");
+  });
+
+  it("reads the process again once its owner changed", async () => {
+    await render();
+    expect(getContainer).toHaveBeenCalledOnce();
+
+    await pick("access");
+    await act(async () => byId("access-dialog-stub")!.click());
+    expect(getContainer).toHaveBeenCalledTimes(2);
+  });
 });

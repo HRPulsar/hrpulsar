@@ -29,6 +29,10 @@ describe("generationErrorText", () => {
     expect(generationErrorText(t, "parse_error", "en text", "generationFailed")).toBe(
       coverage.genErrorParse,
     );
+    // HRP-1239: steps that came back in the wrong language, twice.
+    expect(generationErrorText(t, "wrong_language", "en text", "generationFailed")).toBe(
+      coverage.genErrorLanguage,
+    );
   });
 
   it("reads an unknown code as the surface's generic failure", () => {
@@ -54,6 +58,7 @@ describe("generationErrorText", () => {
       "genErrorOverload",
       "genErrorInsufficientData",
       "genErrorParse",
+      "genErrorLanguage",
       "genErrorNotFinished",
       "genErrorNotApplicable",
       "genErrorPackUnavailable",

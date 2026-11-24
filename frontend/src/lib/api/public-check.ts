@@ -260,8 +260,9 @@ export interface SavedCheck {
   created_at: string;
   title: string;
   status: CheckStatus;
-  /** The headline share of a ready result with percentages. */
-  share_moves: number | null;
+  /** The shares of a ready result with percentages: all three, so the row
+   * rounds its headline as the result does (HRP-1148). */
+  shares: CheckResult["shares"];
   expires_at: string | null;
   /** A process of a workspace already (HRP-927). */
   moved: boolean;

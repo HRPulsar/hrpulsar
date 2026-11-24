@@ -73,7 +73,7 @@ Centralized management tools for overseeing all organizations on the platform.
 
 - Dashboard with platform-wide metrics — total tenants, users, employees, credit usage
 - Organization lifecycle management — create, configure, deactivate
-- Signup moderation queue — review and approve or decline new account registrations right in the admin panel; approval provisions the workspace and emails a one-time login link
+- Signup moderation queue — review and approve or decline new account registrations right in the admin panel; approval provisions the workspace and emails a one-time login link, where the applicant sets a password on their first sign-in
 - Credit allocation and bonus grants with audit trail
 - Support access — securely log in as an organization admin for debugging
 - AI model curation — newly released provider models are discovered automatically every day and reviewed by the platform team before they become selectable, so pricing is always explicit and predictable

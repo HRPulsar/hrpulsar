@@ -15,10 +15,11 @@ import enMessages from "../../messages/en.json";
 import type { WorkContainer } from "@/lib/api/work";
 
 const listContainers = vi.fn();
+const updateContainer = vi.fn();
 
 vi.mock("@/lib/api/work", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/work")>()),
-  workApi: { listContainers },
+  workApi: { listContainers, updateContainer },
 }));
 vi.mock("@/hooks/use-permissions", () => ({
   usePermissions: () => ({ canCreateCoverage: false }),
@@ -95,12 +96,65 @@ it("names the owner with position and status, or says there is none", async () =
 });
 
 // HRP-1194: the column says what its percent counts.
-it("explains the Already automated column under its header", async () => {
+it("explains the Already automated column behind a question mark by its header", async () => {
   await render([ROW]);
 
-  expect(byId("coverage-col-automated-hint")!.textContent).toBe(
+  expect(byId("coverage-col-automated-hint")!.getAttribute("aria-label")).toBe(
     enMessages.coverage.colAutomatedHint,
   );
+});
+
+// HRP-1207 (1): what the section does is said once, by the list.
+it("says how it works in a window opened from the list", async () => {
+  await render([ROW]);
+  expect(byId("coverage-how-dialog")).toBeNull();
+
+  await act(async () => byId("coverage-btn-how")!.click());
+  expect(byId("coverage-how-dialog")!.textContent).toContain(
+    enMessages.coverage.howItWorksText,
+  );
+
+  await act(async () => byId("coverage-how-btn-ok")!.click());
+  expect(byId("coverage-how-dialog")).toBeNull();
+});
+
+// HRP-1228: a row's actions sit behind a kebab, each by what the caller
+// may do with that process - and a reader has no kebab at all.
+it("puts a row's actions behind a kebab, by the caller's access", async () => {
+  await render([
+    ROW,
+    { ...ROW, id: "c-edit", my_access: "edit" },
+    { ...ROW, id: "c-read", my_access: "read" },
+    { ...ROW, id: "c-old", status: "archived" },
+  ]);
+  const items = async (row: string) => {
+    await act(async () => byId(`coverage-row-${row}-btn-actions`)!.click());
+    const shown = ["edit", "access", "archive", "delete"].filter((name) =>
+      byId(`coverage-row-${row}-btn-${name}`),
+    );
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    return shown;
+  };
+
+  // The kebab's column has a name for a screen reader.
+  expect([...document.querySelectorAll("th")].at(-1)!.textContent).toBe("Actions");
+  expect(byId("coverage-row-c-read-btn-actions")).toBeNull();
+  expect(await items("c-1")).toEqual(["edit", "access", "archive", "delete"]);
+  expect(await items("c-edit")).toEqual(["edit", "access"]);
+  expect(await items("c-old")).toEqual(["access", "delete"]);
+});
+
+it("archives from the row and reads the list again", async () => {
+  await render([ROW]);
+  updateContainer.mockResolvedValue({ ...ROW, status: "archived" });
+
+  await act(async () => byId("coverage-row-c-1-btn-actions")!.click());
+  await act(async () => byId("coverage-row-c-1-btn-archive")!.click());
+
+  expect(updateContainer).toHaveBeenCalledExactlyOnceWith("c-1", { status: "archived" });
+  expect(listContainers).toHaveBeenCalledTimes(2);
 });
 
 async function type(el: HTMLInputElement, value: string) {

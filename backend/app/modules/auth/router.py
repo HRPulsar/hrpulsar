@@ -223,7 +223,7 @@ async def magic_login(
     treat both as "you're signed in now" and rely on the same
     storage-of-tokens path.
     """
-    return await service.magic_login(db, data.token)
+    return await service.magic_login(db, data.token, data.new_password)
 
 
 @router.post("/auth/refresh", response_model=TokenResponse)

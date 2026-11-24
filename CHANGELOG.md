@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.6.4] - 2026-11-24
+
+### Changed
+- Coverage: the open tab of a process is part of the address, so a link opens it straight on Steps or To do (HRP-1234)
+- Coverage: "Already automated" in the list explains its figure behind a "?", and the line on a process says more briefly what it counts (HRP-1194)
+- Coverage: "How it works" by the list says in one window what the section does; on a process the hours button sits above the summary, the note on missing shares inside it, the Steps tab shows its count, "Steps (N)", and Download all says in one line that no skill is ready yet (HRP-1207, HRP-1231)
+- Coverage: Edit, Access, Archive and Delete of a process or a project sit behind a kebab, on its page and on its row of the list (HRP-1228)
+- Coverage: the goal and the description show side by side under the heading, a long one folded behind "Show more" (HRP-1229)
+- Demo: the banner reads "Your session resets in ..." and no longer shows the credits left, which the side menu already does (HRP-1160)
+
+### Removed
+- Coverage: the paragraph on who covers each step is off the Coverage tab (HRP-1207)
+
+### Fixed
+- Coverage: the three cards under the summary show the same percentages as the chart, adding up to 100, and so does the result of the public check (HRP-1148)
+- Demo: on the Coverage route "Go" opens the To do tab of the process just broken down, at the steps nobody does, the ring leads from a step's checkbox to Open hire need instead of sitting on the button while it is off, and the route ends on "Keep exploring the demo" (HRP-1234)
+- Sign-up, sign-in and password forms answer a password longer than 72 bytes with a clear message instead of a server error (HRP-1161)
+- Coverage: a breakdown is written in the content language set in AI settings - English unless the workspace chose another - whatever language the description is in; steps that come back in another alphabet are generated once more, and a second miss ends the generation as failed (HRP-1239)
+
 ## [2.6.3] - 2026-11-20
 
 ### Changed

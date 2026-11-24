@@ -32,7 +32,7 @@ import logging
 import math
 import unicodedata
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeGuard
 
@@ -319,11 +319,10 @@ def _failure_message(exc: RuntimeError, phase: str) -> tuple[str, str]:
         code,
         exception_summary(exc.__cause__ or exc),
     )
-    message = (
-        "Model output exceeded the output-token budget"
-        if code == "output_truncated"
-        else f"Decomposition failed while {phase}"
-    )
+    message = {
+        "output_truncated": "Model output exceeded the output-token budget",
+        "wrong_language": "The steps came back in the wrong language",
+    }.get(code, f"Decomposition failed while {phase}")
     return code, message
 
 
@@ -340,6 +339,83 @@ def _language(tenant_settings: Any) -> str:
     return ai_settings_service.build_language_directive(tenant_settings)
 
 
+# HRP-1239: the steps are checked against the content language by the script
+# they are written in - the share of Cyrillic among the letters of their
+# titles and descriptions - whatever the prompt asked for and whatever
+# language the description is in. A generated text quotes names from the
+# description, so the bar is where the other script takes over, not where
+# it shows up.
+# - English or German fails when a title or a description is Cyrillic alone
+#   - a step left untranslated among translated ones, often too few for a
+#   share to catch - or when Cyrillic is the majority of the letters: of all
+#   of them, of the titles, of the descriptions. A share is taken only where
+#   one long quoted name is unlikely to be most of the letters: the whole
+#   from three steps and 40 letters, the titles or the descriptions on their
+#   own from 100 - a breakdown's few descriptions may be one sentence naming
+#   a Russian document. Under those floors Russian steps that each carry a
+#   Latin name pass, and above them three short titles beside one long name
+#   still fail. A title or a description that is a Russian name alone costs
+#   a retry, whose correction asks for the work to be named, and fails only
+#   if the model repeats it.
+# - Russian fails when Cyrillic is nearly absent, from all of it or from the
+#   titles: it is written with Latin names and terms (Jira, SLA, code review)
+#   by the dozen, so one title in Latin letters is no leak. No floor here:
+#   a short answer all in English is the leak this check is for, and one
+#   all in jargon goes against the prompt.
+# ponytail: a script check. It cannot tell English from German, or any two
+# languages of one script apart - English and German share theirs, and only
+# the prompt keeps them apart; a real detector goes here when that leaks.
+CYRILLIC_LANGUAGES = frozenset({"ru"})
+MAX_CYRILLIC_SHARE_IN_LATIN = 0.5
+MIN_CYRILLIC_SHARE_IN_CYRILLIC = 0.1
+MIN_STEPS_FOR_THE_WHOLE = 3
+MIN_LETTERS_FOR_THE_WHOLE = 40
+MIN_LETTERS_FOR_A_PART = 100
+# Shorter, a title may be a name alone.
+MIN_LETTERS_OF_A_TEXT = 5
+
+
+def _cyrillic_share(texts: Iterable[str], *, at_least: int = 1) -> float | None:
+    """Among the letters of ``texts``; None below ``at_least`` letters."""
+    letters = [ch for text in texts for ch in text if ch.isalpha()]
+    if len(letters) < at_least:
+        return None
+    cyrillic = sum(unicodedata.name(ch, "").startswith("CYRILLIC") for ch in letters)
+    return cyrillic / len(letters)
+
+
+def _in_content_language(
+    steps: Sequence[Mapping[str, Any]], language: str | None
+) -> bool:
+    """``language`` is the content language's code; one the directive does
+    not know is answered in English, so it reads as a Latin one here."""
+    titles = [step.get("title") or "" for step in steps]
+    descriptions = [step.get("description") or "" for step in steps]
+    texts = titles + descriptions
+    if language in CYRILLIC_LANGUAGES:
+        return all(
+            share is None or share >= MIN_CYRILLIC_SHARE_IN_CYRILLIC
+            for share in (_cyrillic_share(texts), _cyrillic_share(titles))
+        )
+    if any(
+        _cyrillic_share([text], at_least=MIN_LETTERS_OF_A_TEXT) == 1 for text in texts
+    ):
+        return False
+    whole = (
+        _cyrillic_share(texts, at_least=MIN_LETTERS_FOR_THE_WHOLE)
+        if len(steps) >= MIN_STEPS_FOR_THE_WHOLE
+        else None
+    )
+    return all(
+        share is None or share <= MAX_CYRILLIC_SHARE_IN_LATIN
+        for share in (
+            whole,
+            _cyrillic_share(titles, at_least=MIN_LETTERS_FOR_A_PART),
+            _cyrillic_share(descriptions, at_least=MIN_LETTERS_FOR_A_PART),
+        )
+    )
+
+
 async def split_steps(
     container: Mapping[str, Any],
     *,
@@ -348,31 +424,58 @@ async def split_steps(
     credentials: Any,
     model: str | None,
     max_attempts: int,
+    still_wanted: Callable[[], Awaitable[bool]] | None = None,
 ) -> list[dict[str, Any]]:
     """Phase one: the v4 prompt as it was - steps with their attributes.
     The codes it returns are a first guess the second phase replaces; the
-    worker keeps them in the payload for the comparison (HRP-949)."""
+    worker keeps them in the payload for the comparison (HRP-949).
+
+    HRP-1239: an answer that is not in the content language is asked for
+    once more, told what was wrong with it; a second one raises
+    ``RuntimeError("wrong_language")`` - a failed call like any other, so
+    the worker ends the run unbilled and releases its hold. The second call
+    is made only while ``still_wanted()`` - the run was not cancelled during
+    the first - and samples: a pinned request would repeat the answer."""
     from app.modules.ai_competence_generation.tasks import _generate_with_retries
 
-    language = _language(tenant_settings)
-    parsed, _ = await _generate_with_retries(
-        # Restated last: the JSON schema and the English examples come after
-        # the system prompt and would otherwise out-argue the directive.
-        user_prompt=f"{prompts.build_user_prompt(container)}\n\n{language}",
-        # The shared prefix alone in the first block - the same bytes on
-        # both calls of a session and for every tenant, so the provider
-        # caches it (HRP-951); the directive varies by tenant and follows.
-        system=[prompts.build_system_prompt(primitives), language],
-        max_tokens=BREAKDOWN_MAX_TOKENS,
-        schema=DecompositionSchema,
-        tenant_settings=tenant_settings,
-        max_attempts=max_attempts,
-        credentials=credentials,
-        model=model,
-        **DETERMINISTIC_GENERATION,
+    language = f"{_language(tenant_settings)} {prompts.LANGUAGE_RULE}"
+    attempts: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("", DETERMINISTIC_GENERATION),
+        (f"\n\n{prompts.LANGUAGE_CORRECTION}", {}),
     )
-    assert isinstance(parsed, DecompositionSchema)
-    return [s.model_dump() for s in parsed.steps]
+    for attempt, (correction, sampling) in enumerate(attempts):
+        if attempt and still_wanted is not None and not await still_wanted():
+            # Not an error code: the run is already over, and the worker's
+            # handler returns its status as it finds it.
+            raise RuntimeError("cancelled")
+        parsed, _ = await _generate_with_retries(
+            # Restated last: the JSON schema and the English examples come
+            # after the system prompt and would otherwise out-argue the
+            # directive.
+            user_prompt=(
+                f"{prompts.build_user_prompt(container)}\n\n{language}{correction}"
+            ),
+            # The shared prefix alone in the first block - the same bytes on
+            # both calls of a session and for every tenant, so the provider
+            # caches it (HRP-951); the directive varies by tenant and follows.
+            system=[prompts.build_system_prompt(primitives), language],
+            max_tokens=BREAKDOWN_MAX_TOKENS,
+            schema=DecompositionSchema,
+            tenant_settings=tenant_settings,
+            max_attempts=max_attempts,
+            credentials=credentials,
+            model=model,
+            **sampling,
+        )
+        assert isinstance(parsed, DecompositionSchema)
+        steps = [s.model_dump() for s in parsed.steps]
+        if _in_content_language(steps, tenant_settings.content_language):
+            return steps
+        logger.warning(
+            "work decomposition: the steps are not in the content language %r",
+            tenant_settings.content_language,
+        )
+    raise RuntimeError("wrong_language")
 
 
 async def classify_steps(
@@ -589,8 +692,17 @@ async def _execute_body(
         # under a long call. Nothing may touch ``db`` until the call ends.
         await db.commit()
 
+        async def still_running() -> bool:
+            # HRP-1239: between the split's answer and its retry - a cancel
+            # during the first call spares the second one, and the commit
+            # releases the connection again before it.
+            await db.refresh(sess, attribute_names=["status"])
+            running = sess.status == "running"
+            await db.commit()
+            return running
+
         try:
-            steps = await split_steps(container, **call)
+            steps = await split_steps(container, **call, still_wanted=still_running)
         except RuntimeError as exc:
             await db.refresh(sess, attribute_names=["status"])
             if sess.status != "running":

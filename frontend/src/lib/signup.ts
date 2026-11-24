@@ -38,9 +38,15 @@ export async function verifySignupRequest(
   return api.post<SignupVerifyResponse>("/signup-request/verify", { token });
 }
 
-/** Consume a one-time magic-login link emailed after manual approval. */
+/** Consume a one-time magic-login link emailed after manual approval. The
+ * account's first entry sets its password (HRP-1161): without one the
+ * backend answers `magic_login_password_required` and keeps the link. */
 export async function magicLogin(
   token: string,
+  newPassword?: string,
 ): Promise<VerifyEmailResponse> {
-  return api.post<VerifyEmailResponse>("/auth/magic-login", { token });
+  return api.post<VerifyEmailResponse>("/auth/magic-login", {
+    token,
+    new_password: newPassword,
+  });
 }

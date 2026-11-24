@@ -3,10 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { Plus, Search, X } from "lucide-react";
+import { CircleHelp, Plus, Search, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Hint } from "@/components/ui/hint";
 import { Input } from "@/components/ui/input";
 import { MultiSelectFilter } from "@/components/multi-select-filter";
@@ -19,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { LoadErrorState } from "@/components/load-error-state";
+import { ContainerActions } from "@/components/coverage/container-actions";
 import { EmployeeSummaryLine } from "@/components/employee/employee-summary-line";
 import { usePermissions } from "@/hooks/use-permissions";
 import { BADGE_COLOR } from "@/lib/badge-tones";
@@ -66,6 +75,7 @@ export default function CoveragePage() {
   const [types, setTypes] = useState<string[]>([]);
   const [statuses, setStatuses] = useState<string[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
+  const [howOpen, setHowOpen] = useState(false);
   const retry = useCallback(() => setReloadKey((k) => k + 1), []);
 
   useEffect(() => {
@@ -113,13 +123,35 @@ export default function CoveragePage() {
             </p>
           )}
         </div>
-        {canCreateCoverage && (
-          <Link href="/coverage/new" className={buttonVariants()} data-testid="coverage-btn-create">
-            <Plus className="size-4" />
-            {t("create")}
-          </Link>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* HRP-1207: what the section does, said once here rather than
+              on every breakdown (HRP-1231). */}
+          <Button variant="outline" onClick={() => setHowOpen(true)} data-testid="coverage-btn-how">
+            <CircleHelp className="size-4" />
+            {t("howItWorks")}
+          </Button>
+          {canCreateCoverage && (
+            <Link href="/coverage/new" className={buttonVariants()} data-testid="coverage-btn-create">
+              <Plus className="size-4" />
+              {t("create")}
+            </Link>
+          )}
+        </div>
       </div>
+
+      <Dialog open={howOpen} onOpenChange={setHowOpen}>
+        <DialogContent className="sm:max-w-lg" data-testid="coverage-how-dialog">
+          <DialogHeader>
+            <DialogTitle>{t("howItWorks")}</DialogTitle>
+            <DialogDescription>{t("howItWorksText")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setHowOpen(false)} data-testid="coverage-how-btn-ok">
+              {t("howItWorksOk")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {items && items.length > 0 && (
         <div className="flex flex-wrap items-center gap-3">
@@ -215,16 +247,19 @@ export default function CoveragePage() {
               <TableHead>{t("colStatus")}</TableHead>
               <TableHead>{t("colOwner")}</TableHead>
               <TableHead>
-                {t("colAutomated")}
-                {/* HRP-1194: what the percent counts, under the header. */}
-                <span
-                  className="block max-w-56 text-xs font-normal whitespace-normal text-muted-foreground"
-                  data-testid="coverage-col-automated-hint"
-                >
-                  {t("colAutomatedHint")}
+                {/* HRP-1194: what the percent counts, behind a "?" as by
+                    the section's title. */}
+                <span className="inline-flex items-center gap-1">
+                  {t("colAutomated")}
+                  <Hint text={t("colAutomatedHint")} data-testid="coverage-col-automated-hint" />
                 </span>
               </TableHead>
               <TableHead>{t("colUpdated")}</TableHead>
+              {/* HRP-1228: the row's kebab; its column is named for screen
+                  readers only. */}
+              <TableHead className="w-10">
+                <span className="sr-only">{t("actionsAria")}</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -264,6 +299,15 @@ export default function CoveragePage() {
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {formatDate(c.updated_at)}
+                </TableCell>
+                <TableCell className="text-right">
+                  <ContainerActions
+                    container={c}
+                    testIdPrefix={`coverage-row-${c.id}-btn`}
+                    // Whatever it did, the list is read again.
+                    onChanged={retry}
+                    onDeleted={retry}
+                  />
                 </TableCell>
               </TableRow>
             ))}

@@ -6,7 +6,7 @@ import { MessageCircle } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
-import { api, MUTATION_EVENT, type MutationEventDetail } from "@/lib/api";
+import { MUTATION_EVENT, type MutationEventDetail } from "@/lib/api";
 import {
   DEMO_SAVED_PREFIX,
   DEMO_SAVE_SKIPPED_PREFIX,
@@ -16,12 +16,10 @@ import {
   setDemoFlag,
 } from "@/components/dashboard/demo-feedback-popup";
 import { useAuth } from "@/context/auth-context";
-import { useIsSaas } from "@/hooks/use-is-saas";
 import { saveDemoAccess, switchDemoPersona, type DemoPersona } from "@/lib/demo";
 import { loadGoogleAds, trackDemoConversion } from "@/lib/google-ads";
 import { cn } from "@/lib/utils";
 import { TURNSTILE_FAILED_MESSAGE_KEY, useTurnstileGate } from "@/lib/turnstile";
-import type { CreditBalance } from "@/lib/types";
 
 const REFRESH_EVERY_MS = 60_000;
 
@@ -268,7 +266,6 @@ export function DemoBanner() {
   const { user } = useAuth();
   const router = useRouter();
   const t = useTranslations("dashboard");
-  const [credits, setCredits] = useState<CreditBalance | null>(null);
   const [tick, setTick] = useState(0);
   const [showModal, setShowModal] = useState(false);
   const [flags, setFlags] = useState({
@@ -282,18 +279,6 @@ export function DemoBanner() {
   const expiresAt = user?.tenant_expires_at
     ? new Date(user.tenant_expires_at)
     : null;
-
-  // Credits exist only on SaaS — community demo stacks have no /billing/*
-  // routes, so skip the request there entirely (HRP-397).
-  const isSaas = useIsSaas();
-
-  useEffect(() => {
-    if (!isDemo || !isSaas) return;
-    api
-      .get<CreditBalance>("/billing/credits")
-      .then(setCredits)
-      .catch(() => {});
-  }, [isDemo, isSaas]);
 
   // HRP-1160: the reminder needs both a change worth keeping (a) and a
   // save block closed without an email (b) — so it never asks while an
@@ -348,10 +333,6 @@ export function DemoBanner() {
             minutes: parts.minutes.toString().padStart(2, "0"),
           })
         : t("demoMinutes", { minutes: parts.minutes });
-  // HRP-547: quote what can actually be spent — credits held by an upload
-  // in flight are subtracted from `available`, and the gate reads the same
-  // field, so the banner must not promise a number the next action refuses.
-  const creditsLeft = credits ? (credits.available ?? credits.total) : null;
   // tick is consumed only to trigger a re-render so remainingParts recomputes.
   void tick;
   const reminder = flags.mutated && flags.skipped && !flags.saved;
@@ -405,11 +386,6 @@ export function DemoBanner() {
                 ? t("demoResetsSaveWork", { time: remaining })
                 : t("demoRemaining", { time: remaining })}
             </span>
-            {creditsLeft !== null && (
-              <span data-testid="demo-banner-credits">
-                {t("demoCreditsLeft", { count: creditsLeft })}
-              </span>
-            )}
           </div>
           <div className="flex flex-wrap items-center gap-3">
             {/* HRP-676: the persona comes from /auth/me, never from the

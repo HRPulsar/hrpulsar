@@ -643,7 +643,7 @@ class TestMyChecks:
         newest = next(c for c in body["checks"] if c["id"] == str(check_new.id))
         assert newest["title"] == "Close the month"
         assert newest["status"] == "ready"
-        assert newest["share_moves"] == 42.5
+        assert newest["shares"] == {"moves": 42.5, "to_review": 30, "stays": 27.5}
         assert newest["expires_at"] is None
         assert ids.index(str(check_new.id)) < ids.index(str(check_old.id))
 

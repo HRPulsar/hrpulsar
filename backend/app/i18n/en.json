@@ -698,6 +698,8 @@
     "magic_login_link_already_used": "This sign-in link has already been used.",
     "magic_login_link_invalid": "Magic-login link is invalid.",
     "magic_login_link_invalid_or_expired": "Magic-login link is invalid or expired.",
+    "magic_login_password_required": "Set a password to finish signing in.",
+    "password_too_long": "The password is too long. Choose a shorter one.",
     "manager_invitation_requires_division": "Manager invitations require a division",
     "mapping_not_found": "No mapping to accept: the competence was never mapped",
     "mapping_stale": "The competence text changed since it was mapped; correct the codes or re-map",

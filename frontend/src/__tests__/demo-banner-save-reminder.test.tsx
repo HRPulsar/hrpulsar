@@ -16,7 +16,6 @@ let user: Partial<User>;
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/context/auth-context", () => ({ useAuth: () => ({ user }) }));
-vi.mock("@/hooks/use-is-saas", () => ({ useIsSaas: () => false }));
 vi.mock("@/lib/google-ads", () => ({
   loadGoogleAds: vi.fn(),
   trackDemoConversion: vi.fn(),
@@ -104,7 +103,7 @@ function flag(key: string) {
 }
 
 const reminding = () =>
-  byId("demo-banner-remaining")!.textContent!.startsWith("Your sandbox resets in");
+  byId("demo-banner-remaining")!.textContent!.startsWith("Your session resets in");
 
 it("reminds only after a change and a save block closed without an email", () => {
   mount();

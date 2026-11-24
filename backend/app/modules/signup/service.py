@@ -622,8 +622,8 @@ async def approve_signup(
         )
 
     # ── User ------------------------------------------------------------
-    # Random password — the user only ever logs in via the magic-link
-    # JWT. Password reset is available if they want to set one later.
+    # Random password until the first entry: the magic link in the
+    # approval letter asks for the account's own one then (HRP-1161).
     user = User(
         email=row.email,
         password_hash=hash_password(secrets.token_urlsafe(32)),

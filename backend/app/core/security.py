@@ -4,8 +4,10 @@ from typing import Any
 
 import bcrypt
 import jwt
+from fastapi import status
 
 from app.config import settings
+from app.core.errors import AppError
 
 # PyJWT warns when the HMAC key is < 32 bytes. Production is already forced to
 # a strong secret by the config validator (Settings._secrets_not_default_in_prod),
@@ -14,11 +16,22 @@ from app.config import settings
 warnings.filterwarnings("ignore", category=jwt.InsecureKeyLengthWarning)
 
 
+# bcrypt reads 72 bytes at most and, since 5.0, raises on more instead of
+# cutting them. A longer password is refused where it is set, and matches
+# nothing where it is checked - not a 500, and not a sign-in that answers a
+# known address differently from an unknown one.
+BCRYPT_MAX_BYTES = 72
+
+
 def hash_password(password: str) -> str:
+    if len(password.encode()) > BCRYPT_MAX_BYTES:
+        raise AppError("password_too_long", status.HTTP_422_UNPROCESSABLE_CONTENT)
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    if len(plain.encode()) > BCRYPT_MAX_BYTES:
+        return False
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 

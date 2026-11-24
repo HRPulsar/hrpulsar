@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, Compass, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 
@@ -40,7 +40,8 @@ type GuideState = {
   path: DemoGuidePath;
   step: number;
   /** The page the route happens on: its anchor (the completed assessment,
-   * the process with no steps), or what the leading "open" step reached. */
+   * the process with no steps), or what the leading "open" step reached -
+   * and then wherever a step's create was done. */
   back: string | null;
   /** No anchor at the pick: the route starts with an "open" step from the
    * list. Decided once, so the steps never change under the visitor - and
@@ -60,8 +61,13 @@ type Step = {
   leadText?: string;
   /** Where "Go" leads from the current page: to the step's button. */
   href: (state: GuideState, pathname: string) => string | null;
+  /** Where "Go" leads from the step's own page once it shows none of the
+   * targets: `loaded` (a selector) is on screen when the page has loaded
+   * enough to tell. */
+  elsewhere?: { href: (state: GuideState) => string | null; loaded: string };
   /** `data-testid` of the buttons to press, the furthest along first:
-   * the first one on screen gets the ring, and "Go" has nowhere to lead. */
+   * the first one on screen gets the ring, and "Go" has nowhere to lead.
+   * A selector instead, where the id alone does not say which button. */
   targets?: string[];
   /** The targets count on the step's own page only. */
   here?: boolean;
@@ -78,6 +84,8 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
  * a process. */
 const page = (pattern: string) => new RegExp(`^${pattern.replace(":id", UUID)}$`);
 const toBack = (s: GuideState) => s.back;
+/** A control that can be pressed: the kit marks one that cannot. */
+const ON = ":not([data-disabled])";
 const LIST: Record<Route, string> = {
   coverage: "/coverage",
   pdp: "/assessments",
@@ -100,10 +108,31 @@ const ROUTES: Record<Route, Step[]> = {
     },
     {
       text: "demoGuideCoverageHireNeed",
-      // A fresh breakdown may leave no step without an owner: "Go" leads
-      // to a process that has one, and a hire need opened anywhere counts.
-      href: (s) => s.gap ?? s.back,
-      targets: ["coverage-btn-hire-submit", "coverage-gap-btn-hire-need"],
+      // "Go" opens To do of the process just broken down (HRP-1234) - the
+      // page alone opens on Coverage, and the visitor stays with the steps
+      // they made. A hire need opened anywhere counts.
+      href: (s) => {
+        const process = s.back ?? s.gap;
+        return process && `${process}?tab=gaps`;
+      },
+      // A fresh breakdown may leave no step without an owner - only the
+      // demo's prepared one promises it (HRP-1208): once that tab has
+      // loaded with nothing to hand over, or the process is gone, "Go"
+      // leads to a process that has such a step.
+      elsewhere: {
+        href: (s) => (s.gap && s.gap !== s.back ? `${s.gap}?tab=gaps` : null),
+        loaded:
+          '[data-testid="coverage-gaps-empty"], [data-testid^="coverage-todo-"], ' +
+          '[data-testid="coverage-detail-not-found"]',
+      },
+      // The text's own order: check a step, press the button, confirm.
+      // With nothing checked the button is off, and a step handed over
+      // already cannot be checked.
+      targets: [
+        "coverage-btn-hire-submit",
+        `[data-testid="coverage-gap-btn-hire-need"]${ON}`,
+        `[data-testid^="coverage-gap-row-"][data-testid$="-checkbox"]${ON}:not([data-checked])`,
+      ],
       on: ["hire_need_created"],
     },
   ],
@@ -179,16 +208,23 @@ const ROUTE_COPY: Record<Route, { title: string; hint: string }> = {
 
 /** Moves the route on: a value moment completes its step — or a later
  * one, when the visitor got ahead of the strip — and then every page step
- * the current page already satisfies. */
+ * the current page already satisfies. `momentAt` is the page the moment
+ * belongs to, when its answer names one. */
 export function advance(
   state: GuideState,
   pathname: string,
   moment: FeedbackContext | null = null,
+  momentAt: string = pathname,
 ): GuideState {
   if (state.path === "skip" || state.closed) return state;
   const steps = stepsOf(state);
   let { step, back } = state;
-  if (moment) {
+  if (moment && step < steps.length && steps.some((s) => s.on?.includes(moment))) {
+    // Done on a page of the route's kind, the route goes on there
+    // (HRP-1234): the hire step stays with the process last broken down -
+    // not only the anchor, and not the first one when the visitor breaks
+    // down another.
+    if (LEAD[state.path].at?.test(momentAt)) back = momentAt;
     for (let i = steps.length - 1; i >= step; i--) {
       if (steps[i].on?.includes(moment)) {
         step = i + 1;
@@ -200,23 +236,37 @@ export function advance(
     if (state.lead && step === 0) back = pathname;
     step += 1;
   }
-  return step === state.step ? state : { ...state, step, back };
+  return step === state.step && back === state.back ? state : { ...state, step, back };
+}
+
+/** The process a breakdown was applied to, named by the answer: the page
+ * open when the answer comes may already be another (HRP-1234). */
+function momentPage(detail: MutationEventDetail): string | undefined {
+  const id = (detail.data as { container_id?: unknown } | undefined)?.container_id;
+  return typeof id === "string" ? `/coverage/${id}` : undefined;
 }
 
 // ponytail: one observer on the whole page, so every DOM change re-runs a
 // few querySelector calls while a step has a button to find. The button
-// may come late (a list loading, a tab not opened yet, a dialog); if this
-// ever shows in a profile, observe the page's <main> only.
+// may come late (a list loading, a tab not opened yet, a dialog) or be
+// there and off until something is checked; if this ever shows in a
+// profile, observe the page's <main> only.
 function watchPage(onChange: () => void) {
   const seen = new MutationObserver(onChange);
-  seen.observe(document.body, { childList: true, subtree: true });
+  seen.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributeFilter: ["data-disabled"],
+  });
   return () => seen.disconnect();
 }
 const watchNothing = () => () => {};
 
 function findTarget(ids: string[] | null | undefined): HTMLElement | null {
   for (const id of ids ?? []) {
-    const el = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    const el = document.querySelector<HTMLElement>(
+      id.startsWith("[") ? id : `[data-testid="${id}"]`,
+    );
     if (el) return el;
   }
   return null;
@@ -258,6 +308,9 @@ export function DemoGuide() {
 function Guide({ storageKey }: { storageKey: string }) {
   const t = useTranslations("dashboard");
   const pathname = usePathname() ?? "";
+  // A step may live on a tab of its page, and the tab rides in `?tab=`.
+  const search = useSearchParams().toString();
+  const address = search ? `${pathname}?${search}` : pathname;
   const router = useRouter();
   const [state, setState] = useState<GuideState | null>(() => readGuide(storageKey));
   const [justDone, setJustDone] = useState(false);
@@ -291,6 +344,26 @@ function Guide({ storageKey }: { storageKey: string }) {
   // not the middle: the demo card sits in the bottom corner, and a value
   // moment half way through a route brings it over the next button. A
   // dialog scrolls no further than it must: its fields come first.
+  // On the step's own page, loaded, with none of its buttons: "Go" may know
+  // another page that has one.
+  const stuck = useSyncExternalStore(
+    step?.elsewhere && href === address && !target ? watchPage : watchNothing,
+    () => !!step?.elsewhere && document.querySelector(step.elsewhere.loaded) !== null,
+    () => false,
+  );
+  const away = (state && step?.elsewhere?.href(state)) || null;
+  // The button on screen, or one of its pages already open: nowhere to go.
+  // On the other page's own process "Go" stays there: it leads from one
+  // process to the other only once the first has nothing left, and never
+  // back.
+  const go = target
+    ? null
+    : away?.split("?")[0] === pathname
+      ? (away !== address && away) || null
+      : href && href !== pathname && href !== address
+        ? href
+        : (stuck && href === address && away) || null;
+
   useEffect(() => {
     if (!target) return;
     target.setAttribute(TARGET_ATTR, "");
@@ -316,8 +389,9 @@ function Guide({ storageKey }: { storageKey: string }) {
     if (!state) return;
     const current = state;
     function onMutation(e: Event) {
-      const hit = matchMoment((e as CustomEvent<MutationEventDetail>).detail);
-      const next = hit && advance(current, pathname, hit.context);
+      const detail = (e as CustomEvent<MutationEventDetail>).detail;
+      const hit = matchMoment(detail);
+      const next = hit && advance(current, pathname, hit.context, momentPage(detail));
       if (next && next !== current) commit(next);
     }
     window.addEventListener(MUTATION_EVENT, onMutation);
@@ -433,10 +507,9 @@ function Guide({ storageKey }: { storageKey: string }) {
             t("demoGuideDone")
           )}
         </p>
-        {/* The button on screen, or its page already open: nowhere to go. */}
-        {href && href !== pathname && !target && (
+        {go && (
           <Link
-            href={href}
+            href={go}
             className="shrink-0 font-semibold text-brand hover:underline"
             data-testid="demo-guide-go"
           >

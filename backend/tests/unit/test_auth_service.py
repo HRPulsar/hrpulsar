@@ -53,6 +53,16 @@ class TestPasswordHashing:
         hashed = hash_password("correct")
         assert not verify_password("wrong", hashed)
 
+    def test_over_bcrypts_72_bytes_is_refused_and_matches_nothing(self):
+        """bcrypt 5 raises past 72 bytes: setting such a password is a 422,
+        checking one is a plain no - never a 500 on any path."""
+        with pytest.raises(HTTPException) as exc:
+            hash_password("p" * 73)
+        assert (exc.value.status_code, exc.value.code) == (422, "password_too_long")
+        assert verify_password("p" * 72, hash_password("p" * 72))
+        # Multi-byte letters count as bytes: 37 of them are 74.
+        assert not verify_password("\u00e9" * 37, hash_password("p" * 8))
+
 
 class TestJWT:
     def test_access_token_roundtrip(self):
@@ -248,6 +258,12 @@ class TestLogin:
         with pytest.raises(Exception) as exc:
             await service.login(db, "nobody@example.com", "password")
         assert "401" in str(exc.value.status_code)
+
+    async def test_a_password_over_72_bytes_is_a_wrong_one(self, db: AsyncSession, user):
+        """Not a 500 for a known address and a 401 for an unknown one."""
+        with pytest.raises(HTTPException) as exc:
+            await service.login(db, user.email, "p" * 73)
+        assert exc.value.status_code == 401
 
     async def test_login_unverified_email(self, db: AsyncSession, tenant, admin_role):
         """Unverified users cannot log in (403)."""

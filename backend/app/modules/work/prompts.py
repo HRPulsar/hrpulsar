@@ -31,6 +31,14 @@ few-shot examples are printed as compact JSON.
 Since ``v2work.v10`` (HRP-961, product answers of 2026-09-29) the P6 rule
 also covers a check whose point is to pull or let the material through and
 a negotiation that chooses the concession; the contract example carries it.
+
+Since ``v2work.v11`` (HRP-1239) the first call is told, after the language
+directive, that the language of the inputs does not decide the language of
+the steps. The rules asked for the steps "as the source describes them" and
+for a title "as in the source", and nothing said that this stops at the
+wording: Russian leaked into the steps of companies whose content language
+is another. Both phrases are gone; a title names the work the source
+describes. The worker checks the answer all the same (``tasks.split_steps``).
 """
 
 from __future__ import annotations
@@ -44,12 +52,27 @@ from app.modules.work._examples import EXAMPLES
 from app.modules.work.models import OUTPUT_TYPES, RESPONSIBILITIES
 
 # Bumped on every change of this text; stamped on each session row.
-PROMPT_VERSION = "v2work.v10"
+PROMPT_VERSION = "v2work.v11"
+
+# HRP-1239: follows the tenant's language directive on the first call - the
+# one that writes prose - so "the language named above" is the directive's.
+LANGUAGE_RULE = (
+    "The inputs may be written in another language. Write each step's `title`, "
+    "and its `description` when it has one, in the language named above all the "
+    "same: translate the wording of the source, and keep only the name of a "
+    "company, a product or a system as the source writes it."
+)
+# What the one retry adds when the answer came back in the wrong language.
+LANGUAGE_CORRECTION = (
+    "Your previous answer to this request was rejected: its steps were not "
+    "written in the language named above. Answer again, with the steps' titles "
+    "and descriptions in that language."
+)
 
 _RULES = """You break a described process or initiative into the ordered list of steps it consists of, and tag every step with the capability primitives it requires, from a fixed catalog.
 
 Rules of decomposition:
-- Reproduce the steps as the source describes them; do not improve, merge, reorder or complete the process. One step per unit of work that has its own output. Ten steps is typical; twenty is a lot.
+- Reproduce the steps the source describes; do not improve, merge, reorder or complete the process. One step per unit of work that has its own output. Ten steps is typical; twenty is a lot.
 - A sign-off, approval or hand-over that concludes a step stays inside that step. Split it into a step of its own only when the source names it as its own step.
 - Tag every step by the conventions that follow the catalog: every capability the step exercises, only codes from the catalog, an empty list where the conventions say so. Usually one to three codes.
 - Responsibility is a property of the step, not of the capability: `responsibility` names who answers for the outcome, whatever the capabilities are. `formal` when someone other than the doer signs the step off - a review, an acceptance, a mobilisation, a booking that the books depend on; `regulatory` for a step the law or a regulator can audit - a statutory deadline, a filing, a permit, a decision the regulator may review; `reputational` when the company's face is at stake with an outside party - a dispute, a negotiation, a public status; `none` for internal work nobody signs off, including analyses, postmortems and reviews of history.
@@ -59,7 +82,7 @@ Step attributes:
 - `output_type`: `draft` when the step produces something a person or the next step reviews; `external_change` when it changes the world outside the process - a system record, a shipment, a signed document, a decision communicated.
 - `reversibility` (`reversible`, `costly`, `irreversible`): only when the description states it, otherwise null. The company knows it; you do not.
 - `hours_per_run` and `runs_per_year`: always give both, as numbers - your estimate of the person-hours one execution of the step takes and of how many times a year the step runs, for a typical company of this kind. Take what the description states (a monthly close runs 12 times a year; a step that happens only on a discrepancy runs less often than the rest) and estimate the remainder from the kind of work. The company will correct the numbers. The estimate is separate from the tagging: list every capability the step exercises exactly as you would without it.
-- `title`: a short phrase naming the work, as in the source; `description`: one sentence only when the title is not enough.
+- `title`: a short phrase naming the work the source describes; `description`: one sentence only when the title is not enough.
 
 Catalog:"""
 
@@ -157,6 +180,8 @@ def build_classify_user_prompt(
 
 
 __all__ = [
+    "LANGUAGE_CORRECTION",
+    "LANGUAGE_RULE",
     "OUTPUT_TYPES",
     "PROMPT_VERSION",
     "RESPONSIBILITIES",

@@ -13,6 +13,7 @@ import type {
   StepReason,
 } from "@/lib/api/public-check";
 import { cn } from "@/lib/utils";
+import { wholePercents } from "@/lib/whole-percents";
 
 import { ShareButtons } from "./share-buttons";
 import { SaveResults } from "./save-results";
@@ -51,6 +52,12 @@ const BUCKET_KEYS: {
     bar: "bg-muted-foreground/25",
   },
 ];
+
+/** HRP-1148: whole percents that add up to a hundred, as the product prints
+ * them - the result and its row in "my checks" read the same. */
+export function wholeShares(shares: NonNullable<CheckResult["shares"]>) {
+  return wholePercents(shares, BUCKET_KEYS.map((bucket) => bucket.key));
+}
 
 /** `publicCheck` key of a step's reason sentence. `review_required` has no
  * deciding capability (its `codes` are empty): responsibility or the
@@ -110,6 +117,8 @@ export function ResultBody({ result, lead }: { result: CheckResult; lead?: React
   const t = useTranslations("publicCheck");
   const { hours, money, percent } = useFigures(result);
   const { shares } = result;
+  // The exact share stays on each element in `data-share`.
+  const whole = shares && wholeShares(shares);
   const timed = result.hours.total > 0;
 
   const figures =
@@ -154,12 +163,12 @@ export function ResultBody({ result, lead }: { result: CheckResult; lead?: React
 
   return (
     <>
-      {shares ? (
+      {shares && whole ? (
         <>
           <section className="space-y-4" data-testid="check-result-headline" data-share={shares.moves}>
             <div>
               <p className="text-5xl font-semibold tabular-nums tracking-tight sm:text-6xl">
-                {percent(shares.moves)}
+                {percent(whole.moves)}
               </p>
               <p className="mt-1 text-lg">{t("headlineText")}</p>
             </div>
@@ -181,7 +190,7 @@ export function ResultBody({ result, lead }: { result: CheckResult; lead?: React
                   data-share={shares[bucket.key]}
                 >
                   <span className={cn("size-2.5 rounded-full", bucket.bar)} />
-                  {t("shareLegend", { label: t(bucket.title), share: percent(shares[bucket.key]) })}
+                  {t("shareLegend", { label: t(bucket.title), share: percent(whole[bucket.key]) })}
                 </li>
               ))}
             </ul>

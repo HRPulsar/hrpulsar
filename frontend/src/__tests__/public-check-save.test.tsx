@@ -434,7 +434,8 @@ describe("my checks", () => {
         created_at: "2026-10-02T10:00:00Z",
         title: "Close the month",
         status: "ready",
-        share_moves: 42.4,
+        // HRP-1148: the result page prints 34% for these, so does the row.
+        shares: { moves: 33.4, to_review: 33.3, stays: 33.3 },
         expires_at: null,
       },
       {
@@ -442,7 +443,7 @@ describe("my checks", () => {
         created_at: "2026-10-01T10:00:00Z",
         title: "Hire a person",
         status: "error",
-        share_moves: null,
+        shares: null,
         expires_at: null,
       },
     ],
@@ -469,7 +470,7 @@ describe("my checks", () => {
     const items = [...document.querySelectorAll<HTMLElement>('[data-testid="check-my-item"]')];
     expect(items.map((li) => li.dataset.checkId)).toEqual(["c-2", "c-1"]);
     expect(items[0].querySelector("a")!.getAttribute("href")).toBe("/my/m-1/c-2");
-    expect(items[0].textContent).toContain("42%");
+    expect(items[0].textContent).toContain("34%");
     expect(items[0].textContent).toContain(t.statusReady);
     expect(items[1].textContent).toContain(t.statusError);
     expect(items[1].textContent).not.toContain("%");

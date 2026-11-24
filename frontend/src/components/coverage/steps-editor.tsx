@@ -217,17 +217,14 @@ export function StepsEditor({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted-foreground">
-          {t("stepsCount", { count: steps.length })}
-        </p>
-        {canAccept && steps.length > 0 && !allAccepted && (
+      {canAccept && steps.length > 0 && !allAccepted && (
+        <div className="flex justify-end">
           <Button onClick={acceptAll} disabled={accepting} data-testid="coverage-btn-accept-all">
             <Check className="size-4" />
             {t("acceptAll")}
           </Button>
-        )}
-      </div>
+        </div>
+      )}
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={steps.map((s) => s.id)} strategy={verticalListSortingStrategy}>

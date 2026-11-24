@@ -19,7 +19,6 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock("@/context/auth-context", () => ({ useAuth: () => ({ user }) }));
-vi.mock("@/hooks/use-is-saas", () => ({ useIsSaas: () => false }));
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
 }));

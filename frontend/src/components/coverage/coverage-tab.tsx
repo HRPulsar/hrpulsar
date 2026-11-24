@@ -45,6 +45,7 @@ import {
   QUALITY_BADGE,
   RATE_SETTINGS_HREF,
   bucketsOf,
+  wholePercents,
 } from "@/components/coverage/coverage-summary";
 import { CoverageOutcome, stepExecutors } from "@/components/coverage/coverage-outcome";
 import { HireFromStepDialog } from "@/components/coverage/hire-from-step-dialog";
@@ -266,6 +267,7 @@ export function CoverageTab({
     (s) => coverage.candidate_step_ids.includes(s.step_id) && s.hours_per_year === null,
   ).length;
   const shares = coverage.shares;
+  const whole = shares && wholePercents(shares);
   // HRP-1195: once the shares are known, their card says what they are of -
   // no note here then, not an empty one.
   const weightNote =
@@ -279,8 +281,6 @@ export function CoverageTab({
 
   return (
     <div className="space-y-6">
-      <p className="max-w-3xl text-sm text-muted-foreground">{t("coverageHint")}</p>
-
       {coverage.mapping_pending && !pollExhausted && (
         <div
           className="rounded-lg border bg-muted/40 p-3 text-sm"
@@ -290,13 +290,28 @@ export function CoverageTab({
         </div>
       )}
 
-      <CoverageSummary coverage={coverage} />
+      {/* HRP-1207: over the summary it changes, not under the cards. */}
+      {canEdit && inScopeIds.size > 0 && (
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            onClick={() => setWizardOpen(true)}
+            data-testid="coverage-btn-weights"
+          >
+            <Scale className="size-4" />
+            {t("setWeights")}
+          </Button>
+        </div>
+      )}
+
+      <CoverageSummary coverage={coverage} note={weightNote} />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <SummaryCard
           testId="coverage-summary-automatable"
           title={t("summaryMoves")}
           share={shares?.moves ?? null}
+          percent={whole?.moves ?? null}
           rows={buckets.moves}
           t={t}
         />
@@ -305,6 +320,7 @@ export function CoverageTab({
           title={t("summaryToReview")}
           hint={t("summaryToReviewHint")}
           share={shares?.to_review ?? null}
+          percent={whole?.to_review ?? null}
           rows={buckets.to_review}
           t={t}
         />
@@ -312,28 +328,10 @@ export function CoverageTab({
           testId="coverage-summary-blocked"
           title={t("summaryStays")}
           share={shares?.stays ?? null}
+          percent={whole?.stays ?? null}
           rows={buckets.stays}
           t={t}
         />
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {weightNote && (
-          <p className="text-sm text-muted-foreground" data-testid="coverage-summary-weight-note">
-            {weightNote}
-          </p>
-        )}
-        {canEdit && inScopeIds.size > 0 && (
-          <Button
-            variant="outline"
-            className="ml-auto"
-            onClick={() => setWizardOpen(true)}
-            data-testid="coverage-btn-weights"
-          >
-            <Scale className="size-4" />
-            {t("setWeights")}
-          </Button>
-        )}
       </div>
 
       {/* HRP-1200: the same buckets as who does and who checks. HRP-1182
@@ -457,6 +455,7 @@ function SummaryCard({
   title,
   hint,
   share,
+  percent,
   rows,
   t,
 }: {
@@ -464,7 +463,11 @@ function SummaryCard({
   title: string;
   /** What the bucket means, when the label alone does not say it. */
   hint?: string;
+  /** The exact share, kept on the element; `percent` is what is printed. */
   share: number | null;
+  /** The share as the summary prints it: the three add up to a hundred.
+   * Null until the shares are known - the card counts its steps then. */
+  percent: number | null;
   rows: CoverageStep[];
   t: Translate;
 }) {
@@ -475,7 +478,7 @@ function SummaryCard({
         {hint && <Hint text={hint} />}
       </p>
       <p className="mt-1 text-2xl font-semibold tabular-nums">
-        {share === null ? t("summaryCount", { count: rows.length }) : `${Math.round(share)}%`}
+        {percent === null ? t("summaryCount", { count: rows.length }) : `${percent}%`}
       </p>
       {rows.length > 0 && (
         <ul className="mt-2 space-y-0.5 text-sm">

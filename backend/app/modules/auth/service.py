@@ -491,18 +491,30 @@ async def resend_verification(
         _send_verification_or_log(email, str(user.id), locale=locale)
 
 
-async def magic_login(db: AsyncSession, token: str) -> dict[str, Any]:
+async def magic_login(
+    db: AsyncSession, token: str, new_password: str | None = None
+) -> dict[str, Any]:
     """Consume a one-time magic-login token (HRP-262 — M4).
 
     Token shape (see ``app.core.security.create_magic_login_token``):
       ``sub`` = ``User.id``, ``tenant_id`` = approved tenant id,
       ``type`` = ``magic_login``, ``jti`` = random uuid.
 
+    HRP-1161: the account's first entry sets its password. The approval
+    makes the account with a random one and this link works once, so
+    without a password of their own the applicant could come back only
+    through "Forgot password". ``magic_login_password_required`` is raised
+    before the link is burnt - the page shows its form and sends the same
+    link again, with the password. An account that signed in before keeps
+    the password it has. That rests on ``first_login_at``, which is right
+    while these links are minted for a just-made account only
+    (``signup.service.approve_signup``).
+
     Replay guard: ``SETNX magic-login:used:<jti> ex=86400`` so a
     stolen link cannot be re-used and a double-click in a slow webmail
     client doesn't accidentally invalidate the visitor's session.
-    Redis failure here fails *open* — better to let a fresh approve
-    sign in than to lock out every newly approved company.
+    Redis failure here fails *closed* (``_consume_magic_jti``): a link
+    that cannot be marked used is not let through.
     """
     from jwt import PyJWTError as JWTError
 
@@ -549,10 +561,26 @@ async def magic_login(db: AsyncSession, token: str) -> dict[str, Any]:
 
     await assert_employee_active(db, user)
 
+    # Everything that can refuse the password runs before the link is
+    # burnt: a refusal after it would leave no link and no password.
+    password_hash = None
+    if user.first_login_at is None:
+        if new_password is None:
+            raise AppError("magic_login_password_required", status.HTTP_409_CONFLICT)
+        # Refuses a password over bcrypt's 72 bytes.
+        password_hash = hash_password(new_password)
+
     # Replay guard now — at this point any failure means the JWT was
     # genuinely valid and the user was reachable, so burning the JTI
     # is the correct decision.
     await _consume_magic_jti(jti)
+
+    # After the guard: a replayed link must not set a password. Committed
+    # with the first-login stamp below. The version moves as on a reset,
+    # so a reset link issued before this entry no longer works.
+    if password_hash is not None:
+        user.password_hash = password_hash
+        user.token_version += 1
 
     await _stamp_first_login(db, user)
 

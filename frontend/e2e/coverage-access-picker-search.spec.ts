@@ -40,6 +40,8 @@ test.describe("Coverage - access dialog picker search", () => {
 
     await setAuthTokens(page, admin.accessToken, admin.refreshToken);
     await page.goto(`/coverage/${container.id}`);
+    // HRP-1228: the page's actions sit behind a kebab.
+    await page.getByTestId("coverage-btn-actions").click();
     await page.getByTestId("coverage-btn-access").click();
     await expect(page.getByTestId("coverage-access-dialog")).toBeVisible();
 

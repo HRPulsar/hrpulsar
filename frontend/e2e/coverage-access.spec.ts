@@ -48,12 +48,15 @@ test.describe("Coverage - process access", () => {
       // The admin opens it to the company from the access dialog.
       await setAuthTokens(page, admin.accessToken, admin.refreshToken);
       await page.goto(`/coverage/${container.id}`);
+      // HRP-1228: the page's actions sit behind a kebab.
+      await page.getByTestId("coverage-btn-actions").click();
       await page.getByTestId("coverage-btn-access").click();
       await expect(page.getByTestId("coverage-access-dialog")).toBeVisible();
       await page.getByTestId("coverage-access-visibility-company").click();
       await page.getByTestId("coverage-access-btn-save").click();
       // HRP-810 REDO: saving closes the dialog; the change is in its history.
       await expect(page.getByTestId("coverage-access-dialog")).toHaveCount(0);
+      await page.getByTestId("coverage-btn-actions").click();
       await page.getByTestId("coverage-btn-access").click();
       await expect(page.getByTestId("coverage-access-history").locator("li")).toHaveCount(1);
 
@@ -63,8 +66,8 @@ test.describe("Coverage - process access", () => {
       await expect(colleague.getByTestId("coverage-detail-title")).toHaveText(title, {
         timeout: 10000,
       });
-      await expect(colleague.getByTestId("coverage-btn-edit")).toHaveCount(0);
-      await expect(colleague.getByTestId("coverage-btn-access")).toHaveCount(0);
+      // A reader has nothing to do with the process: no kebab at all.
+      await expect(colleague.getByTestId("coverage-btn-actions")).toHaveCount(0);
     } finally {
       await colleagueContext.close();
     }

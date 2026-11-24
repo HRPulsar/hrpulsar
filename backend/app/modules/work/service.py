@@ -1588,6 +1588,7 @@ async def materialise_session(
     sess.applied_result = {
         "created_steps": [str(s) for s in created],
         "idempotency_key": idempotency_key,
+        "container_id": str(container.id),
     }
     await db.commit()
     return sess.applied_result

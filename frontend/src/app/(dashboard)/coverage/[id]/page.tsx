@@ -9,14 +9,15 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
-import { Archive, ChevronRight, Lock, Pencil, Signpost, Sparkles, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, Signpost, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LoadErrorState } from "@/components/load-error-state";
-import { AccessDialog } from "@/components/coverage/access-dialog";
+import { useSectionTab } from "@/components/section-tabs";
+import { ContainerActions } from "@/components/coverage/container-actions";
 import { CoverageTab } from "@/components/coverage/coverage-tab";
 import { GapsTab } from "@/components/coverage/gaps-tab";
 import { generationErrorText } from "@/components/coverage/generation-errors";
@@ -32,17 +33,8 @@ import {
 import { useAuth } from "@/context/auth-context";
 import { usePermissions } from "@/hooks/use-permissions";
 import { BADGE_COLOR } from "@/lib/badge-tones";
-import { newClientId } from "@/lib/utils";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { trimLongText } from "@/lib/long-text";
+import { cn, newClientId } from "@/lib/utils";
 import { EECreditCostBadge } from "@/lib/ee-hooks";
 import { ApiError } from "@/lib/api";
 import {
@@ -65,6 +57,9 @@ const STATUS_COLOR: Record<WorkContainer["status"], string> = {
   archived: BADGE_COLOR.neutral,
 };
 
+/** The first one is what a bare address opens. */
+const TABS = ["coverage", "steps", "gaps"] as const;
+
 export default function ContainerPage() {
   const { id } = useParams<{ id: string }>();
   // Walking from one process to another keeps this page mounted: without a
@@ -77,6 +72,9 @@ function ContainerView({ id }: { id: string }) {
   const t = useTranslations("coverage");
   const tc = useTranslations("common");
   const router = useRouter();
+  // The open tab rides in `?tab=`, as on the section lists, so a link can
+  // open one: the demo route's "Go" leads to To do (HRP-1234).
+  const tab = useSectionTab(TABS);
   // HRP-830: a hire need drafts a vacancy - `manage` on recruitment.
   const canRunHiring = usePermissions().canManageSection("recruitment");
   // HRP-1192: one poll for the skills being written, whichever tab is open.
@@ -92,12 +90,9 @@ function ContainerView({ id }: { id: string }) {
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmReplace, setConfirmReplace] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   // M3: the apply came back 409 - the draft would throw away steps that
   // carry a generated skill or the company's edits.
   const [confirmForceApply, setConfirmForceApply] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [accessOpen, setAccessOpen] = useState(false);
   // The Coverage tab is mounted by default and loads /coverage once: an
   // apply replaces the steps under it, so remount it to refetch.
   const [appliedCount, setAppliedCount] = useState(0);
@@ -137,6 +132,12 @@ function ContainerView({ id }: { id: string }) {
     () => workApi.getCoverage(id).then(onCoverage).catch(() => undefined),
     [id, onCoverage],
   );
+  // Opened straight on another tab (`?tab=`), so is the page itself: the
+  // Coverage tab has not loaded the count and "What's next" for it.
+  const openedOn = useRef(tab);
+  useEffect(() => {
+    if (openedOn.current !== TABS[0]) void refreshCoverage();
+  }, [refreshCoverage]);
   useEffect(() => {
     if (!whatNextDue) return;
     return whenDemoIsClear(() => {
@@ -274,32 +275,6 @@ function ContainerView({ id }: { id: string }) {
     }
   }
 
-  // A process created by mistake stays visible to the whole company until
-  // it is archived or deleted; both are the section's roles only.
-  async function archiveContainer() {
-    setBusy(true);
-    try {
-      setContainer(await workApi.updateContainer(id, { status: "archived" }));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("saveFailed"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function deleteContainer() {
-    setBusy(true);
-    try {
-      await workApi.deleteContainer(id);
-      setConfirmDelete(false);
-      router.push("/coverage");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("saveFailed"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function discardGeneration() {
     if (!session) return;
     setBusy(true);
@@ -366,62 +341,40 @@ function ContainerView({ id }: { id: string }) {
               {t("whatNextButton")}
             </Button>
           )}
-          {canEdit && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setEditing(true)}
-              data-testid="coverage-btn-edit"
-            >
-              <Pencil className="size-4" />
-              {t("editContainer")}
-            </Button>
-          )}
-          {container.my_access && container.my_access !== "read" && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setAccessOpen(true)}
-              data-testid="coverage-btn-access"
-            >
-              <Lock className="size-4" />
-              {t("accessButton")}
-            </Button>
-          )}
-          {canManageSection && container.status !== "archived" && (
-            <Button
-              size="sm"
-              variant="ghost"
+          {/* HRP-1228: Edit, Access, Archive and Delete, behind a kebab on
+              the right - as on a vacancy. */}
+          <div className="ml-auto">
+            <ContainerActions
+              container={container}
+              testIdPrefix="coverage-btn"
+              // A run in flight kept Archive and Delete off before, too.
               disabled={busy}
-              onClick={() => void archiveContainer()}
-              data-testid="coverage-btn-archive"
-            >
-              <Archive className="size-4" />
-              {t("archiveContainer")}
-            </Button>
-          )}
-          {canManageSection && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => setConfirmDelete(true)}
-              data-testid="coverage-btn-delete"
-            >
-              <Trash2 className="size-4" />
-              {t("deleteContainer")}
-            </Button>
-          )}
+              onChanged={(updated) => (updated ? setContainer(updated) : void load())}
+              onDeleted={() => router.push("/coverage")}
+              onBusyChange={setBusy}
+            />
+          </div>
         </div>
-        {container.description && (
-          <p className="max-w-3xl whitespace-pre-line text-sm text-muted-foreground">
-            {container.description}
-          </p>
-        )}
-        {container.goal && (
-          <p className="max-w-3xl text-sm">
-            <span className="font-medium">{t("goalLabel")}</span> {container.goal}
-          </p>
+        {/* HRP-1229: the goal and the description side by side, the goal
+            first; a long one folds, as on a vacancy. */}
+        {(container.goal || container.description) && (
+          <div
+            className={cn(
+              "grid gap-3",
+              container.goal && container.description && "sm:grid-cols-2",
+            )}
+          >
+            {container.goal && (
+              <LongText testId="coverage-detail-goal" title={t("goalTitle")} text={container.goal} />
+            )}
+            {container.description && (
+              <LongText
+                testId="coverage-detail-description"
+                title={t("fieldDescription")}
+                text={container.description}
+              />
+            )}
+          </div>
         )}
       </div>
 
@@ -559,13 +512,19 @@ function ContainerView({ id }: { id: string }) {
         </div>
       )}
 
-      <Tabs defaultValue="coverage">
+      <Tabs
+        defaultValue={TABS[0]}
+        value={tab}
+        // The History API, not the router: all three tabs are on the page
+        // already, and a switch must not wait for the server.
+        onValueChange={(next) => window.history.replaceState(null, "", `?tab=${next}`)}
+      >
         <TabsList>
           <TabsTrigger value="coverage" data-testid="coverage-tab-coverage">
             {t("tabCoverage")}
           </TabsTrigger>
           <TabsTrigger value="steps" data-testid="coverage-tab-steps">
-            {t("tabSteps")}
+            {t("tabStepsCount", { count: steps.length })}
           </TabsTrigger>
           <TabsTrigger value="gaps" data-testid="coverage-tab-gaps" data-count={todoCount ?? undefined}>
             {todoCount === null ? t("tabGaps") : t("tabGapsCount", { count: todoCount })}
@@ -629,29 +588,8 @@ function ContainerView({ id }: { id: string }) {
         </TabsContent>
       </Tabs>
 
-      {editing && (
-        <EditContainerDialog
-          container={container}
-          t={t}
-          onClose={() => setEditing(false)}
-          onSaved={(updated) => {
-            setContainer(updated);
-            setEditing(false);
-          }}
-        />
-      )}
-
       {whatNextOpen && coverage && (
         <WhatNextDialog steps={coverage.steps} onClose={() => setWhatNextOpen(false)} />
-      )}
-
-      {accessOpen && (
-        <AccessDialog
-          containerId={container.id}
-          canChangeOwner={container.my_access === "manage"}
-          onClose={() => setAccessOpen(false)}
-          onOwnerChanged={load}
-        />
       )}
 
       <ConfirmDialog
@@ -675,16 +613,44 @@ function ContainerView({ id }: { id: string }) {
         confirmTestId="coverage-apply-force-confirm"
         cancelTestId="coverage-apply-force-cancel"
       />
+    </div>
+  );
+}
 
-      <ConfirmDialog
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
-        title={t("deleteContainer")}
-        description={t("deleteContainerConfirm", { title: container.title })}
-        onConfirm={() => void deleteContainer()}
-        loading={busy}
-        confirmTestId="coverage-btn-delete-confirm"
-      />
+/** How many lines of a folded text show: a description pasted as a list is
+ * short in characters and long on the screen. */
+const FOLDED_LINES = 4;
+
+/** A text of the process in its own card (HRP-1229): a long one shows its
+ * beginning and unfolds - the vacancy's own limit and wording, plus a limit
+ * on lines, since this text keeps its line breaks. */
+function LongText({ testId, title, text }: { testId: string; title: string; text: string }) {
+  const t = useTranslations("coverage");
+  const [expanded, setExpanded] = useState(false);
+  const trimmed = trimLongText(text, expanded);
+  const lines = trimmed.visible.split("\n");
+  const tall = text.split("\n").length > FOLDED_LINES;
+  const isLong = trimmed.isLong || tall;
+  const visible =
+    expanded || lines.length <= FOLDED_LINES
+      ? trimmed.visible
+      : `${lines.slice(0, FOLDED_LINES).join("\n")}…`;
+  return (
+    <div className="rounded-md bg-muted/50 p-3" data-testid={testId}>
+      <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide">{title}</h2>
+      <p className="whitespace-pre-line break-words text-sm text-muted-foreground">{visible}</p>
+      {isLong && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
+          data-testid={`${testId}-toggle`}
+        >
+          {expanded ? t("showLess") : t("showMore")}
+          {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+        </button>
+      )}
     </div>
   );
 }
@@ -710,104 +676,5 @@ function DraftColumn({
         ))}
       </ol>
     </div>
-  );
-}
-
-function EditContainerDialog({
-  container,
-  t,
-  onClose,
-  onSaved,
-}: {
-  container: WorkContainer;
-  t: (key: string) => string;
-  onClose: () => void;
-  onSaved: (container: WorkContainer) => void;
-}) {
-  const [title, setTitle] = useState(container.title);
-  const [description, setDescription] = useState(container.description ?? "");
-  const [goal, setGoal] = useState(container.goal ?? "");
-  const [saving, setSaving] = useState(false);
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    if (!title.trim() || !description.trim()) return;
-    setSaving(true);
-    try {
-      onSaved(
-        await workApi.updateContainer(container.id, {
-          title: title.trim(),
-          description: description.trim(),
-          goal: goal.trim() || null,
-        }),
-      );
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("saveFailed"));
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent data-testid="coverage-modal-edit">
-        <form onSubmit={save} className="space-y-4">
-          <DialogHeader>
-            <DialogTitle>{t("editContainer")}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-1.5">
-            <Label htmlFor="coverage-edit-title">{t("fieldTitle")}</Label>
-            <Input
-              id="coverage-edit-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              maxLength={300}
-              required
-              data-testid="coverage-edit-input-title"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="coverage-edit-description">{t("fieldDescription")}</Label>
-            <Textarea
-              id="coverage-edit-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={6}
-              required
-              data-testid="coverage-edit-textarea-description"
-            />
-            {!description.trim() && (
-              <p
-                className="text-xs text-muted-foreground"
-                data-testid="coverage-edit-description-required"
-              >
-                {t("descriptionRequired")}
-              </p>
-            )}
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="coverage-edit-goal">{t("fieldGoal")}</Label>
-            <Textarea
-              id="coverage-edit-goal"
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              rows={2}
-              data-testid="coverage-edit-textarea-goal"
-            />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
-              {t("cancel")}
-            </Button>
-            <Button
-              type="submit"
-              disabled={saving || !title.trim() || !description.trim()}
-              data-testid="coverage-btn-edit-save"
-            >
-              {t("save")}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }

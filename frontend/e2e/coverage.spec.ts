@@ -104,6 +104,19 @@ test.describe("Coverage — manual breakdown", () => {
     await expect(verdict).toHaveAttribute("data-verdict", "agent", { timeout: 10000 });
     await expect(page.locator('[data-testid^="coverage-tentative-"]')).toHaveCount(0);
 
+    // HRP-1234: the open tab is in the address. A click writes it, a reload
+    // opens the same tab, and the page still counts To do though the
+    // Coverage tab never mounted.
+    await page.getByTestId("coverage-tab-steps").click();
+    await expect(page).toHaveURL(/\?tab=steps$/);
+    await page.reload();
+    await expect(page.getByTestId("coverage-tab-steps")).toHaveAttribute("data-state", "active", {
+      timeout: 10000,
+    });
+    await expect(page.getByTestId("coverage-tab-gaps")).toHaveAttribute("data-count", /\d+/, {
+      timeout: 10000,
+    });
+
     // The list page shows the breakdown; the empty state is gone.
     await page.goto("/coverage");
     await expect(page.getByTestId("coverage-table")).toBeVisible({ timeout: 10000 });

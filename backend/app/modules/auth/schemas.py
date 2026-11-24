@@ -9,9 +9,13 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 # --- Auth ---
 
 
+# Secrets stay out of a request's repr (``repr=False``): an error report
+# shows a variable holding the model by its repr (``app.core.sentry``).
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=8, max_length=128, repr=False)
     first_name: str = Field(max_length=100)
     last_name: str = Field(max_length=100)
     company_name: str = Field(max_length=255)
@@ -19,17 +23,22 @@ class RegisterRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(repr=False)
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(repr=False)
 
 
 class MagicLoginRequest(BaseModel):
     """Body of POST /api/auth/magic-login."""
 
-    token: str
+    token: str = Field(repr=False)
+    # HRP-1161: the password the account's first entry sets; the same
+    # bounds as a reset.
+    new_password: str | None = Field(
+        default=None, min_length=8, max_length=128, repr=False
+    )
 
 
 class TokenResponse(BaseModel):
@@ -52,7 +61,7 @@ class TenantSelectionRequired(BaseModel):
 
 class SelectTenantRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(repr=False)
     tenant_id: uuid.UUID
 
 
@@ -70,7 +79,7 @@ class RegisterResponse(BaseModel):
 
 
 class VerifyEmailRequest(BaseModel):
-    token: str
+    token: str = Field(repr=False)
 
 
 class VerifyEmailResponse(BaseModel):
@@ -160,8 +169,8 @@ class UserUpdate(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(min_length=8, max_length=128)
+    current_password: str = Field(repr=False)
+    new_password: str = Field(min_length=8, max_length=128, repr=False)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -169,8 +178,8 @@ class ForgotPasswordRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str = Field(min_length=8, max_length=128)
+    token: str = Field(repr=False)
+    new_password: str = Field(min_length=8, max_length=128, repr=False)
 
 
 # --- Role ---
@@ -293,7 +302,7 @@ class InvitationPreview(BaseModel):
 
 
 class AcceptInvitationRequest(BaseModel):
-    token: str
-    password: str = Field(min_length=8, max_length=128)
+    token: str = Field(repr=False)
+    password: str = Field(min_length=8, max_length=128, repr=False)
     first_name: str = Field(max_length=100)
     last_name: str = Field(max_length=100)

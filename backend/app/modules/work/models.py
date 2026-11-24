@@ -114,6 +114,9 @@ ERROR_CODES = (
     # renders "credit limit reached" instead of the stored en message.
     "credits_limit_reached",
     "credits_demo_quota_exhausted",
+    # HRP-1239: the steps came back in a language other than the content
+    # language, and so did the one retry.
+    "wrong_language",
 )
 
 

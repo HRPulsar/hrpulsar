@@ -239,11 +239,16 @@ describe("a check that ended in error", () => {
     expect(createCheck).toHaveBeenCalledWith(expect.objectContaining({ dictated: true }));
   });
 
-  it("falls back to a general message for a code it does not know", async () => {
-    getCheck.mockResolvedValue(check({ status: "error", error_code: "parse_error" }));
-    await render();
-    expect(byId("check-run-error")!.textContent).toContain(t.runErrorGeneric);
-  });
+  // HRP-1239: steps twice in the wrong language get the general message as
+  // well - its "try again" holds, the retry samples anew.
+  it.each(["parse_error", "wrong_language"])(
+    "falls back to a general message for %s",
+    async (code) => {
+      getCheck.mockResolvedValue(check({ status: "error", error_code: code }));
+      await render();
+      expect(byId("check-run-error")!.textContent).toContain(t.runErrorGeneric);
+    },
+  );
 
   it("shows the reason when the retry itself is refused", async () => {
     getCheck.mockResolvedValue(check({ status: "error", error_code: "service_error" }));
@@ -267,6 +272,27 @@ it("says an unknown or expired link is gone, with a way to start over", async ()
 });
 
 describe("a ready result", () => {
+  // HRP-1148: three shares rounded one by one read 33 + 33 + 33; the
+  // result prints the percents the product prints, which add up to a hundred.
+  it("prints percents that add up to a hundred", async () => {
+    const third = 100 / 3;
+    getCheck.mockResolvedValue(
+      check({
+        status: "ready",
+        result: { ...result(), shares: { moves: third, to_review: third, stays: third } },
+      }),
+    );
+    await render();
+
+    const printed = ["moves", "to-review", "stays"].map((bucket) =>
+      Number(byId(`check-share-${bucket}`)!.textContent!.match(/(\d+)\s?%/)![1]),
+    );
+    expect(printed).toEqual([34, 33, 33]);
+    expect(byId("check-result-headline")!.textContent).toContain("34%");
+    // The exact share stays on the element.
+    expect(byId("check-share-moves")!.dataset.share).toBe(String(third));
+  });
+
   it("leads with the share an agent takes, lists every step with its reason, and prices the hours", async () => {
     getCheck.mockResolvedValue(check({ status: "ready", result: result() }));
     await render();

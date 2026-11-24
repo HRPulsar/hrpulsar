@@ -16,6 +16,8 @@ const never = () => new Promise(() => {});
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "a" }),
+  usePathname: () => "/coverage/p-1",
+  useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock("@/lib/api/work", async (importOriginal) => {
@@ -100,4 +102,18 @@ it("marks the draft preview with a chevron that turns when open", async () => {
   expect(chevron).not.toBeNull();
   expect(chevron!.getAttribute("class")).toContain("group-open:rotate-90");
   expect(summary.textContent).toBe("See what changes: 1 → 2 steps");
+});
+
+// HRP-1207: how many steps there are is in the tab's name.
+it("names the Steps tab with the number of steps", async () => {
+  await act(async () => {
+    root.render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ContainerPage />
+      </NextIntlClientProvider>,
+    );
+  });
+  expect(container.querySelector('[data-testid="coverage-tab-steps"]')!.textContent).toBe(
+    "Steps (1)",
+  );
 });

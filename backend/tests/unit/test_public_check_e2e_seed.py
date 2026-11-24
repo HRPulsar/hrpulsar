@@ -157,7 +157,11 @@ async def test_the_approval_login_signs_the_user_in(client, user, e2e):
     token = (
         await client.post(f"{SEED}/magic-login", json={"email": user.email.upper()})
     ).json()["token"]
-    resp = await client.post("/api/auth/magic-login", json={"token": token})
+    # HRP-1161: the first entry by the approval link sets the password.
+    resp = await client.post(
+        "/api/auth/magic-login",
+        json={"token": token, "new_password": "a-password-of-my-own"},
+    )
     assert resp.status_code == 200, resp.text
     assert resp.json()["user"]["email"] == user.email
 

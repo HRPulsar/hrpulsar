@@ -207,7 +207,8 @@ describe("the summary", () => {
 
     const automated = byTestId("coverage-roi-automated");
     expect(automated.dataset.hours).toBe("3");
-    expect(automated.textContent).toContain("Agents already do 3 of 131 h/year of this work.");
+    // No full stop: the line goes on with what the figure counts.
+    expect(automated.textContent).toContain("Agents already do 3 of 131 h/year of this work·");
     // HRP-1194: and says what the figure counts.
     expect(byTestId("coverage-roi-automated-hint").textContent).toContain(
       "an agent your company already uses",
@@ -246,6 +247,21 @@ describe("the summary", () => {
     expect(document.body.textContent).not.toContain("How well an agent does this work");
   });
 
+  // HRP-1207 (3): the tab reads top down - the hours editor's button, then
+  // the summary, with why there are no shares yet at the foot of its card.
+  it("keeps the hours button above the summary and the no-shares note in its card", async () => {
+    getCoverage.mockResolvedValue({ ...COVERAGE, shares: null });
+    await render();
+
+    const headline = byTestId("coverage-headline");
+    expect(headline.contains(byTestId("coverage-summary-weight-note"))).toBe(true);
+    expect(
+      byTestId("coverage-btn-weights").compareDocumentPosition(headline) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("Who covers each step");
+  });
+
   it("rounds the three percents so that they add up to a hundred", async () => {
     getCoverage.mockResolvedValue({
       ...COVERAGE,
@@ -257,6 +273,12 @@ describe("the summary", () => {
       Number(byTestId(`coverage-share-${b}`).textContent!.match(/(\d+)%/)![1]),
     );
     expect(printed.reduce((a, b) => a + b, 0)).toBe(100);
+    // HRP-1148: the cards under the summary print the same whole percents,
+    // not each share rounded by itself.
+    const cards = ["automatable", "draft", "blocked"].map((c) =>
+      Number(byTestId(`coverage-summary-${c}`).textContent!.match(/(\d+)%/)![1]),
+    );
+    expect(cards).toEqual(printed);
     // The exact share stays on the element, whatever the printed one rounds to.
     expect(byTestId("coverage-share-moves").dataset.share).toBe(String(100 / 3));
   });

@@ -429,6 +429,10 @@ class SessionRead(BaseModel):
 class ApplyResult(BaseModel):
     created_steps: list[uuid.UUID]
     idempotency_key: str
+    # HRP-1234: the process the steps went to, for a client that is on
+    # another page when the answer comes. Absent from a replay of a session
+    # applied before it was added.
+    container_id: uuid.UUID | None = None
 
 
 # --- Coverage (HRP-758) ------------------------------------------------------

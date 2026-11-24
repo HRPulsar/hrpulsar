@@ -295,16 +295,17 @@ class Unsubscribed(BaseModel):
 
 
 class SavedCheck(BaseModel):
-    """One row of "my checks". ``share_moves`` is the headline figure of a
-    ready result with percentages, else null. ``id`` opens the result
-    through the same "my checks" link - the check's own link token is not
-    stored and cannot be shown."""
+    """One row of "my checks". ``shares`` are those of a ready result with
+    percentages, else null: all three, so the row rounds its headline the
+    way the result page does (HRP-1148). ``id`` opens the result through
+    the same "my checks" link - the check's own link token is not stored
+    and cannot be shown."""
 
     id: uuid.UUID
     created_at: datetime
     title: str
     status: Status
-    share_moves: float | None
+    shares: Shares | None
     expires_at: datetime | None
     # HRP-927: the check is a process of a workspace already.
     moved: bool = False

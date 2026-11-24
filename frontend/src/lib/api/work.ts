@@ -605,7 +605,7 @@ export const workApi = {
   // `force` overrides the 409 the backend answers when the apply would
   // delete a step with a ready SKILL.md or one the company edited.
   applyDecomposition: (sessionId: string, idempotencyKey: string, force = false) =>
-    api.post<{ created_steps: string[] }>(
+    api.post<{ created_steps: string[]; container_id?: string | null }>(
       `/work/decomposition/sessions/${sessionId}/apply${force ? "?force=true" : ""}`,
       { idempotency_key: idempotencyKey },
     ),

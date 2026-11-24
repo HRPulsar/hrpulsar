@@ -25,9 +25,6 @@ vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ user }),
 }));
 
-// Credits are a SaaS-only call; keeping this false skips the fetch.
-vi.mock("@/hooks/use-is-saas", () => ({ useIsSaas: () => false }));
-
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
 }));

@@ -23,6 +23,8 @@ let authUser: { tenant_is_demo?: boolean } | null = null;
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "p-1" }),
+  usePathname: () => "/coverage/p-1",
+  useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock("@/lib/api/work", async (importOriginal) => ({

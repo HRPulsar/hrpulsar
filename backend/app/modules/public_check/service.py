@@ -845,7 +845,7 @@ async def list_saved(db: AsyncSession, token: str) -> dict[str, Any]:
                 "created_at": c.created_at,
                 "title": _title(c.description),
                 "status": c.status,
-                "share_moves": ((c.result or {}).get("shares") or {}).get("moves"),
+                "shares": (c.result or {}).get("shares"),
                 "expires_at": c.expires_at,
                 "moved": c.moved_at is not None,
             }

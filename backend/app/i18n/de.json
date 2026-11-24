@@ -698,6 +698,8 @@
     "magic_login_link_already_used": "Dieser Anmeldelink wurde bereits verwendet.",
     "magic_login_link_invalid": "Der Anmeldelink ist ungültig.",
     "magic_login_link_invalid_or_expired": "Der Anmeldelink ist ungültig oder abgelaufen.",
+    "magic_login_password_required": "Legen Sie ein Passwort fest, um die Anmeldung abzuschließen.",
+    "password_too_long": "Das Passwort ist zu lang. Wählen Sie ein kürzeres.",
     "manager_invitation_requires_division": "Einladungen für Führungskräfte erfordern eine Abteilung",
     "mapping_not_found": "Kein Mapping zum Bestätigen: die Kompetenz wurde nie zugeordnet",
     "mapping_stale": "Der Kompetenztext hat sich seit der Zuordnung geändert; Codes korrigieren oder neu zuordnen",

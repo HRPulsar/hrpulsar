@@ -20,6 +20,8 @@ const latestDecomposition = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "gone" }),
+  usePathname: () => "/coverage/p-1",
+  useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({ push: vi.fn() }),
 }));
 vi.mock("@/lib/api/work", async (importOriginal) => ({
