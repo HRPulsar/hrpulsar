@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 #
 # Each preset bundles temperature, retry budget, a per-provider model, and
 # `few_shot_count` (a CR11-only constant — promptbuilders read it directly).
-# Stored DB columns (temperature, max_retries, llm_model) override the preset
-# only when `effort_level == "custom"`.
+# Stored temperature and max_retries override the preset only when
+# `effort_level == "custom"`. A stored llm_model wins on any tier, so picking
+# a preset clears it (`apply_preset`, HRP-1240).
 # ---------------------------------------------------------------------------
 
 EFFORT_PRESETS: dict[str, dict[str, Any]] = {
@@ -339,12 +340,19 @@ async def reset(db: AsyncSession, tenant_id: uuid.UUID) -> TenantAISettings:
 
 
 def apply_preset(row: TenantAISettings, preset_name: str) -> None:
-    """Overwrite temperature/max_retries from the preset (in-place)."""
+    """Overwrite temperature/max_retries from the preset and drop the stored
+    model (in-place).
+
+    HRP-1240: a preset runs its own model. The stored one used to survive
+    the pick and keep the workspace on it through a model refresh; rows
+    left that way before keep their model until a preset is picked again.
+    """
     preset = EFFORT_PRESETS.get(preset_name)
     if preset is None:
         return
     row.temperature = preset["temperature"]
     row.max_retries = preset["max_retries"]
+    row.llm_model = None
 
 
 # ---------------------------------------------------------------------------
@@ -598,10 +606,45 @@ async def to_read_dict_async(db: AsyncSession, row: TenantAISettings) -> dict[st
     spend preview inherited the same phantom delta).
     """
     effective_model = await get_effective_model_async(db, row, dispatch=False)
+    preset_runs: dict[str, dict[str, Any]] = {}
+    for tier in EFFORT_PRESETS:
+        # HRP-1241: what each preset card would run for this workspace — an
+        # unpinned row of that tier, through the same catalog and processor
+        # checks as the effective model.
+        unpinned = TenantAISettings(tenant_id=row.tenant_id, effort_level=tier)
+        model = await get_effective_model_async(db, unpinned, dispatch=False)
+        preset_runs[tier] = {
+            "model": model,
+            "accepts_temperature": await _run_takes_temperature(
+                db, row.tenant_id, model
+            ),
+        }
     return to_read_dict(
         row,
         effective_model=effective_model,
         credit_multiplier=await get_effective_credit_multiplier_async(db, row),
+        temperature_applies=await _run_takes_temperature(
+            db, row.tenant_id, effective_model
+        ),
+        preset_runs=preset_runs,
+    )
+
+
+async def _run_takes_temperature(
+    db: AsyncSession, tenant_id: uuid.UUID, model: str
+) -> bool:
+    """Whether generation sends ``temperature`` when it runs ``model`` for
+    this workspace: the dispatch target decides — a BYOK row, a gateway
+    ``base_url``, a processor swap — as in ``llm_client.generate``."""
+    try:
+        target = await providers.resolve_generation_target(db, tenant_id, model)
+    except AppError:
+        # Dispatch would refuse the model; the name is all there is to go by.
+        return providers.accepts_temperature(model)
+    if target.forced_model and target.model:
+        model = target.model
+    return providers.accepts_temperature(
+        model, provider=target.provider, base_url=target.base_url
     )
 
 
@@ -610,11 +653,24 @@ def to_read_dict(
     *,
     effective_model: str | None = None,
     credit_multiplier: float | None = None,
+    temperature_applies: bool | None = None,
+    preset_runs: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Read projection. ``effective_model``/``credit_multiplier`` come from
-    the catalog-aware async resolvers when the caller has a session —
-    without them this falls back to the registry-only values."""
+    """Read projection. ``effective_model``/``credit_multiplier``, whether
+    temperature applies and the preset runs come from the catalog- and
+    target-aware async resolvers when the caller has a session — without
+    them this falls back to the registry-only values and the name rule."""
     effective = effective_model or get_effective_model(row)
+    if preset_runs is None:
+        preset_runs = {}
+        for tier in EFFORT_PRESETS:
+            model = get_effective_model(
+                TenantAISettings(tenant_id=row.tenant_id, effort_level=tier)
+            )
+            preset_runs[tier] = {
+                "model": model,
+                "accepts_temperature": providers.accepts_temperature(model),
+            }
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
@@ -636,6 +692,12 @@ def to_read_dict(
         "effective_provider": providers.classify_model(effective)
         or get_effective_provider(row),
         "effective_temperature": get_effective_temperature(row),
+        "effective_temperature_applies": (
+            temperature_applies
+            if temperature_applies is not None
+            else providers.accepts_temperature(effective)
+        ),
+        "preset_runs": preset_runs,
         "effective_max_retries": get_effective_max_retries(row),
         "effective_credit_multiplier": (
             credit_multiplier

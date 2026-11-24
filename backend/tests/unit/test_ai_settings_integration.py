@@ -16,7 +16,7 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from app.modules.ai import llm_client, prompts
+from app.modules.ai import llm_client, model_registry, prompts
 from app.modules.ai import service as ai_service
 from app.modules.ai.tasks import _generate_json_with_retries
 from app.modules.ai_settings import service as ai_settings_service
@@ -86,7 +86,7 @@ class TestLLMClientUsesSettings:
                 "test prompt", system="sys", tenant_settings=settings
             )
 
-        assert captured["model"] == "claude-opus-4-8"
+        assert captured["model"] == model_registry.ANTHROPIC_THOROUGH
         assert captured["temperature"] == 0.2
 
     async def test_fast_preset_picks_haiku(self, db: AsyncSession, tenant) -> None:
@@ -106,7 +106,7 @@ class TestLLMClientUsesSettings:
                 "test prompt", system="sys", tenant_settings=settings
             )
 
-        assert captured["model"] == "claude-haiku-4-5-20251001"
+        assert captured["model"] == model_registry.ANTHROPIC_FAST
         assert captured["temperature"] == 0.5
 
     async def test_explicit_model_overrides_preset(

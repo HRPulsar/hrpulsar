@@ -89,6 +89,25 @@ class TestRegistry:
         assert providers.classify_model("qwen2.5-72b") is None
         assert providers.classify_model(None) is None
 
+    def test_accepts_temperature(self) -> None:
+        # HRP-1241: no current tier model takes temperature.
+        for tier in (
+            model_registry.FAST_MODELS,
+            model_registry.BALANCED_MODELS,
+            model_registry.THOROUGH_MODELS,
+        ):
+            for provider in ("anthropic", "openai", "gemini"):
+                assert not providers.accepts_temperature(tier[provider]), tier[provider]
+        assert not providers.accepts_temperature(model_registry.ANTHROPIC_FABLE)
+        # The models before the refresh still do, and so do Yandex and
+        # local servers.
+        assert providers.accepts_temperature("claude-haiku-4-5-20251001")
+        assert providers.accepts_temperature("gpt-4o")
+        assert providers.accepts_temperature("gemini-2.5-pro")
+        assert providers.accepts_temperature(model_registry.YANDEX_BALANCED)
+        assert providers.accepts_temperature("gpt://b1g/yandexgpt-lite/latest")
+        assert providers.accepts_temperature("qwen2.5-72b")
+
 
 # ---------------------------------------------------------------------------
 # configured_providers matrix

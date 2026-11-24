@@ -643,6 +643,7 @@ Generate competence structures with an LLM and review everything before it lands
 Per-workspace configuration that applies to every AI call.
 
 - Effort tiers: fast, balanced (default), and thorough, each mapping to a model and a retry budget; a custom tier opens model, temperature, and retry controls
+- Temperature applies only to models that take it — on the platform's keys, the workspace's own keys and behind its OpenAI-compatible gateway alike: current Claude, GPT and Gemini models set their own sampling, so for them the temperature control is greyed out with a note saying why, and the preset cards and the summary on generation pages leave temperature out
 - Models come from a managed allow list, so only vetted models can be selected
 - A content language setting (English or German) controls the language the AI generates competences, indicators, positions, learning materials, development plans, and recruitment analyses in — independent of the interface language. The workspace is only recorded as having answered once someone saves the page; reading it leaves the choice open, so a workspace that never set one keeps falling back per feature
 - A company context field (up to 2000 characters) is appended to every prompt

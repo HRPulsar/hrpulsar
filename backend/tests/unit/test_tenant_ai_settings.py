@@ -1,13 +1,17 @@
 """Phase CR10b — TenantAISettings model, service, and router."""
 
 import uuid
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
+from app.config import settings
 from app.core.security import create_access_token, hash_password
+from app.modules.ai import model_registry, providers
 from app.modules.ai_settings import service
 from app.modules.ai_settings.models import TenantAISettings
 from app.modules.ai_settings.schemas import AISettingsUpdate
+from app.modules.recruitment.models import LLMProviderConfig
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -195,7 +199,7 @@ class TestEffectiveResolvers:
         row = await service.update(
             db, tenant.id, AISettingsUpdate(effort_level="thorough")
         )
-        assert service.get_effective_model(row) == "claude-opus-4-8"
+        assert service.get_effective_model(row) == model_registry.ANTHROPIC_THOROUGH
 
     async def test_effective_model_uses_override(
         self, db: AsyncSession, tenant
@@ -203,6 +207,22 @@ class TestEffectiveResolvers:
         row = await service.update(db, tenant.id, AISettingsUpdate(llm_model="gpt-4o"))
         assert service.get_effective_model(row) == "gpt-4o"
         assert service.get_effective_provider(row) == "openai"
+
+    async def test_preset_after_a_custom_pick_runs_the_preset_model(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # HRP-1240: picking a preset left the custom model stored, and it
+        # kept the workspace on that model through a model refresh.
+        row = await service.update(db, tenant.id, AISettingsUpdate(llm_model="gpt-4o"))
+        assert row.effort_level == "custom"
+        row = await service.update(
+            db,
+            tenant.id,
+            AISettingsUpdate(effort_level="balanced", llm_model="claude-opus-4-8"),
+        )
+        assert row.llm_model is None
+        assert service.get_effective_model(row) == model_registry.ANTHROPIC_BALANCED
+        assert service.get_effective_provider(row) == "anthropic"
 
 
 class TestSystemPromptExtras:
@@ -246,6 +266,50 @@ class TestSystemPromptExtras:
         row = await service.get_or_default(db, tenant.id)
         row.content_language = "xx"
         assert service.to_read_dict(row)["content_language"] == "en"
+
+    async def test_to_read_dict_says_whether_temperature_applies(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # HRP-1241: a local model still takes temperature, the current
+        # balanced tier model does not.
+        row = await service.get_or_default(db, tenant.id)
+        assert service.to_read_dict(row)["effective_temperature_applies"] is False
+        row.effort_level = "custom"
+        row.llm_model = "qwen2.5-72b"
+        assert service.to_read_dict(row)["effective_temperature_applies"] is True
+
+    async def test_temperature_applies_follows_the_dispatch_target(
+        self, db: AsyncSession, tenant
+    ) -> None:
+        # HRP-1241: an id no provider owns goes to the platform default —
+        # OpenAI here, where it gets the reasoning shape and no temperature
+        # — and behind the workspace's own local server it gets one.
+        model = f"qwen-local-{uuid.uuid4().hex[:6]}"
+        row = await service.get_or_default(db, tenant.id)
+        row.effort_level = "custom"
+        row.llm_model = model
+        db.add(row)
+        await db.commit()
+        with (
+            patch.object(settings, "llm_provider", "openai"),
+            patch.object(settings, "openai_api_key", "sk-platform"),
+        ):
+            projected = await service.to_read_dict_async(db, row)
+            assert projected["effective_model"] == model
+            assert projected["effective_temperature_applies"] is False
+
+            db.add(
+                LLMProviderConfig(
+                    tenant_id=tenant.id,
+                    provider="openai_compatible",
+                    model=model,
+                    is_active=True,
+                    settings={"base_url": "http://ollama.internal:11434/v1"},
+                )
+            )
+            await db.commit()
+            projected = await service.to_read_dict_async(db, row)
+            assert projected["effective_temperature_applies"] is True
 
 
 class TestUniqueConstraint:
@@ -309,7 +373,50 @@ class TestRouterPatch:
         body = resp.json()
         assert body["effort_level"] == "thorough"
         assert body["effective_temperature"] == 0.2
-        assert body["effective_model"] == "claude-opus-4-8"
+        assert body["effective_model"] == model_registry.ANTHROPIC_THOROUGH
+        # HRP-1241: Opus 5.5 sets its own sampling.
+        assert body["effective_temperature_applies"] is False
+
+    async def test_temperature_applies_follows_the_effective_model(
+        self, auth_client: AsyncClient
+    ) -> None:
+        # HRP-1241: GET and PATCH say whether the effective model takes
+        # temperature — the current tier models do not, gpt-4o does.
+        resp = await auth_client.get("/api/admin/ai-settings")
+        assert resp.json()["effective_temperature_applies"] is False
+
+        resp = await auth_client.patch(
+            "/api/admin/ai-settings", json={"llm_model": "gpt-4o"}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["effective_model"] == "gpt-4o"
+        assert body["effective_temperature_applies"] is True
+
+        resp = await auth_client.post("/api/admin/ai-settings/reset")
+        assert resp.json()["effective_temperature_applies"] is False
+
+    async def test_preset_runs_name_what_each_tier_runs(
+        self, auth_client: AsyncClient
+    ) -> None:
+        # HRP-1241: the page decides the temperature control by the model a
+        # tier really runs for the workspace, not by the provider filter.
+        resp = await auth_client.get("/api/admin/ai-settings")
+        runs = resp.json()["preset_runs"]
+        assert runs == {
+            "fast": {
+                "model": model_registry.ANTHROPIC_FAST,
+                "accepts_temperature": False,
+            },
+            "balanced": {
+                "model": model_registry.ANTHROPIC_BALANCED,
+                "accepts_temperature": False,
+            },
+            "thorough": {
+                "model": model_registry.ANTHROPIC_THOROUGH,
+                "accepts_temperature": False,
+            },
+        }
 
     async def test_patch_temperature_flips_to_custom(
         self, auth_client: AsyncClient
@@ -402,9 +509,18 @@ class TestRouterModels:
         assert isinstance(body, list)
         assert body, "whitelist must not be empty"
         for entry in body:
-            assert {"provider", "model", "label", "credit_multiplier"} <= entry.keys()
+            assert {
+                "provider",
+                "model",
+                "label",
+                "credit_multiplier",
+                "accepts_temperature",
+            } <= entry.keys()
             assert entry["provider"] in ("anthropic", "openai", "gemini", "yandex")
             assert isinstance(entry["credit_multiplier"], (int, float))
+            assert entry["accepts_temperature"] is providers.accepts_temperature(
+                entry["model"]
+            )
 
     async def test_get_settings_exposes_effective_credit_multiplier(
         self, auth_client: AsyncClient

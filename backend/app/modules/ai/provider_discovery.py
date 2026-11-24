@@ -36,7 +36,13 @@ _OPENAI_NON_CHAT_MARKERS: tuple[str, ...] = (
     "search",
     "dall-e",
     "whisper",
+    # HRP-1240: not served by chat completions, which answers 404
+    # (gpt-5.5-pro, gpt-5.3-codex, gpt-live-1, probed 2026-11-24).
+    "-pro",
+    "codex",
+    "-live",
 )
+_GEMINI_NON_TEXT_MARKERS: tuple[str, ...] = ("image", "tts", "audio", "-live")
 
 
 async def discover_anthropic(api_key: str) -> list[dict[str, str]]:
@@ -77,6 +83,10 @@ async def discover_gemini(api_key: str) -> list[dict[str, str]]:
         # by the generation path.
         actions = getattr(model, "supported_actions", None) or []
         if "generateContent" not in actions:
+            continue
+        # HRP-1240: image and speech models answer generateContent too, but
+        # with a smaller output window and no text to parse.
+        if any(marker in model_id for marker in _GEMINI_NON_TEXT_MARKERS):
             continue
         display = getattr(model, "display_name", None)
         out.append({"model_id": model_id, "label": display or model_id})

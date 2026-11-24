@@ -15,7 +15,11 @@ core only classifies and filters):
   platform admin approves it with an explicit multiplier (or rejects it;
   snapshots of a rejected family inherit ``rejected``);
 * without billing (community/onprem) new models are auto-approved — there
-  is nothing to price.
+  is nothing to price;
+* a model the registry names (a tier model, the flagship, a previous tier
+  model) is the platform's own pick: the seed approves and adopts its row
+  even when the sweep met it first (HRP-1240), leaving only a rejection or
+  a disable by the platform admin in place.
 """
 
 from __future__ import annotations
@@ -35,7 +39,7 @@ if TYPE_CHECKING:
 
 from app.config import settings
 from app.core.errors import AppError
-from app.modules.ai import model_registry
+from app.modules.ai import model_registry, providers
 from app.modules.ai.models import ModelCatalogEntry
 
 logger = logging.getLogger(__name__)
@@ -69,11 +73,12 @@ def _family_rank(row: ModelCatalogEntry) -> tuple[bool, bool, bool, str]:
     """Deterministic preference among same-family catalog rows.
 
     Curated seed rows first: they are the ids ``EFFORT_PRESETS`` resolves
-    to and ``credits.yaml`` prices, and one of them (``ANTHROPIC_FAST``)
-    is a dated id that is not canonical under its own normalization and
-    carries no row multiplier — it lost both remaining tiebreaks to any
-    newer dated snapshot, which dropped a still-selectable model from the
-    picker and quoted the wrong price (HRP-500, review #13).
+    to and ``credits.yaml`` prices, and one of them (Haiku 4.5's
+    ``claude-haiku-4-5-20251001``) is a dated id that is not canonical
+    under its own normalization and carries no row multiplier — it lost
+    both remaining tiebreaks to any newer dated snapshot, which dropped a
+    still-selectable model from the picker and quoted the wrong price
+    (HRP-500, review #13).
 
     Then the canonical dateless id (its registry/YAML price is keyed on
     it), then any row that carries a moderated multiplier, then the newest
@@ -113,58 +118,147 @@ def _seed_rows() -> list[dict[str, Any]]:
         ("balanced", model_registry.BALANCED_MODELS),
         ("thorough", model_registry.THOROUGH_MODELS),
     ]
+    entries: list[tuple[str, str, str | None]] = [
+        (provider, model_id, tier)
+        for tier, models in tiers
+        for provider, model_id in models.items()
+    ]
+    # The optional flagship is deliberately tier-less; the previous tier
+    # models keep the tier they held (HRP-1240).
+    entries.append(("anthropic", model_registry.ANTHROPIC_FABLE, None))
+    entries.extend(model_registry.PREVIOUS_MODELS)
     seen: set[tuple[str, str]] = set()
     rows: list[dict[str, Any]] = []
-    for tier, models in tiers:
-        for provider, model_id in models.items():
-            key = (provider, model_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            rows.append({"provider": provider, "model_id": model_id, "tier": tier})
-    # Optional pickable flagship — deliberately tier-less.
-    rows.append(
-        {
-            "provider": "anthropic",
-            "model_id": model_registry.ANTHROPIC_FABLE,
-            "tier": None,
-        }
-    )
+    for provider, model_id, tier in entries:
+        # A repeated key would make every seed insert twice, hit the unique
+        # constraint and roll back — an empty catalog for good.
+        if (provider, model_id) in seen:
+            continue
+        seen.add((provider, model_id))
+        rows.append({"provider": provider, "model_id": model_id, "tier": tier})
     return rows
 
 
 async def seed_from_registry(db: AsyncSession) -> int:
-    """Idempotently insert the curated models. Returns rows added."""
-    existing = {
-        (row.provider, row.model_id)
-        for row in (await db.execute(select(ModelCatalogEntry))).scalars()
+    """Idempotently bring the registry's models into the catalog.
+
+    Returns the rows inserted or changed. HRP-1240: a model the registry
+    names is the platform's own pick, priced in credits.yaml, so the seed
+    makes its row say so, whatever discovery or moderation stored before
+    the release named it:
+
+    * a missing row is inserted, approved;
+    * an existing row is adopted — source ``seed``, the registry's tier, no
+      row multiplier (credits.yaml prices it) — and approved if it was
+      ``pending``. A row the admin disabled is adopted but stays disabled;
+      a ``rejected`` row is left alone, so the admin can still approve it
+      (approval refuses seed rows) — approving it adopts it at once
+      (``adopt_registry_row``). Both
+      are logged for a current tier model: its workspaces fall back to the
+      previous model of that tier, or fail where none held it;
+    * a ``pending`` re-dated snapshot of such a model follows its family
+      row, as the sweep does: approved, enabled as the family is, once the
+      family row is approved.
+    """
+    all_rows = list((await db.execute(select(ModelCatalogEntry))).scalars())
+    existing = {(row.provider, row.model_id): row for row in all_rows}
+    seeds = _seed_rows()
+    current_tier_models = {
+        *model_registry.FAST_MODELS.values(),
+        *model_registry.BALANCED_MODELS.values(),
+        *model_registry.THOROUGH_MODELS.values(),
     }
-    added = 0
-    for seed in _seed_rows():
-        if (seed["provider"], seed["model_id"]) in existing:
-            continue
-        db.add(
-            ModelCatalogEntry(
-                provider=seed["provider"],
-                model_id=seed["model_id"],
-                label=seed["model_id"],
-                tier=seed["tier"],
-                status="approved",
-                enabled=True,
-                source="seed",
+    # (provider, family) -> (tier, approved, enabled) of the family's row
+    # once this seed is through — the state its pending snapshots follow.
+    families: dict[tuple[str, str], tuple[str | None, bool, bool]] = {}
+    changed = 0
+    for seed in seeds:
+        family = (seed["provider"], normalize_model_id(seed["model_id"], seed["provider"]))
+        row = existing.get((seed["provider"], seed["model_id"]))
+        if row is None:
+            db.add(
+                ModelCatalogEntry(
+                    provider=seed["provider"],
+                    model_id=seed["model_id"],
+                    label=seed["model_id"],
+                    tier=seed["tier"],
+                    status="approved",
+                    enabled=True,
+                    source="seed",
+                )
             )
-        )
-        added += 1
-    if added:
+            families[family] = (seed["tier"], True, True)
+            changed += 1
+            continue
+        if row.status != "rejected":
+            before = (row.status, row.enabled, row.source, row.tier, row.credit_multiplier)
+            if row.status == "pending":
+                row.status = "approved"
+                row.enabled = True
+            _adopt(row, seed["tier"])
+            if before != (
+                row.status,
+                row.enabled,
+                row.source,
+                row.tier,
+                row.credit_multiplier,
+            ):
+                changed += 1
+        families[family] = (seed["tier"], row.status == "approved", row.enabled)
+        if seed["model_id"] in current_tier_models and (
+            row.status != "approved" or not row.enabled
+        ):
+            logger.warning(
+                "model catalog: %s tier model %s/%s is %s — its workspaces fall "
+                "back to the previous model of that tier, or fail without one",
+                seed["tier"],
+                row.provider,
+                row.model_id,
+                row.status if row.status != "approved" else "disabled",
+            )
+    # Seed rows were settled above, so a row still pending here is a
+    # discovered one.
+    for row in all_rows:
+        if row.status != "pending":
+            continue
+        state = families.get((row.provider, normalize_model_id(row.model_id, row.provider)))
+        if state is not None and state[1]:
+            row.status = "approved"
+            row.tier = state[0]
+            row.enabled = state[2]
+            changed += 1
+    if changed:
         try:
             await db.commit()
         except IntegrityError:
             # Two workers can race the read-then-insert on a fresh install
-            # (the lazy seed runs inside a GET handler) — the loser hits the
-            # unique constraint; the winner's rows are already there.
+            # (the lazy seed runs inside a GET handler, and on every boot) —
+            # the loser hits the unique constraint; the winner's rows are
+            # already there.
             await db.rollback()
             return 0
-    return added
+    return changed
+
+
+def _adopt(row: ModelCatalogEntry, tier: str | None) -> None:
+    row.source = "seed"
+    row.tier = tier
+    row.credit_multiplier = None
+
+
+def adopt_registry_row(row: ModelCatalogEntry) -> bool:
+    """Make a row the registry names a seed row now, not at the next seed.
+
+    HRP-1240: platform admin approval of such a row (one the admin had
+    rejected before a release named it) used to bill the multiplier typed
+    into the approve dialog until the next seed repriced it to credits.yaml.
+    Returns whether the row is a registry model.
+    """
+    for seed in _seed_rows():
+        if (seed["provider"], seed["model_id"]) == (row.provider, row.model_id):
+            _adopt(row, seed["tier"])
+            return True
+    return False
 
 
 async def list_catalog(
@@ -314,7 +408,14 @@ def _pick_tier_row(
     ]
     if not candidates:
         return None
-    return max(candidates, key=_family_rank)
+    # HRP-1240: a tier holds its current registry model and the previous
+    # one; the current one wins on its own, not by sorting later.
+    current = {
+        *model_registry.FAST_MODELS.values(),
+        *model_registry.BALANCED_MODELS.values(),
+        *model_registry.THOROUGH_MODELS.values(),
+    }
+    return max(candidates, key=lambda row: (row.model_id in current, _family_rank(row)))
 
 
 def resolve_dispatch_model_sync(db: Session, model: str | None) -> str | None:
@@ -672,6 +773,7 @@ def to_read_dicts(rows: list[ModelCatalogEntry]) -> list[dict[str, Any]]:
                 "model": row.model_id,
                 "label": label,
                 "credit_multiplier": multiplier,
+                "accepts_temperature": providers.accepts_temperature(row.model_id),
             }
         )
     return out

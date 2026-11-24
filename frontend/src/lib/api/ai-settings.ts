@@ -53,10 +53,23 @@ export interface AISettings {
   // Not a closed set anymore: discovered/local providers (HRP-465).
   effective_provider: string;
   effective_temperature: number;
+  /** HRP-1241: false when the effective model sets its own sampling. */
+  effective_temperature_applies: boolean;
   effective_max_retries: number;
   effective_credit_multiplier: number;
+  /** HRP-1241: what each preset runs for this workspace. */
+  preset_runs: Partial<Record<PresetTier, PresetRun>>;
   created_at: string;
   updated_at: string;
+}
+
+export type PresetTier = Exclude<EffortLevel, "custom">;
+
+/** HRP-1241: the model a preset runs for the workspace, after the catalog
+ * and processor checks, and whether it takes temperature there. */
+export interface PresetRun {
+  model: string;
+  accepts_temperature: boolean;
 }
 
 export interface AllowedModel {
@@ -64,6 +77,8 @@ export interface AllowedModel {
   model: string;
   label: string;
   credit_multiplier: number;
+  /** HRP-1241: false when the model sets its own sampling. */
+  accepts_temperature: boolean;
 }
 
 export interface EffortPreset {

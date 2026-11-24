@@ -56,27 +56,33 @@ export function AISettingsBanner() {
       className="flex items-center justify-between rounded-md border bg-muted/40 px-4 py-3 text-sm"
     >
       <span className="text-muted-foreground">
-        {t.rich("aiSettingsBannerSummary", {
-          model: settings.effective_model,
-          effort: settings.effort_level,
-          temperature: settings.effective_temperature.toFixed(2),
-          modelValue: (chunks) => (
-            <strong
-              className="text-foreground"
-              data-testid="ai-settings-banner-model"
-            >
-              {chunks}
-            </strong>
-          ),
-          effortValue: (chunks) => (
-            <strong
-              className="text-foreground"
-              data-testid="ai-settings-banner-effort"
-            >
-              {chunks}
-            </strong>
-          ),
-        })}
+        {/* HRP-1241: a model that sets its own sampling gets no temperature. */}
+        {t.rich(
+          settings.effective_temperature_applies
+            ? "aiSettingsBannerSummary"
+            : "aiSettingsBannerSummaryNoTemperature",
+          {
+            model: settings.effective_model,
+            effort: settings.effort_level,
+            temperature: settings.effective_temperature.toFixed(2),
+            modelValue: (chunks) => (
+              <strong
+                className="text-foreground"
+                data-testid="ai-settings-banner-model"
+              >
+                {chunks}
+              </strong>
+            ),
+            effortValue: (chunks) => (
+              <strong
+                className="text-foreground"
+                data-testid="ai-settings-banner-effort"
+              >
+                {chunks}
+              </strong>
+            ),
+          },
+        )}
       </span>
       {canOpenAiSettings && (
         <Link

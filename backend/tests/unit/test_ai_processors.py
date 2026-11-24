@@ -148,6 +148,36 @@ def test_without_a_catalog_row_the_preset_model_of_the_tier_is_used(monkeypatch)
     )
 
 
+def test_a_disabled_tier_model_is_not_substituted_back_in(monkeypatch) -> None:
+    # HRP-1240 review: with no catalog pick the registry constant stood in —
+    # the very model the platform admin had switched off.
+    _platform_keys(monkeypatch, anthropic="a", openai="o")
+    monkeypatch.setattr(settings, "llm_provider", "claude")
+    disabled = _row("anthropic", model_registry.BALANCED_MODELS["anthropic"], "balanced")
+    disabled.enabled = False
+    assert (
+        processors.choose_model("gpt-4o", [disabled], frozenset({"anthropic"}), {})
+        is None
+    )
+
+
+def test_a_model_serving_two_tiers_still_substitutes_for_both(monkeypatch) -> None:
+    # HRP-1240 review: yandexgpt is Yandex's balanced and thorough model,
+    # but its seeded row holds one tier — the thorough pick found nothing
+    # and a Yandex-only workspace on the thorough tier lost every AI call.
+    from app.modules.ai import model_catalog_service
+
+    _platform_keys(monkeypatch, anthropic="a", yandex="y")
+    monkeypatch.setattr(settings, "llm_provider", "claude")
+    catalog = [
+        _row(seed["provider"], seed["model_id"], seed["tier"])
+        for seed in model_catalog_service._seed_rows()
+    ]
+    assert processors.choose_model(
+        model_registry.THOROUGH_MODELS["anthropic"], catalog, frozenset({"yandex"}), {}
+    ) == (model_registry.THOROUGH_MODELS["yandex"], "yandex")
+
+
 def test_a_candidate_without_a_platform_key_is_skipped(monkeypatch) -> None:
     _platform_keys(monkeypatch, gemini="g")
     monkeypatch.setattr(settings, "llm_provider", "claude")

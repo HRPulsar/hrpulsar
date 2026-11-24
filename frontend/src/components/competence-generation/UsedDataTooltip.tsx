@@ -15,6 +15,7 @@ import {
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { usePermissions } from "@/hooks/use-permissions";
+import type { AISettings } from "@/lib/api/ai-settings";
 import type { DictionaryItem } from "@/lib/types";
 
 interface UsedData {
@@ -22,6 +23,8 @@ interface UsedData {
   divisions: string[];
   companyDescription: string | null;
   hasAiSettings: boolean;
+  /** HRP-1241: false when the workspace's model sets its own sampling. */
+  temperatureApplies?: boolean;
 }
 
 interface UsedDataTooltipProps {
@@ -71,7 +74,7 @@ export function UsedDataTooltip({
           api
             .get<{ description?: string }>("/settings/company-profile")
             .catch(() => ({})),
-          api.get<unknown>("/admin/ai-settings").catch(() => null),
+          api.get<AISettings>("/admin/ai-settings").catch(() => null),
         ]);
         if (cancelled) return;
         setFetched({
@@ -87,6 +90,7 @@ export function UsedDataTooltip({
           companyDescription:
             (company as { description?: string })?.description?.trim() || null,
           hasAiSettings: settings != null,
+          temperatureApplies: settings?.effective_temperature_applies,
         });
       } catch {
         if (!cancelled) setFetched(EMPTY);
@@ -167,7 +171,11 @@ export function UsedDataTooltip({
           >
             <p className="text-xs text-muted-foreground">
               {data?.hasAiSettings
-                ? t("usedDataAiSettingsTenant")
+                ? t(
+                    data.temperatureApplies === false
+                      ? "usedDataAiSettingsTenantNoTemperature"
+                      : "usedDataAiSettingsTenant",
+                  )
                 : t("usedDataAiSettingsDefaults")}
             </p>
           </Section>

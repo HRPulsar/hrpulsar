@@ -26,11 +26,15 @@ import { localeLabel } from "@/lib/locale";
 import {
   brokenKeyProviders,
   buildPatchDiff,
+  formMultiplier,
+  formTemperatureApplies,
   isFormValid,
   modelSubstituted,
+  presetCardTakesTemperature,
   roundUpTenth,
   selectableProviders,
   settingsToForm,
+  withPreset,
   type AISettingsFormState as FormState,
 } from "@/lib/ai-settings-form";
 import { Button } from "@/components/ui/button";
@@ -185,24 +189,6 @@ function AISettingsPageContent() {
     [providers, t],
   );
 
-  // Preview multiplier of the *form* state (not yet saved).
-  const previewMultiplier = useMemo(() => {
-    if (!form) return 1.0;
-    if (form.llm_model) {
-      const entry = models.find((m) => m.model === form.llm_model);
-      return entry?.credit_multiplier ?? 1.0;
-    }
-    // Preset default → take the model that matches the active provider in
-    // the chosen preset, fall back to balanced.
-    const preset = presets.find(
-      (p) => p.name === (form.effort_level === "custom" ? "balanced" : form.effort_level),
-    );
-    const presetModel = preset?.models[providerFilter as LLMProvider];
-    if (!presetModel) return 1.0;
-    const entry = models.find((m) => m.model === presetModel);
-    return entry?.credit_multiplier ?? 1.0;
-  }, [form, models, presets, providerFilter]);
-
   if (loading || !settings || !form) {
     return (
       <div className="mx-auto max-w-3xl py-12 text-center text-sm text-muted-foreground">
@@ -211,9 +197,14 @@ function AISettingsPageContent() {
     );
   }
 
+  // Multiplier of the run the *form* state (not yet saved) would make.
+  const previewMultiplier = formMultiplier(form, settings, models);
+  // HRP-1241: models that set their own sampling ignore the slider.
+  const temperatureApplies = formTemperatureApplies(form, settings, models);
+
   function selectPreset(name: EffortLevel) {
     if (!form) return;
-    setForm({ ...form, effort_level: name });
+    setForm(withPreset(form, name));
   }
 
   function setCustomField<K extends keyof FormState>(
@@ -360,10 +351,20 @@ function AISettingsPageContent() {
                 </p>
                 {preset && (
                   <p className="mt-2 text-[11px] text-muted-foreground">
-                    {t("aiPresetParams", {
-                      temperature: preset.temperature,
-                      maxRetries: preset.max_retries,
-                    })}
+                    {t(
+                      presetCardTakesTemperature(
+                        models,
+                        settings,
+                        name,
+                        preset.models[providerFilter as LLMProvider],
+                      )
+                        ? "aiPresetParams"
+                        : "aiPresetParamsNoTemperature",
+                      {
+                        temperature: preset.temperature,
+                        maxRetries: preset.max_retries,
+                      },
+                    )}
                   </p>
                 )}
                 {preset && (
@@ -548,12 +549,21 @@ function AISettingsPageContent() {
               onChange={(e) =>
                 setCustomField("temperature", Number(e.target.value))
               }
+              disabled={!temperatureApplies}
+              aria-describedby="settings-ai-temperature-hint"
               className="w-full accent-primary"
             />
-            <p className="text-xs text-muted-foreground">
-              {t("aiTemperatureHint", {
-                value: settings.effective_temperature,
-              })}
+            <p
+              id="settings-ai-temperature-hint"
+              data-testid="settings-ai-temperature-hint"
+              data-state={temperatureApplies ? "applies" : "ignored"}
+              className="text-xs text-muted-foreground"
+            >
+              {temperatureApplies
+                ? t("aiTemperatureHint", {
+                    value: settings.effective_temperature,
+                  })
+                : t("aiTemperatureIgnored")}
             </p>
           </div>
 

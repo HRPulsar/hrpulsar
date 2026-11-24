@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from app.modules.ai import llm_client
+from app.modules.ai import llm_client, model_registry
 from app.modules.ai.llm_client import LLMOutputTruncatedError
 
 pytestmark = pytest.mark.asyncio
@@ -262,8 +262,22 @@ class TestOpenAITruncation:
         with patch.object(llm_client, "_get_openai", return_value=client):
             await llm_client._generate_openai("p", None, "gpt-99-turbo", 0.3, 32768)
         sent = client.chat.completions.create.call_args.kwargs
-        assert sent["max_tokens"] == 16384
+        # HRP-1240: an unknown model gets the reasoning shape — the one
+        # every current OpenAI chat model accepts.
+        assert sent["max_completion_tokens"] == 16384
+        assert "max_tokens" not in sent
+        assert "temperature" not in sent
 
+    async def test_gpt6_stops_at_the_non_streaming_ceiling(self) -> None:
+        # HRP-1240: the API takes 128000, but this path does not stream and
+        # its client times a silent response out at 600 s.
+        client = _openai_client("stop")
+        with patch.object(llm_client, "_get_openai", return_value=client):
+            await llm_client._generate_openai(
+                "p", None, model_registry.OPENAI_BALANCED, 0.3, 200000
+            )
+        sent = client.chat.completions.create.call_args.kwargs
+        assert sent["max_completion_tokens"] == 32768
 
     async def test_a_server_behind_a_base_url_is_capped(self) -> None:
         # HRP-997: a local 32k-context server took the breakdown's 32768
@@ -332,6 +346,16 @@ class TestGeminiTruncation:
         client = _gemini_client("FinishReason.STOP")
         with patch.object(llm_client, "_get_gemini", return_value=client):
             await llm_client._generate_gemini("p", None, "gemini-2.5-pro", 0.3, 64000)
+        sent = client.aio.models.generate_content.call_args.kwargs
+        assert sent["config"]["max_output_tokens"] == 64000
+
+    async def test_gemini_4_keeps_its_65k_budget(self) -> None:
+        # HRP-1240: 3.x and 4 fell back to 8192 and cut long generations.
+        client = _gemini_client("FinishReason.STOP")
+        with patch.object(llm_client, "_get_gemini", return_value=client):
+            await llm_client._generate_gemini(
+                "p", None, model_registry.GEMINI_THOROUGH, 0.3, 64000
+            )
         sent = client.aio.models.generate_content.call_args.kwargs
         assert sent["config"]["max_output_tokens"] == 64000
 

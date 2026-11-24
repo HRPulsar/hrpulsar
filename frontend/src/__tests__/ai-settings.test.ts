@@ -3,14 +3,24 @@ import { describe, expect, it } from "vitest";
 import {
   brokenKeyProviders,
   buildPatchDiff,
+  formMultiplier,
+  formRunModel,
+  formTemperatureApplies,
   isFormValid,
   modelSubstituted,
+  modelTakesTemperature,
+  presetCardTakesTemperature,
   roundUpTenth,
   selectableProviders,
   settingsToForm,
+  withPreset,
   type AISettingsFormState,
 } from "@/lib/ai-settings-form";
-import type { AISettings, ProviderStatus } from "@/lib/api/ai-settings";
+import type {
+  AISettings,
+  AllowedModel,
+  ProviderStatus,
+} from "@/lib/api/ai-settings";
 
 const baseSettings: AISettings = {
   id: "00000000-0000-0000-0000-000000000001",
@@ -24,8 +34,14 @@ const baseSettings: AISettings = {
   effective_model: "claude-sonnet-5",
   effective_provider: "anthropic",
   effective_temperature: 0.3,
+  effective_temperature_applies: false,
   effective_max_retries: 5,
   effective_credit_multiplier: 1.0,
+  preset_runs: {
+    fast: { model: "claude-haiku-5-5", accepts_temperature: false },
+    balanced: { model: "claude-sonnet-5", accepts_temperature: false },
+    thorough: { model: "claude-opus-5-5", accepts_temperature: false },
+  },
   created_at: "2026-04-01T00:00:00Z",
   updated_at: "2026-04-01T00:00:00Z",
 };
@@ -79,6 +95,29 @@ describe("buildPatchDiff", () => {
   it("emits company_context: null for an empty/whitespace string", () => {
     const next = { ...baseForm, company_context: "   " };
     expect(buildPatchDiff(baseForm, next)).toEqual({ company_context: null });
+  });
+});
+
+describe("withPreset", () => {
+  // HRP-1240: a preset runs its own model — the custom pick must not stay
+  // stored and keep the workspace on it.
+  const pinned: AISettingsFormState = {
+    ...baseForm,
+    effort_level: "custom",
+    llm_model: "claude-opus-4-8",
+  };
+
+  it("drops the custom model when a preset is picked", () => {
+    const next = withPreset(pinned, "balanced");
+    expect(next).toEqual({ ...pinned, effort_level: "balanced", llm_model: null });
+    expect(buildPatchDiff(pinned, next)).toEqual({
+      effort_level: "balanced",
+      llm_model: null,
+    });
+  });
+
+  it("keeps the model when custom is picked", () => {
+    expect(withPreset(pinned, "custom")).toEqual(pinned);
   });
 });
 
@@ -191,5 +230,158 @@ describe("processor list in the settings form (HRP-1005)", () => {
       modelSubstituted({ ...baseSettings, llm_model: "gpt-4o", effective_model: "gpt-4o" }),
     ).toBe(false);
     expect(modelSubstituted({ ...baseSettings, llm_model: null })).toBe(false);
+  });
+});
+
+describe("temperature control (HRP-1241)", () => {
+  const model = (id: string, accepts: boolean): AllowedModel => ({
+    provider: "anthropic",
+    model: id,
+    label: id,
+    credit_multiplier: 1,
+    accepts_temperature: accepts,
+  });
+  const models = [
+    model("claude-sonnet-5-5", false),
+    model("claude-haiku-4-5-20251001", true),
+  ];
+  // The workspace runs fast on a local model behind its gateway; the
+  // provider filter on the page plays no part.
+  const settings: AISettings = {
+    ...baseSettings,
+    preset_runs: {
+      ...baseSettings.preset_runs,
+      fast: { model: "llama3.1", accepts_temperature: true },
+    },
+  };
+  const pinned = {
+    ...baseForm,
+    effort_level: "custom" as const,
+    llm_model: "claude-haiku-4-5-20251001",
+  };
+
+  it("runs the pick, else what the tier runs for the workspace", () => {
+    expect(formRunModel(pinned, settings)).toBe("claude-haiku-4-5-20251001");
+    expect(formRunModel({ ...baseForm, effort_level: "fast" }, settings)).toBe(
+      "llama3.1",
+    );
+    // A stored pick wins on any tier, as on the backend (picking a preset
+    // clears it — withPreset).
+    expect(formRunModel({ ...pinned, effort_level: "fast" }, settings)).toBe(
+      "claude-haiku-4-5-20251001",
+    );
+    // The custom tier without a pick runs balanced.
+    expect(formRunModel({ ...pinned, llm_model: null }, settings)).toBe(
+      "claude-sonnet-5",
+    );
+    expect(
+      formRunModel(
+        { ...baseForm, effort_level: "thorough" },
+        { ...settings, preset_runs: {} },
+      ),
+    ).toBeNull();
+  });
+
+  it("runs the server's effective model while the form shows the saved state", () => {
+    // A pin the platform admin disabled: the server already falls back.
+    const saved = {
+      ...settings,
+      effort_level: "custom" as const,
+      llm_model: "gpt-4o",
+      effective_model: "gpt-6.2-sol",
+    };
+    expect(formRunModel(settingsToForm(saved), saved)).toBe("gpt-6.2-sol");
+  });
+
+  it("prices the saved run at the server's multiplier, a new pick off the list", () => {
+    // A pinned dated snapshot is missing from the family-deduped list.
+    const priced: AllowedModel[] = [
+      { ...model("claude-opus-5-5", false), credit_multiplier: 1.4 },
+    ];
+    const saved = {
+      ...settings,
+      effort_level: "custom" as const,
+      llm_model: "claude-opus-5-5-20261101",
+      effective_model: "claude-opus-5-5-20261101",
+      effective_credit_multiplier: 1.4,
+    };
+    expect(formMultiplier(settingsToForm(saved), saved, priced)).toBe(1.4);
+    const picked = { ...settingsToForm(saved), llm_model: "claude-opus-5-5" };
+    expect(formMultiplier(picked, saved, priced)).toBe(1.4);
+    expect(
+      formMultiplier({ ...picked, llm_model: "qwen2.5-72b" }, saved, priced),
+    ).toBe(1.0);
+  });
+
+  it("a preset card follows the model it shows, else what its tier runs", () => {
+    expect(
+      presetCardTakesTemperature(models, settings, "balanced", "claude-sonnet-5-5"),
+    ).toBe(false);
+    // A local-server filter shows no model on the card.
+    expect(presetCardTakesTemperature(models, settings, "fast", undefined)).toBe(true);
+    expect(
+      presetCardTakesTemperature(
+        models,
+        {
+          ...settings,
+          preset_runs: {
+            balanced: { model: "claude-sonnet-5-5", accepts_temperature: false },
+          },
+        },
+        "balanced",
+        undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it("reads whether a model takes temperature off the model list", () => {
+    expect(modelTakesTemperature(models, "claude-sonnet-5-5")).toBe(false);
+    expect(modelTakesTemperature(models, "claude-haiku-4-5-20251001")).toBe(true);
+    // A model the list does not know is assumed to take it.
+    expect(modelTakesTemperature(models, "qwen2.5-72b")).toBe(true);
+    expect(modelTakesTemperature(models, null)).toBe(true);
+  });
+
+  it("takes the server's answer while the form shows the saved tier and model", () => {
+    // The list says the pick takes temperature, the workspace's dispatch
+    // target says it does not: the saved row's exact answer wins.
+    const saved = {
+      ...settings,
+      effort_level: "custom" as const,
+      llm_model: "claude-haiku-4-5-20251001",
+      effective_temperature_applies: false,
+    };
+    expect(formTemperatureApplies(pinned, saved, models)).toBe(false);
+    expect(
+      formTemperatureApplies(
+        settingsToForm(baseSettings),
+        { ...baseSettings, effective_temperature_applies: true },
+        models,
+      ),
+    ).toBe(true);
+  });
+
+  it("follows the tier's run for a tier picked in the form", () => {
+    const fast = withPreset(settingsToForm(settings), "fast");
+    expect(formTemperatureApplies(fast, settings, models)).toBe(true);
+    const thorough = withPreset(settingsToForm(settings), "thorough");
+    expect(formTemperatureApplies(thorough, settings, models)).toBe(false);
+    // The custom tier without a pick runs balanced.
+    const custom = { ...settingsToForm(settings), effort_level: "custom" as const };
+    expect(formTemperatureApplies(custom, settings, models)).toBe(false);
+  });
+
+  it("asks the model list only for a model just picked", () => {
+    expect(formTemperatureApplies(pinned, settings, models)).toBe(true);
+    expect(
+      formTemperatureApplies(
+        { ...pinned, llm_model: "claude-sonnet-5-5" },
+        settings,
+        models,
+      ),
+    ).toBe(false);
+    expect(
+      formTemperatureApplies({ ...pinned, llm_model: "qwen2.5-72b" }, settings, models),
+    ).toBe(true);
   });
 });

@@ -172,8 +172,9 @@ def choose_model(
     ``model`` itself when its provider is permitted (allowed, or the tenant's
     own BYOK). Otherwise a model of the same tier on the first usable provider
     in ``LLM_PROVIDER``-first order: the tenant's BYOK row model, else the
-    catalog's pick for that tier, else the preset model. None when no LLM
-    provider is usable. Local models are not governed by the list.
+    catalog's pick for that tier, else the preset model while the catalog
+    lets it through (``_registry_fallback``). None when no LLM provider is
+    usable. Local models are not governed by the list.
     """
     from app.modules.ai import model_catalog_service, providers
 
@@ -197,7 +198,11 @@ def choose_model(
         picked = model_catalog_service._pick_tier_row(
             [row for row in catalog if row.provider == candidate], tier
         )
-        substitute = picked.model_id if picked is not None else tiers[tier].get(candidate)
+        substitute = (
+            picked.model_id
+            if picked is not None
+            else _registry_fallback(catalog, candidate, tiers[tier].get(candidate))
+        )
         if substitute:
             return substitute, candidate
     # The tenant's own OpenAI-compatible server (Azure, GigaChat, a local
@@ -207,6 +212,30 @@ def choose_model(
         if candidate not in LLM_PROVIDERS and own:
             return own, candidate
     return None
+
+
+def _registry_fallback(
+    catalog: list[Any], provider: str, model: str | None
+) -> str | None:
+    """The registry's tier model when no catalog row carries the tier.
+
+    One row serves two tiers when a provider uses the same model for both
+    (``yandexgpt``: balanced and thorough), and the row holds one tier — so
+    the constant stays the fallback. HRP-1240: but only while the catalog
+    lets it through: approved and enabled, its family not switched off, or
+    an empty catalog before the first seed. A disabled, rejected or pending
+    model is not substituted back in.
+    """
+    from app.modules.ai.model_catalog_service import normalize_model_id
+
+    if model is None or not catalog:
+        return model
+    rows = [row for row in catalog if row.provider == provider]
+    row = next((r for r in rows if r.model_id == model), None)
+    disabled = {normalize_model_id(r.model_id, r.provider) for r in rows if not r.enabled}
+    if row is None or not row.enabled or normalize_model_id(model, provider) in disabled:
+        return None
+    return model
 
 
 def enforce_target(

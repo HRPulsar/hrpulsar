@@ -25,6 +25,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.core.errors import AppError
+from app.modules.ai import model_registry
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,6 +124,30 @@ def classify_model(model: str | None) -> str | None:
             if len(prefix) > owner_len and model.startswith(prefix):
                 owner, owner_len = spec.name, len(prefix)
     return owner
+
+
+def accepts_temperature(
+    model: str, *, provider: str | None = None, base_url: str | None = None
+) -> bool:
+    """Whether generation sends ``temperature`` (and ``top_p``) to this
+    model (HRP-1241) — the one rule llm_client dispatches by.
+
+    ``provider`` is the canonical dispatch provider (defaults to the one the
+    name classifies to). Anthropic: the older families only (Opus 4.7+,
+    Sonnet 5+, Haiku 5.5 and Fable reject it); OpenAI: the chat-shape
+    families (gpt-4*, gpt-3.5, gpt-oss), not the reasoning ones; Gemini: 1.x
+    and 2.x; Yandex and anything else: yes. Behind a ``base_url`` (a
+    gateway, a local server, Yandex's OpenAI-shaped endpoint) the model name
+    decides by the same table, and a name no provider owns takes it.
+    """
+    owner = provider if provider and base_url is None else classify_model(model)
+    if owner == "anthropic":
+        return model_registry.anthropic_accepts_temperature(model)
+    if owner == "openai":
+        return not model_registry.openai_is_reasoning_model(model)
+    if owner == "gemini":
+        return model_registry.gemini_accepts_sampling(model)
+    return True
 
 
 def default_provider() -> str:

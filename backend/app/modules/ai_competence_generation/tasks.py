@@ -528,7 +528,7 @@ async def _generate_with_retries(
 # ``parse_error`` even when the model is producing valid content. Tree
 # scopes ask for the sonnet-class ceiling (a live Cyrillic whole-base tree
 # overflowed the previous 16384 budget) and rely on llm_client's per-model
-# clamps (Haiku 8192, Opus 32000, gpt-4o 16384, non-2.5 Gemini 8192) to
+# clamps (Haiku 4.5 8192, Opus 4.x 32000, gpt-4o 16384) to
 # keep the request valid for cheaper presets. competence_indicators stays
 # at the default — its output is bounded by the number of skill levels ×
 # 3-5 indicators each, well under 8192.

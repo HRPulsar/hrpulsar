@@ -50,6 +50,19 @@ test.describe("AI Settings page", () => {
     );
   });
 
+  test("temperature control says the default model sets its own sampling", async ({
+    page,
+  }) => {
+    // HRP-1241: the tier models (Claude by default) take no temperature.
+    await page.goto("/settings/ai");
+    await expect(page.getByTestId("settings-ai-temperature-hint")).toHaveAttribute(
+      "data-state",
+      "ignored",
+      { timeout: 10000 },
+    );
+    await expect(page.getByTestId("settings-ai-input-temperature")).toBeDisabled();
+  });
+
   test("model whitelist select is visible and effective summary is rendered", async ({
     page,
   }) => {

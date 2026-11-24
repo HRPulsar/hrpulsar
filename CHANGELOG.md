@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [2.6.5] - 2026-11-24
+
+### Changed
+- AI: the fast, balanced and thorough tiers run on current models — Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5, GPT-6 Luna, GPT-6.2 Sol and GPT-6.2 Astra, Gemini 3.5 Flash-Lite, Gemini 4 Hydrogen and Gemini 4 Neon; Claude Fable 5.2 replaces Fable 5 as the optional pick, and the previous models stay selectable (HRP-1240)
+
+### Fixed
+- AI: OpenAI models from GPT-5 on and Gemini 3 and 4 work when picked — calls were rejected or long answers cut at 8192 tokens — and the daily model sweep no longer adds OpenAI and Gemini models that text generation cannot use (HRP-1240)
+- AI settings: choosing a preset after picking a model by hand runs the preset's model again instead of the old pick (HRP-1240)
+- AI settings: the temperature is shown and offered only for models that take it, instead of being promised for models that set their own sampling (HRP-1241)
+- AI: models behind a workspace's OpenAI-compatible gateway get temperature only when the model takes it (HRP-1241)
+
 ## [2.6.4] - 2026-11-24
 
 ### Changed

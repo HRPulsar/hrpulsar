@@ -835,10 +835,12 @@ class TestClampAnthropicMaxTokens:
 
         assert _clamp_anthropic_max_tokens("claude-opus-4-8", 64000) == 32000
 
-    def test_unknown_model_defaults_to_8k(self):
+    def test_unknown_model_defaults_to_32k(self):
+        # HRP-1240: a family the map does not know yet (found by the nightly
+        # discovery first) keeps a long answer instead of 8192.
         from app.modules.ai.llm_client import _clamp_anthropic_max_tokens
 
-        assert _clamp_anthropic_max_tokens("claude-future-model", 16384) == 8192
+        assert _clamp_anthropic_max_tokens("claude-future-model", 64000) == 32000
 
 
 @pytest.fixture

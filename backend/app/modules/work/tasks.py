@@ -76,10 +76,11 @@ WS_EVENT = "work.session.updated"
 
 # HRP-921 (a): the breakdown samples nothing - the same text must give the
 # same steps and verdicts, whatever the tenant's effort preset says. One
-# place for the parameters; ``llm_client`` hands each to the providers that
-# take it: OpenAI and Gemini all three, Anthropic the temperature on the
-# models that still accept one - Sonnet 5 and later accept none, and there
-# the result cache below is what keeps a repeated text stable.
+# place for the parameters; ``llm_client`` hands each to the models that
+# take it: all three to the OpenAI chat families (gpt-4*) and Gemini
+# 1.x/2.x, only the seed to GPT-5+ and Gemini 3.x/4, the temperature to the
+# Anthropic models that still accept one - Sonnet 5 and later accept none,
+# and there the result cache below is what keeps a repeated text stable.
 DETERMINISTIC_GENERATION: dict[str, Any] = {"temperature": 0.0, "top_p": 1.0, "seed": 0}
 # Output budget of the split and the classification (HRP-995). Both calls
 # think before they answer and the thinking counts against max_tokens:

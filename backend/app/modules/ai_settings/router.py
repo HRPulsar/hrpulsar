@@ -66,7 +66,11 @@ async def get_allowed_models(
 
     Tenants only ever see ``approved AND enabled`` rows — pending models
     awaiting platform-admin moderation stay invisible. A fresh install
-    (empty catalog) is lazily seeded from the curated registry."""
+    (empty catalog) is lazily seeded from the curated registry.
+
+    The list is tenant-agnostic: ``accepts_temperature`` (HRP-1241) is the
+    model on the platform's own dispatch, not behind a workspace's gateway
+    — the settings read carries the workspace-exact answers."""
     rows = await model_catalog_service.approved_models(db)
     if not rows:
         await model_catalog_service.seed_from_registry(db)

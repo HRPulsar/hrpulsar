@@ -41,9 +41,9 @@ const PROVIDERS = [
 // belongs to another one — the backend rejects such pairs (HRP-498), and
 // silently saved mismatches used to break the whole recruitment pipeline.
 const DEFAULT_MODELS: Record<string, string> = {
-  anthropic: "claude-sonnet-5",
-  openai: "gpt-4o",
-  gemini: "gemini-2.5-pro",
+  anthropic: "claude-sonnet-5-5",
+  openai: "gpt-6.2-sol",
+  gemini: "gemini-4-hydrogen",
   yandex: "yandexgpt",
 };
 
@@ -88,7 +88,7 @@ export default function LLMProvidersPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [draft, setDraft] = useState({
     provider: "anthropic",
-    model: "claude-sonnet-5",
+    model: DEFAULT_MODELS.anthropic,
     api_key: "",
     base_url: "",
   });
@@ -135,7 +135,7 @@ export default function LLMProvidersPage() {
       toast.success(t("llmToastAdded"));
       setDraft({
         provider: "anthropic",
-        model: "claude-sonnet-5",
+        model: DEFAULT_MODELS.anthropic,
         api_key: "",
         base_url: "",
       });
@@ -241,7 +241,7 @@ export default function LLMProvidersPage() {
                 onChange={(e) =>
                   setDraft((d) => ({ ...d, model: e.target.value }))
                 }
-                placeholder="claude-sonnet-5"
+                placeholder={DEFAULT_MODELS[draft.provider] ?? ""}
                 data-testid="llm-input-model"
               />
             </div>

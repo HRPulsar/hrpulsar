@@ -12,6 +12,13 @@ EffortLevel = Literal["fast", "balanced", "thorough", "custom"]
 LLMProvider = Literal["anthropic", "openai", "gemini", "yandex"]
 
 
+class PresetRun(BaseModel):
+    """What one effort preset runs for this workspace (HRP-1241)."""
+
+    model: str
+    accepts_temperature: bool
+
+
 class AISettingsRead(BaseModel):
     """Stored row + effective values resolved through the active preset."""
 
@@ -31,8 +38,14 @@ class AISettingsRead(BaseModel):
     # Plain str: discovered/local providers (HRP-465) are not a closed set.
     effective_provider: str
     effective_temperature: float
+    # HRP-1241: False when the effective model sets its own sampling, so
+    # ``effective_temperature`` is not sent with generation.
+    effective_temperature_applies: bool
     effective_max_retries: int
     effective_credit_multiplier: float
+    # HRP-1241: fast/balanced/thorough → the model an unpinned workspace
+    # runs on that tier, after the catalog and processor checks.
+    preset_runs: dict[str, PresetRun]
 
     created_at: datetime
     updated_at: datetime
@@ -67,6 +80,7 @@ class AllowedModelRead(BaseModel):
     model: str
     label: str
     credit_multiplier: float
+    accepts_temperature: bool  # HRP-1241
 
 
 class ProviderStatusRead(BaseModel):

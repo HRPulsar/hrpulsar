@@ -56,15 +56,25 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).exception("ws listener failed to start")
 
+    # Both catalog steps are best-effort and independent — a cold DB or a
+    # lock timeout must not block startup, and a failed seed must not cost
+    # this worker the multiplier replay.
+    from app.database import async_session
+    from app.modules.ai import model_catalog_service
+
+    # HRP-1240: seed the registry's models, so the tier models a release
+    # names serve from its first request, not after the nightly sweep —
+    # until then one the sweep had parked as pending lost to the old one.
+    try:
+        async with async_session() as db:
+            await model_catalog_service.seed_from_registry(db)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("model catalog seed failed")
     # HRP-466: fold moderation-approved catalog multipliers into the
     # in-memory model whitelist so billing keeps its fast path after a
     # restart (approvals land in the registry immediately; this replays
-    # them from the DB on boot). Best-effort — a cold DB must not block
-    # startup, /models lazily falls back to the row values.
+    # them from the DB on boot); /models lazily falls back to the row values.
     try:
-        from app.database import async_session
-        from app.modules.ai import model_catalog_service
-
         async with async_session() as db:
             await model_catalog_service.sync_registry_from_catalog(db)
     except Exception:  # noqa: BLE001

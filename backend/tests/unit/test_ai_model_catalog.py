@@ -16,6 +16,7 @@ from app.modules.ai import (
 )
 from app.modules.ai.models import ModelCatalogEntry
 from app.modules.ai_settings import service as ai_settings_service
+from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -126,6 +127,148 @@ class TestSeed:
         monkeypatch.setattr(db, "commit", failing_commit)
         added = await model_catalog_service.seed_from_registry(db)
         assert added == 0
+
+    async def test_seed_adopts_rows_the_sweep_or_moderation_stored_first(
+        self, db: AsyncSession, monkeypatch, tenant
+    ) -> None:
+        # HRP-1240: the sweep met the new tier models before the release
+        # named them. A pending one made the preset fall back to the old
+        # tier model; one the admin had approved at its own multiplier
+        # billed that instead of credits.yaml. A disabled row stays
+        # disabled, a rejected one is left alone (approval refuses seed
+        # rows), and a pending dated snapshot follows its family row.
+        suffix = uuid.uuid4().hex[:6]
+        ids = {
+            name: f"claude-{name}-{suffix}"
+            for name in ("pending", "priced", "disabled", "rejected")
+        }
+        snapshot = f"{ids['pending']}-20261101"
+        snapshot_of_disabled = f"{ids['disabled']}-20261101"
+        snapshot_of_rejected = f"{ids['rejected']}-20261101"
+        states = {
+            ids["pending"]: ("pending", False, None),
+            ids["priced"]: ("approved", True, 2.0),
+            ids["disabled"]: ("approved", False, 2.0),
+            ids["rejected"]: ("rejected", False, None),
+            snapshot: ("pending", False, None),
+            snapshot_of_disabled: ("pending", False, None),
+            snapshot_of_rejected: ("pending", False, None),
+        }
+        for model_id, (status, enabled, multiplier) in states.items():
+            db.add(
+                ModelCatalogEntry(
+                    provider="anthropic",
+                    model_id=model_id,
+                    label=model_id,
+                    status=status,
+                    enabled=enabled,
+                    credit_multiplier=multiplier,
+                    source="discovered",
+                )
+            )
+        await db.commit()
+        tiers = {"pending": "balanced", "priced": "thorough", "disabled": "fast"}
+        monkeypatch.setattr(
+            model_catalog_service,
+            "_seed_rows",
+            lambda: [
+                {"provider": "anthropic", "model_id": ids[name], "tier": tier}
+                for name, tier in (*tiers.items(), ("rejected", "fast"))
+            ],
+        )
+
+        try:
+            # Three adopted rows plus the two snapshots of approved families.
+            assert await model_catalog_service.seed_from_registry(db) == 5
+            assert await model_catalog_service.seed_from_registry(db) == 0
+            by_id = {
+                row.model_id: row
+                for row in await model_catalog_service.list_catalog(db)
+            }
+            for name, tier in tiers.items():
+                row = by_id[ids[name]]
+                assert (row.source, row.tier, row.credit_multiplier) == (
+                    "seed",
+                    tier,
+                    None,
+                ), name
+            assert (by_id[ids["pending"]].status, by_id[ids["pending"]].enabled) == (
+                "approved",
+                True,
+            )
+            assert by_id[ids["priced"]].enabled is True
+            assert by_id[ids["disabled"]].enabled is False
+            rejected_row = by_id[ids["rejected"]]
+            assert (rejected_row.status, rejected_row.source, rejected_row.tier) == (
+                "rejected",
+                "discovered",
+                None,
+            )
+            assert (by_id[snapshot].status, by_id[snapshot].enabled) == (
+                "approved",
+                True,
+            )
+            assert by_id[snapshot].tier == "balanced"
+            assert (
+                by_id[snapshot_of_disabled].status,
+                by_id[snapshot_of_disabled].enabled,
+            ) == ("approved", False)
+            assert by_id[snapshot_of_rejected].status == "pending"
+
+            # The preset tenant now runs the adopted model, not a fallback.
+            settings_row = await ai_settings_service.get_or_default(db, tenant.id)
+            settings_row.llm_model = None
+            settings_row.effort_level = "balanced"
+            await db.commit()
+            with (
+                patch.object(settings, "llm_provider", "anthropic"),
+                patch.dict(
+                    ai_settings_service.EFFORT_PRESETS["balanced"]["models"],
+                    {"anthropic": ids["pending"]},
+                ),
+            ):
+                resolved = await ai_settings_service.get_effective_model_async(
+                    db, settings_row
+                )
+            assert resolved == ids["pending"]
+        finally:
+            # The DB is shared across the suite: an approved tier seed row
+            # would take part in every later tier pick.
+            await db.execute(
+                delete(ModelCatalogEntry).where(
+                    ModelCatalogEntry.model_id.in_(list(states))
+                )
+            )
+            await db.commit()
+
+    def test_seed_rows_are_unique(self) -> None:
+        # A repeated key makes every seed insert twice and roll back.
+        keys = [
+            (row["provider"], row["model_id"])
+            for row in model_catalog_service._seed_rows()
+        ]
+        assert len(keys) == len(set(keys))
+
+    def test_tier_pick_prefers_the_current_tier_model(self) -> None:
+        # HRP-1240: the previous tier model keeps its tier as a fallback;
+        # the current one must win the pick on its own, not by sorting
+        # later than its predecessor ("claude-zzz" sorts after it).
+        rows = [
+            ModelCatalogEntry(
+                provider="anthropic",
+                model_id=model_id,
+                label=model_id,
+                tier="fast",
+                status="approved",
+                enabled=True,
+                source="seed",
+            )
+            for model_id in (model_registry.ANTHROPIC_FAST, "claude-zzz-older")
+        ]
+        assert (
+            model_catalog_service._pick_tier_row(rows, "fast").model_id
+            == model_registry.ANTHROPIC_FAST
+        )
 
 
 class TestDiscoveryClassification:
@@ -437,6 +580,11 @@ class TestDiscoveryFilters:
             "dall-e-3",
             "whisper-1",
             "chatgpt-4o-latest",
+            # HRP-1240: chat completions answers 404 to these.
+            "gpt-5.5-pro",
+            "gpt-5.3-codex",
+            "gpt-live-1",
+            "gpt-6.2-sol",
         ]
 
         class FakeModel:
@@ -464,6 +612,7 @@ class TestDiscoveryFilters:
             "gpt-4o",
             "gpt-4o-2024-08-06",
             "o3-mini",
+            "gpt-6.2-sol",
         }
 
     async def test_yandex_filter_keeps_chat_uris(self, monkeypatch) -> None:
@@ -546,6 +695,10 @@ class TestDiscoveryFilters:
             ("models/gemini-2.5-flash-preview-tts", ["generateSpeech"]),
             ("models/gemini-2.0-flash-live-001", ["bidiGenerateContent"]),
             ("models/imagen-3.0-generate-002", ["predict"]),
+            # HRP-1240: generateContent, but images or speech come back.
+            ("models/gemini-3-pro-image-preview", ["generateContent"]),
+            ("models/gemini-2.5-flash-preview-tts", ["generateContent"]),
+            ("models/gemini-4-hydrogen", ["generateContent"]),
         ]
 
         class FakeModel:
@@ -570,7 +723,11 @@ class TestDiscoveryFilters:
 
         monkeypatch.setattr(llm_client, "_get_gemini", lambda key: FakeClient())
         out = await provider_discovery.discover_gemini("key")
-        assert {m["model_id"] for m in out} == {"gemini-2.5-pro", "gemini-2.5-flash"}
+        assert {m["model_id"] for m in out} == {
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-4-hydrogen",
+        }
 
 
 class TestDiscoverySweepResilience:
@@ -700,6 +857,21 @@ class TestReadProjection:
         assert balanced["credit_multiplier"] == pytest.approx(
             float(registry_entry["credit_multiplier"])
         )
+
+    async def test_entries_say_whether_the_model_takes_temperature(
+        self, db: AsyncSession
+    ) -> None:
+        # HRP-1241: the settings page greys the temperature control out for
+        # models that set their own sampling.
+        await model_catalog_service.seed_from_registry(db)
+        rows = await model_catalog_service.approved_models(db)
+        takes = {
+            m["model"]: m["accepts_temperature"]
+            for m in model_catalog_service.to_read_dicts(rows)
+        }
+        assert takes[model_registry.ANTHROPIC_BALANCED] is False
+        assert takes[model_registry.OPENAI_BALANCED] is False
+        assert takes["gpt-4o"] is True
 
     async def test_snapshots_collapse_to_one_picker_entry(
         self, db: AsyncSession
@@ -897,6 +1069,7 @@ class TestEffectiveMultiplierAsync:
 
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = model_id
+        row.effort_level = "custom"
         assert ai_settings_service._model_lookup(model_id) is None
         value = await ai_settings_service.get_effective_credit_multiplier_async(db, row)
         assert value == pytest.approx(2.5)
@@ -929,6 +1102,7 @@ class TestEffectiveMultiplierAsync:
 
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = model_id
+        row.effort_level = "custom"
         value = await ai_settings_service.get_effective_credit_multiplier_async(db, row)
         assert value == pytest.approx(2.5)
 
@@ -937,6 +1111,7 @@ class TestEffectiveMultiplierAsync:
     ) -> None:
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = f"ghost-model-{uuid.uuid4().hex[:6]}"
+        row.effort_level = "custom"
         value = await ai_settings_service.get_effective_credit_multiplier_async(db, row)
         assert value == pytest.approx(1.0)
 
@@ -948,12 +1123,12 @@ class TestCatalogAsSourceOfTruth:
     async def test_seed_row_outranks_a_newer_dated_snapshot(
         self, db: AsyncSession
     ) -> None:
-        # ANTHROPIC_FAST is a dated id that is not canonical under its own
+        # Haiku 4.5's curated id is dated and not canonical under its own
         # normalization and carries no row multiplier, so a discovered
         # '...-20260210' used to take the family's picker slot — dropping
-        # the id EFFORT_PRESETS still returns (review #13).
+        # the id credits.yaml prices (review #13).
         await model_catalog_service.seed_from_registry(db)
-        seed_id = model_registry.ANTHROPIC_FAST
+        seed_id = "claude-haiku-4-5-20251001"
         family = model_catalog_service.normalize_model_id(seed_id, "anthropic")
         newer = f"{family}-20260210"
         with patch.object(settings, "deployment_mode", "onprem"):
@@ -977,12 +1152,18 @@ class TestCatalogAsSourceOfTruth:
         row.effort_level = "balanced"
         await db.commit()
 
+        previous_id = next(
+            model_id
+            for provider, model_id, tier in model_registry.PREVIOUS_MODELS
+            if provider == "anthropic" and tier == "balanced"
+        )
         with patch.object(settings, "llm_provider", "anthropic"):
             preset_model = ai_settings_service.get_effective_model(row)
             assert preset_model == model_registry.ANTHROPIC_BALANCED
 
             entry = await model_catalog_service.get_entry(db, preset_model)
-            assert entry is not None
+            previous = await model_catalog_service.get_entry(db, previous_id)
+            assert entry is not None and previous is not None
             entry.enabled = False
             substitute_id = f"claude-substitute-{uuid.uuid4().hex[:6]}"
             db.add(
@@ -998,9 +1179,25 @@ class TestCatalogAsSourceOfTruth:
                 )
             )
             await db.commit()
+            try:
+                # HRP-1240: the previous tier model keeps its tier and is
+                # the first fallback; with it off too, any approved one.
+                resolved = await ai_settings_service.get_effective_model_async(db, row)
+                assert resolved == previous_id
 
-            resolved = await ai_settings_service.get_effective_model_async(db, row)
-        assert resolved == substitute_id
+                previous.enabled = False
+                await db.commit()
+                resolved = await ai_settings_service.get_effective_model_async(db, row)
+                assert resolved == substitute_id
+            finally:
+                entry.enabled = True
+                previous.enabled = True
+                await db.execute(
+                    delete(ModelCatalogEntry).where(
+                        ModelCatalogEntry.model_id == substitute_id
+                    )
+                )
+                await db.commit()
 
     async def test_disabled_family_snapshot_is_not_a_substitute(
         self, db: AsyncSession
@@ -1145,6 +1342,7 @@ class TestCatalogAsSourceOfTruth:
         # A model the catalog has never seen (local/BYOK name) stays as-is.
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = f"qwen-local-{uuid.uuid4().hex[:6]}"
+        row.effort_level = "custom"
         await db.commit()
         resolved = await ai_settings_service.get_effective_model_async(db, row)
         assert resolved == row.llm_model
@@ -1170,6 +1368,7 @@ class TestCatalogAsSourceOfTruth:
         )
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = model_id
+        row.effort_level = "custom"
         # HRP-628: a read hands back an unsaved row — persisting is the
         # caller's move now, exactly as ``service.update`` does it.
         db.add(row)
@@ -1191,6 +1390,7 @@ class TestCatalogAsSourceOfTruth:
         # billed at 1.0 without a trace.
         row = await ai_settings_service.get_or_default(db, tenant.id)
         row.llm_model = f"claude-dropped-{uuid.uuid4().hex[:6]}"
+        row.effort_level = "custom"
         await db.commit()
         with caplog.at_level("WARNING"):
             value = await ai_settings_service.get_effective_credit_multiplier_async(
@@ -1215,7 +1415,11 @@ class TestCatalogAsSourceOfTruth:
         fake_client = fake_openai_factory(captured)
         with patch.object(llm_client, "_get_openai", return_value=fake_client):
             await llm_client.generate("hi", model="o3-mini", max_tokens=4096)
-            assert captured["max_completion_tokens"] == 4096
+            # HRP-1240: reasoning spends the same budget — raised to the floor.
+            assert (
+                captured["max_completion_tokens"]
+                == model_registry.REASONING_MIN_OUTPUT_TOKENS
+            )
             assert "max_tokens" not in captured
             assert "temperature" not in captured
 
@@ -1231,10 +1435,19 @@ class TestCatalogAsSourceOfTruth:
     async def test_o1_mini_keeps_its_own_output_cap(self) -> None:
         # The cap table used to be first-match, so "o1-mini" inherited the
         # 100k "o1" ceiling and every request 400'd.
+        def cap(model: str) -> int:
+            return model_registry.output_cap(
+                model_registry.OPENAI_OUTPUT_CAPS,
+                model,
+                model_registry.OPENAI_DEFAULT_OUTPUT_CAP,
+            )
+
+        assert cap("o1-mini") == 65536
+        assert cap("o1-preview") == 32768
+        assert cap("o1") == 100000
+        # HRP-1240: the non-streaming path stops every request at 32768.
         clamp = llm_client._clamp_openai_max_tokens
-        assert clamp("o1-mini", 100000) == 65536
-        assert clamp("o1-preview", 100000) == 32768
-        assert clamp("o1", 100000) == 100000
+        assert clamp("o1", 100000) == model_registry.OPENAI_NONSTREAMING_OUTPUT_CAP
         assert clamp("gpt-4o-mini", 100000) == 16384
 
     async def test_o1_mini_folds_system_into_the_user_turn(
@@ -1255,3 +1468,36 @@ class TestCatalogAsSourceOfTruth:
             # Newer reasoning models still take a real system message.
             await llm_client.generate("hi", system="RULES", model="o3-mini")
             assert [m["role"] for m in captured["messages"]] == ["system", "user"]
+
+
+class TestBootSeed:
+    async def test_boot_seeds_then_replays_even_when_the_seed_fails(
+        self, monkeypatch
+    ) -> None:
+        # HRP-1240: the seed runs at boot so a release's tier models serve
+        # from the first request; a failed seed (lock timeout mid-deploy)
+        # must not cost the worker its multiplier replay.
+        from unittest.mock import AsyncMock
+
+        from app import main
+        from app.core.websocket import manager as ws_manager
+
+        calls: list[str] = []
+
+        async def failing_seed(db: AsyncSession) -> int:
+            calls.append("seed")
+            raise RuntimeError("lock timeout")
+
+        async def replay(db: AsyncSession) -> int:
+            calls.append("replay")
+            return 0
+
+        monkeypatch.setattr(model_catalog_service, "seed_from_registry", failing_seed)
+        monkeypatch.setattr(model_catalog_service, "sync_registry_from_catalog", replay)
+        monkeypatch.setattr(ws_manager, "start_listener", AsyncMock())
+        monkeypatch.setattr(ws_manager, "stop_listener", AsyncMock())
+
+        async with main.lifespan(main.app):
+            pass
+
+        assert calls == ["seed", "replay"]

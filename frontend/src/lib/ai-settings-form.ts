@@ -1,7 +1,9 @@
 import type {
   AISettings,
   AISettingsPatch,
+  AllowedModel,
   EffortLevel,
+  PresetTier,
   ProviderStatus,
 } from "@/lib/api/ai-settings";
 
@@ -22,6 +24,20 @@ export function settingsToForm(s: AISettings): AISettingsFormState {
     temperature: s.temperature,
     max_retries: s.max_retries,
     company_context: s.company_context ?? "",
+  };
+}
+
+/** Form after a preset card is picked. A preset runs its own model, so the
+ * custom pick is dropped — kept, it stayed stored and read as the
+ * workspace's model (HRP-1240). */
+export function withPreset(
+  form: AISettingsFormState,
+  name: EffortLevel,
+): AISettingsFormState {
+  return {
+    ...form,
+    effort_level: name,
+    ...(name !== "custom" ? { llm_model: null } : {}),
   };
 }
 
@@ -96,4 +112,84 @@ export function selectableProviders(
  * list or the catalog replaced it. */
 export function modelSubstituted(s: AISettings): boolean {
   return s.llm_model !== null && s.effective_model !== s.llm_model;
+}
+
+/** The tier whose model runs when nothing is picked: the custom tier
+ * without a pick runs balanced, as the backend does. */
+function runTier(form: AISettingsFormState): PresetTier {
+  return form.effort_level === "custom" ? "balanced" : form.effort_level;
+}
+
+/** The form still holds the saved tier and model — the server's resolved
+ * answers (effective model, its temperature) are exact for it. */
+function matchesSaved(form: AISettingsFormState, settings: AISettings): boolean {
+  return (
+    form.effort_level === settings.effort_level &&
+    (form.llm_model ?? null) === (settings.llm_model ?? null)
+  );
+}
+
+/** Credit multiplier of the run the form would make: on the saved tier and
+ * model the server's billed value (a pinned dated snapshot is missing from
+ * the family-deduped /models list), else the /models entry of the run model,
+ * 1.0 for a model the list does not price. */
+export function formMultiplier(
+  form: AISettingsFormState,
+  settings: AISettings,
+  models: AllowedModel[],
+): number {
+  if (matchesSaved(form, settings)) return settings.effective_credit_multiplier;
+  const run = formRunModel(form, settings);
+  return models.find((m) => m.model === run)?.credit_multiplier ?? 1.0;
+}
+
+/** The model a run would use with the form as it stands: on the saved tier
+ * and model, the server's effective model (catalog and processor fallbacks
+ * included); else the stored pick (it wins on any tier, as on the backend —
+ * picking a preset clears it), else what the tier runs for this workspace
+ * (HRP-1241: `preset_runs`, not the provider filter). */
+export function formRunModel(
+  form: AISettingsFormState,
+  settings: AISettings,
+): string | null {
+  if (matchesSaved(form, settings)) return settings.effective_model;
+  return form.llm_model || settings.preset_runs[runTier(form)]?.model || null;
+}
+
+/** HRP-1241: whether a model takes `temperature`, per the /models list. A
+ * model the list does not know is assumed to take it. */
+export function modelTakesTemperature(
+  models: AllowedModel[],
+  model: string | null | undefined,
+): boolean {
+  return models.find((m) => m.model === model)?.accepts_temperature ?? true;
+}
+
+/** HRP-1241: whether the slider's temperature reaches the model the form
+ * would run. On the saved tier and model the server's answer is exact (its
+ * dispatch target, catalog fallback included); a tier picked in the form
+ * takes what that tier runs for the workspace; only a model just picked
+ * falls back to the /models list. */
+export function formTemperatureApplies(
+  form: AISettingsFormState,
+  settings: AISettings,
+  models: AllowedModel[],
+): boolean {
+  if (matchesSaved(form, settings)) return settings.effective_temperature_applies;
+  if (form.llm_model) return modelTakesTemperature(models, form.llm_model);
+  return settings.preset_runs[runTier(form)]?.accepts_temperature ?? true;
+}
+
+/** HRP-1241: whether a preset card's temperature line applies. The card
+ * shows the filtered provider's model and follows it; with no model to show
+ * (a local-server filter) it says what the tier really runs. */
+export function presetCardTakesTemperature(
+  models: AllowedModel[],
+  settings: AISettings,
+  tier: PresetTier,
+  shownModel: string | undefined,
+): boolean {
+  return shownModel
+    ? modelTakesTemperature(models, shownModel)
+    : (settings.preset_runs[tier]?.accepts_temperature ?? true);
 }

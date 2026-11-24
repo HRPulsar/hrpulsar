@@ -360,8 +360,9 @@ async def generate(
     the blocks joined with a blank line — one system message, as before.
 
     HRP-921 — `top_p` / `seed` pin the sampling where the provider takes
-    them (OpenAI, Gemini). Anthropic has no seed and rejects `top_p` next
-    to `temperature`, so neither reaches it.
+    them: `seed` on OpenAI and Gemini, `top_p` only on the chat-shape
+    OpenAI models and Gemini 1.x/2.x (HRP-1240). Anthropic has no seed and
+    rejects `top_p` next to `temperature`, so neither reaches it.
 
     HRP-465 — per-tenant credentials: pass `db` (+ `tenant_id`, defaulted
     from `tenant_settings`) to resolve the tenant's BYOK key or local
@@ -579,9 +580,18 @@ async def _generate_openai(
     seed: int | None = None,
 ) -> tuple[str, _Usage]:
     client = _get_openai(api_key, base_url)
+    # HRP-500/HRP-1240: reasoning models (o-series, GPT-5 onwards) reject
+    # `max_tokens`, `top_p` and a non-default `temperature` with HTTP 400 —
+    # the budget goes in `max_completion_tokens` (it also covers the hidden
+    # reasoning tokens, hence the floor). A server behind a base_url keeps
+    # the old shape — local servers and Yandex take `max_tokens` — unless
+    # the model carries an OpenAI name, i.e. a proxy in front of OpenAI.
+    reasoning = model_registry.openai_is_reasoning_model(model) and (
+        base_url is None or providers.classify_model(model) == "openai"
+    )
     messages: list[dict[str, str]] = []
     if system:
-        if base_url is None and not model_registry.openai_accepts_system_role(model):
+        if reasoning and not model_registry.openai_accepts_system_role(model):
             # HRP-500 review: o1-mini/o1-preview reject a `system` message
             # with HTTP 400. The standard workaround is to fold it into the
             # first user turn — dropping it would silently lose the whole
@@ -591,6 +601,8 @@ async def _generate_openai(
             messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
+    if reasoning:
+        max_tokens = max(max_tokens, model_registry.REASONING_MIN_OUTPUT_TOKENS)
     # HRP-134: gpt-4o family rejects max_tokens > 16384 with HTTP 400 —
     # clamp like the Anthropic path so callers can request one generous
     # budget across providers. A server behind a base_url (local
@@ -600,20 +612,23 @@ async def _generate_openai(
     else:
         max_tokens = min(max_tokens, model_registry.COMPATIBLE_OUTPUT_CAP)
     kwargs: dict[str, Any] = {"model": model, "messages": messages}
-    if base_url is None and model_registry.openai_is_reasoning_model(model):
-        # HRP-500: o-series models reject `temperature` and `max_tokens`
-        # with HTTP 400 — the budget goes in `max_completion_tokens` (it
-        # also covers the hidden reasoning tokens) and sampling is fixed.
+    if reasoning:
         kwargs["max_completion_tokens"] = max_tokens
     else:
-        kwargs["temperature"] = temperature
         kwargs["max_tokens"] = max_tokens
-        # HRP-921: pinned sampling where the API takes it; the o-series
-        # branch above rejects every sampling parameter.
+    # HRP-1241: sampling follows the named model, behind a gateway too — a
+    # proxied Claude Opus 4.7+ or 5+ rejects it there as well, and Gemini
+    # 3.x/4 ignore it (deprecated from 3.6 on, a 400 in later generations).
+    # Never true for a reasoning shape: that is an OpenAI-named model which
+    # the same rule refuses.
+    if providers.accepts_temperature(model, provider="openai", base_url=base_url):
+        kwargs["temperature"] = temperature
         if top_p is not None:
             kwargs["top_p"] = top_p
-        if seed is not None:
-            kwargs["seed"] = seed
+    # HRP-921: the seed pin goes to every OpenAI model, reasoning ones
+    # included (probed 2026-11-24 on o3 and gpt-5 … gpt-6.2).
+    if seed is not None:
+        kwargs["seed"] = seed
     try:
         response = await client.chat.completions.create(**kwargs)
     except openai.APIConnectionError as exc:
@@ -632,15 +647,12 @@ async def _generate_openai(
 
 
 def _clamp_openai_max_tokens(model: str, requested: int) -> int:
-    # Longest matching prefix wins: "o1-mini" carries its own ceiling and
-    # must not inherit the wider "o1" one just because that key comes first
-    # in the map (first-match made the table order load-bearing).
-    cap = model_registry.OPENAI_DEFAULT_OUTPUT_CAP
-    matched = -1
-    for prefix, value in model_registry.OPENAI_OUTPUT_CAPS.items():
-        if len(prefix) > matched and model.startswith(prefix):
-            matched, cap = len(prefix), value
-    return min(requested, cap)
+    cap = model_registry.output_cap(
+        model_registry.OPENAI_OUTPUT_CAPS,
+        model,
+        model_registry.OPENAI_DEFAULT_OUTPUT_CAP,
+    )
+    return min(requested, cap, model_registry.OPENAI_NONSTREAMING_OUTPUT_CAP)
 
 
 def _yandex_model_uri(model: str) -> str:
@@ -725,18 +737,21 @@ async def _generate_anthropic(
     api_key: str | None = None,
 ) -> tuple[str, _Usage]:
     client = _get_anthropic(api_key)
+    if model_registry.anthropic_thinks(model):
+        # HRP-1240: thinking spends the same budget as the answer.
+        max_tokens = max(max_tokens, model_registry.REASONING_MIN_OUTPUT_TOKENS)
     kwargs: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        # HRP-122: Anthropic models cap standard output per family — Haiku 4.5
-        # rejects max_tokens > 8192 with HTTP 400 unless the extended-output
-        # beta header is set. Clamp here so callers can ask for a generous
-        # budget without breaking the cheapest preset.
+        # HRP-122: Anthropic models cap standard output per family (Haiku
+        # 4.5 rejects max_tokens > 8192 with HTTP 400 unless the
+        # extended-output beta header is set). Clamp here so callers can ask
+        # for a generous budget without breaking a cheaper model.
         "max_tokens": _clamp_anthropic_max_tokens(model, max_tokens),
     }
-    # Opus 4.7+/Sonnet 5/Fable 5 reject `temperature` with HTTP 400 — send it
-    # only to models that still accept sampling params.
-    if model_registry.anthropic_accepts_temperature(model):
+    # Opus 4.7+, Sonnet 5+, Haiku 5.5 and Fable reject `temperature` with
+    # HTTP 400 — send it only to models that still accept sampling params.
+    if providers.accepts_temperature(model, provider="anthropic"):
         kwargs["temperature"] = temperature
     if system:
         kwargs["system"] = _anthropic_system(system)
@@ -796,10 +811,12 @@ _ANTHROPIC_STREAM_TIMEOUT_S = 1800
 
 
 def _clamp_anthropic_max_tokens(model: str, requested: int) -> int:
-    for prefix, cap in model_registry.ANTHROPIC_OUTPUT_CAPS.items():
-        if model.startswith(prefix):
-            return min(requested, cap)
-    return min(requested, 8192)
+    cap = model_registry.output_cap(
+        model_registry.ANTHROPIC_OUTPUT_CAPS,
+        model,
+        model_registry.ANTHROPIC_DEFAULT_OUTPUT_CAP,
+    )
+    return min(requested, cap)
 
 
 async def _generate_gemini(
@@ -815,14 +832,17 @@ async def _generate_gemini(
 ) -> tuple[str, _Usage]:
     client = _get_gemini(api_key)
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
+    if not model_registry.gemini_accepts_sampling(model):
+        # HRP-1240: 3.x and 4 think by default, and thought tokens count
+        # against max_output_tokens.
+        max_tokens = max(max_tokens, model_registry.REASONING_MIN_OUTPUT_TOKENS)
     max_tokens = _clamp_gemini_max_tokens(model, max_tokens)
 
-    config: genai.types.GenerateContentConfigDict = {
-        "temperature": temperature,
-        "max_output_tokens": max_tokens,
-    }
-    if top_p is not None:
-        config["top_p"] = top_p
+    config: genai.types.GenerateContentConfigDict = {"max_output_tokens": max_tokens}
+    if providers.accepts_temperature(model, provider="gemini"):
+        config["temperature"] = temperature
+        if top_p is not None:
+            config["top_p"] = top_p
     if seed is not None:
         config["seed"] = seed
     response = await client.aio.models.generate_content(
@@ -839,10 +859,12 @@ async def _generate_gemini(
 
 
 def _clamp_gemini_max_tokens(model: str, requested: int) -> int:
-    for prefix, cap in model_registry.GEMINI_OUTPUT_CAPS.items():
-        if model.startswith(prefix):
-            return min(requested, cap)
-    return min(requested, model_registry.GEMINI_DEFAULT_OUTPUT_CAP)
+    cap = model_registry.output_cap(
+        model_registry.GEMINI_OUTPUT_CAPS,
+        model,
+        model_registry.GEMINI_DEFAULT_OUTPUT_CAP,
+    )
+    return min(requested, cap)
 
 
 def _resolve_provider(model: str | None) -> str:
